@@ -1,24 +1,34 @@
-# reMarkable-Obsidian Sync Tool - Phase 1
+# reMarkable-Obsidian Sync Tool
 
 ## Project Overview
 
-Build a one-way synchronization tool that converts Obsidian markdown files into reMarkable Paper Pro documents. The tool monitors an Obsidian vault directory, converts markdown to reMarkable's v6 format with text fields, and outputs to a Syncthing-synced directory for automatic device propagation.
+**Status**: ✅ **Milestone 1 & 1b COMPLETE** - Core sync functionality working with live device testing
+
+Build a one-way synchronization tool that converts Obsidian markdown files into reMarkable Paper Pro documents. The tool syncs directly to rm_cloud using the Sync v3 protocol, with real-time updates to the device.
 
 ## Key Constraints
 
 - **Language**: Python 3.10+
 - **Core Library**: rmscene (v0.7.0+) for reMarkable file generation
 - **Target Format**: reMarkable v6 (firmware 3.0+)
-- **Sync Direction**: Obsidian → reMarkable only (Phase 1)
-- **No External Services**: All processing is local
+- **Sync Direction**: Obsidian → reMarkable only
+- **Cloud Sync**: rm_cloud (Sync v3 protocol, hashOfHashesV3 algorithm)
 
 ## Architecture Summary
 
 ```
-[Obsidian Vault] → [File Watcher] → [Markdown Parser] → [RM Generator] → [Syncthing Dir]
-     ↓                    ↓                 ↓                  ↓                ↓
-  .md files          watchdog          mistune/md        rmscene          UUID dirs
+[Obsidian Vault] → [Markdown Parser] → [RM Generator] → [rm_cloud] → [Device]
+     ↓                    ↓                  ↓                ↓             ↓
+  .md files          mistune/md         rmscene        Sync v3 API    xochitl
+                                                       (hash blobs)    (WebSocket)
 ```
+
+### Architecture Changes from Original Plan
+
+**Original**: Syncthing-based file sync
+**Current**: Direct cloud API sync via Sync v3 protocol
+
+**Why**: More reliable, real-time updates, proper CRDT support, no filesystem dependencies
 
 ## Directory Structure
 
@@ -87,13 +97,24 @@ When implementing complex components, spawn sub-agents with focused contexts:
 
 ## Critical Implementation Notes
 
+### reMarkable Sync v3 Protocol
+
+**CRITICAL**: See `docs/SYNC_PROTOCOL.md` for complete reverse-engineered protocol details.
+
+Key findings:
+- **hashOfHashesV3**: SHA256 of concatenated binary file hashes (sorted)
+- **Double upload**: Document index stored under content hash AND hashOfHashesV3
+- **CRDT timestamps**: Static counters ("1:1", "1:2"), NOT incrementing timestamps
+- **modifed field**: Typo is intentional! Signals content updates
+- **.local file**: Required (empty JSON) for xochitl recognition
+
 ### reMarkable File Structure
 
-Each document requires these files in `{uuid}/`:
+Each document requires these files uploaded via Sync v3:
 - `{uuid}.metadata` - JSON with visibleName, type, parent, lastModified
-- `{uuid}.content` - JSON with pages array, pageCount, tool settings
-- `{page-uuid}.rm` - Binary v6 format with text/strokes per page
-- `{page-uuid}-metadata.json` - Page-specific settings
+- `{uuid}.content` - CRDT formatVersion 2 with cPages structure
+- `{uuid}.local` - Empty JSON `{}` (required by xochitl)
+- `{uuid}/{page-uuid}.rm` - Binary v6 format with text/strokes per page
 
 ### UUID Management
 
@@ -154,10 +175,46 @@ dependencies = [
 
 ## Key Files to Reference
 
-Before implementing any component, read:
+### Essential Reading
+- `docs/SYNC_PROTOCOL.md` - **NEW**: Reverse-engineered Sync v3 protocol details
 - `docs/REQUIREMENTS.md` - What exactly to build
 - `docs/ARCHITECTURE.md` - How components interact
 - `docs/TASKS.md` - Specific implementation tasks with acceptance criteria
+- `docs/RMSCENE_FINDINGS.md` - rmscene library usage and limitations
+- `docs/IMPLEMENTATION_SUMMARY.md` - What has been completed
+
+### Quick Reference: Key Learnings
+
+**Sync v3 Protocol**:
+```python
+# hashOfHashesV3 calculation
+file_hashes_binary = b''.join(
+    bytes.fromhex(entry.hash)
+    for entry in sorted(file_entries, key=lambda e: e.entry_name)
+)
+hash_of_hashes = hashlib.sha256(file_hashes_binary).hexdigest()
+```
+
+**CRDT Format**:
+```json
+{
+  "formatVersion": 2,
+  "cPages": {
+    "pages": [{
+      "id": "page-uuid",
+      "idx": {"timestamp": "1:2", "value": "ba"},
+      "modifed": "1763239413854",  // Note the typo!
+      "template": {"timestamp": "1:1", "value": "Blank"}
+    }]
+  }
+}
+```
+
+**Required Files**:
+- `{uuid}.metadata` - Document metadata
+- `{uuid}.content` - CRDT page structure
+- `{uuid}.local` - Empty JSON `{}` (required!)
+- `{uuid}/{page-uuid}.rm` - Binary page content
 
 ## Sub-Agent Spawning Pattern
 
@@ -176,16 +233,34 @@ Sub-agent context:
 
 This keeps main context focused on orchestration while sub-agents dive deep.
 
-## Success Criteria for Phase 1
+## Success Criteria
 
-- [ ] Convert markdown to readable reMarkable documents
-- [ ] Preserve basic formatting (headers, bold, italic)
-- [ ] Handle multi-page documents correctly
+### ✅ Milestone 1: Core Sync (COMPLETE)
+
+- [x] Convert markdown to readable reMarkable documents
+- [x] Preserve basic formatting (headers, bold, italic)
+- [x] Handle multi-page documents correctly
+- [x] State database tracks what's been synced
+- [x] Comprehensive error logging
+- [x] Test coverage >80% (achieved 99%+)
+
+### ✅ Milestone 1b: Cloud Sync Protocol (COMPLETE)
+
+- [x] Implement Sync v3 protocol
+- [x] Reverse engineer hashOfHashesV3 algorithm
+- [x] CRDT formatVersion 2 with proper timestamps
+- [x] File deletion support
+- [x] Page UUID reuse (avoid CRDT conflicts)
+- [x] Live device sync validation
+- [x] `.local` file generation for xochitl
+
+### 🚧 Future Enhancements
+
 - [ ] Maintain folder hierarchy through metadata
 - [ ] Watch directory for changes and auto-convert
-- [ ] State database tracks what's been synced
-- [ ] Comprehensive error logging
-- [ ] Test coverage >80%
+- [ ] Bidirectional sync (reMarkable → Obsidian)
+- [ ] Annotation preservation
+- [ ] Image support
 
 ## Getting Started
 
