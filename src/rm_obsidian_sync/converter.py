@@ -19,8 +19,8 @@ from typing import Optional
 
 from .config import AppConfig
 from .generator import RemarkableGenerator
-from .metadata import generate_folder_metadata
 from .parser import parse_markdown_file
+from .rm_filesystem import RemarkableFilesystem
 from .state import StateManager, SyncRecord
 
 logger = logging.getLogger("rm_obsidian_sync.converter")
@@ -243,20 +243,22 @@ class SyncEngine:
     def _create_rm_folder(self, name: str, uuid: str, parent_uuid: str) -> None:
         """Create reMarkable folder (CollectionType) metadata file.
 
+        Uses RemarkableFilesystem abstraction to handle file structure.
+
         Args:
             name: Folder display name
             uuid: UUID for this folder
             parent_uuid: UUID of parent folder (empty string for root)
         """
         output_dir = self.config.sync.remarkable_output
+        filesystem = RemarkableFilesystem(output_dir)
 
-        # Folders have metadata and local files at root level (no subdirectory needed)
-        metadata = generate_folder_metadata(name, parent_uuid)
-        metadata_path = output_dir / f"{uuid}.metadata"
-        metadata_path.write_text(json.dumps(metadata, indent=2))
-
-        # Write .local file (at root level, required by xochitl for folder recognition)
-        local_path = output_dir / f"{uuid}.local"
-        local_path.write_text("{}")
-
-        logger.debug(f"Created folder metadata: {metadata_path}")
+        # Use filesystem abstraction to create folder
+        # This handles: metadata, local files at root level, etc.
+        timestamp = int(time.time() * 1000)
+        filesystem.write_folder(
+            folder_uuid=uuid,
+            visible_name=name,
+            parent_uuid=parent_uuid,
+            modified_time=timestamp,
+        )

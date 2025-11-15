@@ -16,12 +16,8 @@ from pathlib import Path
 import rmscene
 
 from .config import LayoutConfig
-from .metadata import (
-    generate_content_metadata,
-    generate_document_metadata,
-    generate_page_metadata,
-)
 from .parser import BlockType, ContentBlock, FormatStyle, MarkdownDocument, TextFormat
+from .rm_filesystem import RemarkableFilesystem
 
 logger = logging.getLogger("rm_obsidian_sync.generator")
 
@@ -348,13 +344,8 @@ class RemarkableGenerator:
     ) -> None:
         """Write all document files to output directory.
 
-        Creates the complete file structure required by reMarkable:
-        - {uuid}/ directory
-        - {uuid}.metadata - Document metadata JSON
-        - {uuid}.content - Page list and settings JSON
-        - {uuid}.local - Empty JSON object (required for xochitl recognition)
-        - {page-uuid}.rm - Binary page content (v6 format)
-        - {page-uuid}-metadata.json - Page layer settings
+        Uses RemarkableFilesystem abstraction to handle file structure,
+        page cleanup, and atomic operations.
 
         Args:
             doc: RemarkableDocument to write
@@ -363,43 +354,21 @@ class RemarkableGenerator:
         Raises:
             OSError: If file writing fails
         """
-        # Create document directory for page files
-        doc_dir = output_dir / doc.uuid
-        doc_dir.mkdir(parents=True, exist_ok=True)
+        # Use filesystem abstraction to manage file structure
+        filesystem = RemarkableFilesystem(output_dir)
 
-        # Write .metadata file (at root level, not in subdirectory)
-        metadata = generate_document_metadata(
+        # Generate binary content for all pages
+        pages = [
+            (page.uuid, self.generate_rm_file(page))
+            for page in doc.pages
+        ]
+
+        # Write document using filesystem abstraction
+        # This handles: metadata, content, local files, page cleanup, etc.
+        filesystem.write_document(
+            doc_uuid=doc.uuid,
             visible_name=doc.visible_name,
             parent_uuid=doc.parent_uuid,
             modified_time=doc.modified_time,
-        )
-        (output_dir / f"{doc.uuid}.metadata").write_text(
-            json.dumps(metadata, indent=2)
-        )
-
-        # Write .content file (at root level, not in subdirectory)
-        page_uuids = [page.uuid for page in doc.pages]
-        content = generate_content_metadata(page_uuids)
-        (output_dir / f"{doc.uuid}.content").write_text(
-            json.dumps(content, indent=2)
-        )
-
-        # Write .local file (at root level, required by xochitl for document recognition)
-        (output_dir / f"{doc.uuid}.local").write_text("{}")
-
-        # Write page files
-        for page in doc.pages:
-            # Generate and write .rm file
-            rm_bytes = self.generate_rm_file(page)
-            (doc_dir / f"{page.uuid}.rm").write_bytes(rm_bytes)
-
-            # Write page metadata
-            page_meta = generate_page_metadata()
-            (doc_dir / f"{page.uuid}-metadata.json").write_text(
-                json.dumps(page_meta, indent=2)
-            )
-
-        logger.info(
-            f"Wrote document {doc.uuid} ({doc.visible_name}) "
-            f"with {len(doc.pages)} page(s) to {doc_dir}"
+            pages=pages,
         )

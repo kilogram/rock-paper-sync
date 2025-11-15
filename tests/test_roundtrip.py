@@ -684,6 +684,99 @@ class TestDocumentUpdates:
         # Timestamp should be updated
         assert timestamp_v2 > timestamp_v1
 
+    def test_page_files_cleaned_up_on_update(self, tmp_path: Path) -> None:
+        """Test that old page files are removed when updating a document."""
+        from datetime import datetime
+
+        layout = LayoutConfig(lines_per_page=45, margin_top=50, margin_bottom=50, margin_left=50, margin_right=50)
+        generator = RemarkableGenerator(layout)
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        # Version 1 (1 page)
+        md_v1 = MarkdownDocument(
+            path=tmp_path / "test.md",
+            title="test",
+            content=[ContentBlock(BlockType.PARAGRAPH, 0, "Version 1", [])],
+            frontmatter={},
+            last_modified=datetime.now(),
+            content_hash="v1"
+        )
+
+        rm_v1 = generator.generate_document(md_v1, "", "test-uuid")
+        generator.write_document_files(rm_v1, output_dir)
+
+        doc_dir = output_dir / "test-uuid"
+        files_v1 = list(doc_dir.glob("*.rm"))
+        assert len(files_v1) == 1, f"Should have 1 .rm file after first sync, got {len(files_v1)}"
+
+        # Version 2 (still 1 page, different content)
+        md_v2 = MarkdownDocument(
+            path=tmp_path / "test.md",
+            title="test",
+            content=[ContentBlock(BlockType.PARAGRAPH, 0, "Version 2 updated content", [])],
+            frontmatter={},
+            last_modified=datetime.now(),
+            content_hash="v2"
+        )
+
+        rm_v2 = generator.generate_document(md_v2, "", "test-uuid")  # Same UUID
+        generator.write_document_files(rm_v2, output_dir)
+
+        # Check page files after update
+        files_v2 = list(doc_dir.glob("*.rm"))
+
+        # CRITICAL: Should still have only 1 .rm file (old one replaced, not accumulated)
+        assert len(files_v2) == 1, f"Should have 1 .rm file after update, got {len(files_v2)} (old files not cleaned up!)"
+
+    def test_page_count_decrease_cleanup(self, tmp_path: Path) -> None:
+        """Test that extra page files are removed when page count decreases."""
+        from datetime import datetime
+
+        layout = LayoutConfig(lines_per_page=5, margin_top=50, margin_bottom=50, margin_left=50, margin_right=50)
+        generator = RemarkableGenerator(layout)
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        # Long document (multiple pages)
+        long_content = [ContentBlock(BlockType.PARAGRAPH, 0, f"Paragraph {i}", []) for i in range(20)]
+        md_long = MarkdownDocument(
+            path=tmp_path / "test.md",
+            title="test",
+            content=long_content,
+            frontmatter={},
+            last_modified=datetime.now(),
+            content_hash="long"
+        )
+
+        rm_long = generator.generate_document(md_long, "", "test-uuid")
+        generator.write_document_files(rm_long, output_dir)
+
+        doc_dir = output_dir / "test-uuid"
+        files_long = list(doc_dir.glob("*.rm"))
+        pages_long = len(rm_long.pages)
+        assert len(files_long) == pages_long
+        assert pages_long > 1, "Should have multiple pages"
+
+        # Shorten to 1 page
+        short_content = [ContentBlock(BlockType.PARAGRAPH, 0, "Just one paragraph", [])]
+        md_short = MarkdownDocument(
+            path=tmp_path / "test.md",
+            title="test",
+            content=short_content,
+            frontmatter={},
+            last_modified=datetime.now(),
+            content_hash="short"
+        )
+
+        rm_short = generator.generate_document(md_short, "", "test-uuid")  # Same UUID
+        generator.write_document_files(rm_short, output_dir)
+
+        # Check cleanup
+        files_short = list(doc_dir.glob("*.rm"))
+        assert len(rm_short.pages) == 1
+        assert len(files_short) == 1, f"Should have 1 .rm file after shortening, got {len(files_short)} (old pages not cleaned up!)"
+
 
 # Helper functions
 
