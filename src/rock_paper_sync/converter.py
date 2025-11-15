@@ -150,7 +150,7 @@ class SyncEngine:
             # Upload via cloud API (Sync v3 protocol)
             self.cloud_sync.upload_document(
                 doc_uuid=rm_doc.uuid,
-                document_name=rm_doc.metadata.get("visibleName", md_doc.title),
+                document_name=rm_doc.visible_name,
                 pages=rm_doc.pages,  # List of (page_uuid, rm_data) tuples
                 parent_uuid=parent_uuid,
             )
