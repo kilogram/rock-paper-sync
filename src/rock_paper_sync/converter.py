@@ -147,11 +147,17 @@ class SyncEngine:
                 logger.info(f"Generating new reMarkable document for {markdown_path}")
             rm_doc = self.generator.generate_document(md_doc, parent_uuid, existing_uuid)
 
+            # Generate binary .rm files for each page
+            pages_with_data = [
+                (page.uuid, self.generator.generate_rm_file(page))
+                for page in rm_doc.pages
+            ]
+
             # Upload via cloud API (Sync v3 protocol)
             self.cloud_sync.upload_document(
                 doc_uuid=rm_doc.uuid,
                 document_name=rm_doc.visible_name,
-                pages=rm_doc.pages,  # List of (page_uuid, rm_data) tuples
+                pages=pages_with_data,  # List of (page_uuid, rm_binary_data) tuples
                 parent_uuid=parent_uuid,
             )
 
