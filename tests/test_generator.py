@@ -551,7 +551,8 @@ class TestWriteDocumentFiles:
 
         generator.write_document_files(doc, tmp_path)
 
-        metadata_file = tmp_path / doc.uuid / f"{doc.uuid}.metadata"
+        # Metadata file should be at root level
+        metadata_file = tmp_path / f"{doc.uuid}.metadata"
         assert metadata_file.exists()
 
         # Should be valid JSON
@@ -567,7 +568,8 @@ class TestWriteDocumentFiles:
 
         generator.write_document_files(doc, tmp_path)
 
-        content_file = tmp_path / doc.uuid / f"{doc.uuid}.content"
+        # Content file should be at root level
+        content_file = tmp_path / f"{doc.uuid}.content"
         assert content_file.exists()
 
         # Should be valid JSON
@@ -613,16 +615,20 @@ class TestWriteDocumentFiles:
 
         generator.write_document_files(doc, tmp_path)
 
-        doc_dir = tmp_path / doc.uuid
-        files = list(doc_dir.iterdir())
-
-        # Should have:
+        # Root level should have:
         # - 1 .metadata file
         # - 1 .content file
         # - 1 .local file
+        assert (tmp_path / f"{doc.uuid}.metadata").exists()
+        assert (tmp_path / f"{doc.uuid}.content").exists()
+        assert (tmp_path / f"{doc.uuid}.local").exists()
+
+        # Subdirectory should have:
         # - N .rm files (one per page)
         # - N -metadata.json files (one per page)
-        expected_count = 3 + (2 * len(doc.pages))
+        doc_dir = tmp_path / doc.uuid
+        files = list(doc_dir.iterdir())
+        expected_count = 2 * len(doc.pages)
         assert len(files) == expected_count
 
 
@@ -639,8 +645,9 @@ class TestIntegration:
         # Verify structure exists
         doc_dir = tmp_path / doc.uuid
         assert doc_dir.exists()
-        assert (doc_dir / f"{doc.uuid}.metadata").exists()
-        assert (doc_dir / f"{doc.uuid}.content").exists()
+        # Metadata and content are at root level
+        assert (tmp_path / f"{doc.uuid}.metadata").exists()
+        assert (tmp_path / f"{doc.uuid}.content").exists()
 
     def test_full_pipeline_long_doc(
         self, generator: RemarkableGenerator, long_markdown_doc: MarkdownDocument, tmp_path: Path

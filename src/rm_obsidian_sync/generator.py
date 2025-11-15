@@ -357,29 +357,29 @@ class RemarkableGenerator:
         Raises:
             OSError: If file writing fails
         """
-        # Create document directory
+        # Create document directory for page files
         doc_dir = output_dir / doc.uuid
         doc_dir.mkdir(parents=True, exist_ok=True)
 
-        # Write .metadata file
+        # Write .metadata file (at root level, not in subdirectory)
         metadata = generate_document_metadata(
             visible_name=doc.visible_name,
             parent_uuid=doc.parent_uuid,
             modified_time=doc.modified_time,
         )
-        (doc_dir / f"{doc.uuid}.metadata").write_text(
+        (output_dir / f"{doc.uuid}.metadata").write_text(
             json.dumps(metadata, indent=2)
         )
 
-        # Write .content file
+        # Write .content file (at root level, not in subdirectory)
         page_uuids = [page.uuid for page in doc.pages]
         content = generate_content_metadata(page_uuids)
-        (doc_dir / f"{doc.uuid}.content").write_text(
+        (output_dir / f"{doc.uuid}.content").write_text(
             json.dumps(content, indent=2)
         )
 
-        # Write .local file (required by xochitl for document recognition)
-        (doc_dir / f"{doc.uuid}.local").write_text("{}")
+        # Write .local file (at root level, required by xochitl for document recognition)
+        (output_dir / f"{doc.uuid}.local").write_text("{}")
 
         # Write page files
         for page in doc.pages:

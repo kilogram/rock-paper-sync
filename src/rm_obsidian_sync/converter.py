@@ -244,15 +244,15 @@ class SyncEngine:
             uuid: UUID for this folder
             parent_uuid: UUID of parent folder (empty string for root)
         """
-        folder_dir = self.config.sync.remarkable_output / uuid
-        folder_dir.mkdir(parents=True, exist_ok=True)
+        output_dir = self.config.sync.remarkable_output
 
+        # Folders have metadata and local files at root level (no subdirectory needed)
         metadata = generate_folder_metadata(name, parent_uuid)
-        metadata_path = folder_dir / f"{uuid}.metadata"
+        metadata_path = output_dir / f"{uuid}.metadata"
         metadata_path.write_text(json.dumps(metadata, indent=2))
 
-        # Write .local file (required by xochitl for folder recognition)
-        local_path = folder_dir / f"{uuid}.local"
+        # Write .local file (at root level, required by xochitl for folder recognition)
+        local_path = output_dir / f"{uuid}.local"
         local_path.write_text("{}")
 
         logger.debug(f"Created folder metadata: {metadata_path}")

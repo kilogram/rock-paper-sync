@@ -40,8 +40,10 @@ class TestSyncEngine:
         assert result.error is None
 
         # Verify output files exist
-        output_dir = sample_config.sync.remarkable_output / result.remarkable_uuid
-        assert output_dir.exists()
+        output_dir = sample_config.sync.remarkable_output
+        doc_dir = output_dir / result.remarkable_uuid
+        assert doc_dir.exists()
+        # Metadata and content should be at root level
         assert (output_dir / f"{result.remarkable_uuid}.metadata").exists()
         assert (output_dir / f"{result.remarkable_uuid}.content").exists()
 
@@ -191,10 +193,9 @@ class TestSyncEngine:
         parent_uuid = engine.ensure_folder_hierarchy(file_path)
 
         assert parent_uuid != ""
-        # Verify folder metadata exists
-        folder_dir = sample_config.sync.remarkable_output / parent_uuid
-        assert folder_dir.exists()
-        assert (folder_dir / f"{parent_uuid}.metadata").exists()
+        # Verify folder metadata exists at root level (folders don't have subdirectories)
+        output_dir = sample_config.sync.remarkable_output
+        assert (output_dir / f"{parent_uuid}.metadata").exists()
 
     def test_ensure_folder_hierarchy_nested(
         self,

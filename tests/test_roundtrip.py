@@ -438,21 +438,21 @@ class TestRoundtripMetadata:
         # Verify metadata files are valid JSON
         doc_dir = output_dir / rm_doc.uuid
 
-        # Document metadata
-        metadata_file = doc_dir / f"{rm_doc.uuid}.metadata"
+        # Document metadata (at root level)
+        metadata_file = output_dir / f"{rm_doc.uuid}.metadata"
         with metadata_file.open() as f:
             metadata = json.load(f)
         assert metadata["visibleName"] == "test"
         assert metadata["type"] == "DocumentType"
 
-        # Content file
-        content_file = doc_dir / f"{rm_doc.uuid}.content"
+        # Content file (at root level)
+        content_file = output_dir / f"{rm_doc.uuid}.content"
         with content_file.open() as f:
             content = json.load(f)
         assert "pages" in content
         assert len(content["pages"]) == len(rm_doc.pages)
 
-        # Page metadata
+        # Page metadata (in subdirectory)
         for page in rm_doc.pages:
             page_meta_file = doc_dir / f"{page.uuid}-metadata.json"
             with page_meta_file.open() as f:
