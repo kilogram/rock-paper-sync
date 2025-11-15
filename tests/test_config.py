@@ -219,29 +219,6 @@ class TestValidateConfig:
         with pytest.raises(ConfigError, match="not a directory"):
             validate_config(config)
 
-    @pytest.mark.skip(reason="remarkable_output field removed - cloud-only sync")
-    def test_validate_nonexistent_output(self, valid_config_toml: Path, tmp_path: Path) -> None:
-        """Test that nonexistent output directory fails validation."""
-        config = load_config(valid_config_toml)
-        nonexistent_output = tmp_path / "nonexistent_output"
-
-        config = AppConfig(
-            sync=SyncConfig(
-                obsidian_vault=config.sync.obsidian_vault,
-                remarkable_output=nonexistent_output,
-                state_database=config.sync.state_database,
-                include_patterns=config.sync.include_patterns,
-                exclude_patterns=config.sync.exclude_patterns,
-                debounce_seconds=config.sync.debounce_seconds,
-            ),
-            layout=config.layout,
-            log_level=config.log_level,
-            log_file=config.log_file,
-        )
-
-        with pytest.raises(ConfigError, match="reMarkable output directory does not exist"):
-            validate_config(config)
-
     def test_validate_creates_db_directory(self, valid_config_toml: Path, tmp_path: Path) -> None:
         """Test that database directory is created if it doesn't exist."""
         config = load_config(valid_config_toml)
@@ -380,13 +357,6 @@ class TestValidateConfig:
         with pytest.raises(ConfigError, match="include_patterns cannot be empty"):
             validate_config(config)
 
-    @pytest.mark.skip(reason="remarkable_output field removed - cloud-only sync")
-    def test_missing_remarkable_output(self, config_samples_dir: Path) -> None:
-        """Test that missing remarkable_output field raises ConfigError."""
-        config_path = config_samples_dir / "missing_output_path.toml"
-        with pytest.raises(ConfigError, match="Missing required field: paths.remarkable_output"):
-            load_config(config_path)
-
     def test_missing_state_database(self, config_samples_dir: Path) -> None:
         """Test that missing state_database field raises ConfigError."""
         config_path = config_samples_dir / "missing_state_db.toml"
@@ -476,47 +446,6 @@ class TestValidateConfig:
         )
 
         with pytest.raises(ConfigError, match="margin_right must be non-negative"):
-            validate_config(config)
-
-    @pytest.mark.skip(reason="remarkable_output field removed - cloud-only sync")
-    def test_remarkable_output_not_directory(self, valid_config_toml: Path, tmp_path: Path) -> None:
-        """Test that output path being a file (not directory) fails validation."""
-        config = load_config(valid_config_toml)
-        # Create a file instead of a directory
-        file_path = tmp_path / "output_file.txt"
-        file_path.write_text("not a directory")
-
-        config = AppConfig(
-            sync=SyncConfig(
-                obsidian_vault=config.sync.obsidian_vault,
-                remarkable_output=file_path,
-                state_database=config.sync.state_database,
-                include_patterns=config.sync.include_patterns,
-                exclude_patterns=config.sync.exclude_patterns,
-                debounce_seconds=config.sync.debounce_seconds,
-            ),
-            layout=config.layout,
-            log_level=config.log_level,
-            log_file=config.log_file,
-        )
-
-        with pytest.raises(ConfigError, match="is not a directory"):
-            validate_config(config)
-
-    @pytest.mark.skip(reason="remarkable_output field removed - cloud-only sync")
-    def test_remarkable_output_not_writable(self, valid_config_toml: Path, mocker) -> None:
-        """Test that non-writable output directory fails validation."""
-        config = load_config(valid_config_toml)
-
-        # Mock os.access to return False for write permission only for output dir
-        def mock_access(path, mode):
-            if str(path) == str(config.sync.remarkable_output) and mode == os.W_OK:
-                return False
-            return True
-
-        mocker.patch("os.access", side_effect=mock_access)
-
-        with pytest.raises(ConfigError, match="not writable"):
             validate_config(config)
 
     def test_state_database_dir_creation_failure(self, valid_config_toml: Path, tmp_path: Path, mocker) -> None:
