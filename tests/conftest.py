@@ -138,3 +138,45 @@ def long_markdown() -> str:
             f"distinct and the page breaks should occur at logical boundaries.\n"
         )
     return "\n".join(paragraphs)
+
+
+@pytest.fixture
+def temp_db(tmp_path: Path) -> Path:
+    """Create temporary database path (without initializing)."""
+    return tmp_path / "test_state.db"
+
+
+@pytest.fixture
+def valid_config_toml(tmp_path: Path, temp_vault: Path, temp_output: Path) -> Path:
+    """Create a valid TOML config file for testing."""
+    config_path = tmp_path / "config.toml"
+    config_content = f"""
+[paths]
+obsidian_vault = "{temp_vault}"
+remarkable_output = "{temp_output}"
+state_database = "{tmp_path / 'state.db'}"
+
+[sync]
+include_patterns = ["**/*.md"]
+exclude_patterns = [".obsidian/**", "templates/**"]
+debounce_seconds = 5
+
+[layout]
+lines_per_page = 45
+margin_top = 50
+margin_bottom = 50
+margin_left = 50
+margin_right = 50
+
+[logging]
+level = "info"
+file = "{tmp_path / 'sync.log'}"
+"""
+    config_path.write_text(config_content)
+    return config_path
+
+
+@pytest.fixture
+def config_samples_dir() -> Path:
+    """Path to config sample fixtures."""
+    return Path(__file__).parent / "fixtures" / "config_samples"
