@@ -1,0 +1,4 @@
+# Invalid TOML syntax
+[paths
+obsidian_vault = "/tmp/test_vault"
+this is not valid toml

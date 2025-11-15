@@ -1,0 +1,21 @@
+# Minimal valid configuration for testing
+[paths]
+obsidian_vault = "/tmp/test_vault"
+remarkable_output = "/tmp/test_output"
+state_database = "/tmp/test_state.db"
+
+[sync]
+include_patterns = ["**/*.md"]
+exclude_patterns = []
+debounce_seconds = 5
+
+[layout]
+lines_per_page = 45
+margin_top = 50
+margin_bottom = 50
+margin_left = 50
+margin_right = 50
+
+[logging]
+level = "info"
+file = "/tmp/test.log"
