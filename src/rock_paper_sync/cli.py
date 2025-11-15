@@ -68,13 +68,13 @@ def main(ctx: click.Context, config: str, verbose: bool) -> None:
 
 
 @main.command()
-@click.option("--dry-run", is_flag=True, help="Preview changes without writing files")
+@click.option("--dry-run", is_flag=True, help="Preview changes without uploading")
 @click.pass_context
 def sync(ctx: click.Context, dry_run: bool) -> None:
     """Sync all changed files once.
 
     Scans the Obsidian vault for files that have changed since the last sync
-    and converts them to reMarkable format.
+    and uploads them to reMarkable cloud via API.
 
     Files are skipped if their content hash hasn't changed.
     """
@@ -84,9 +84,9 @@ def sync(ctx: click.Context, dry_run: bool) -> None:
     engine = SyncEngine(config, state)
 
     if dry_run:
-        click.echo("Dry run mode - no files will be written")
+        click.echo("Dry run mode - no documents will be uploaded")
         click.echo(f"Would scan: {config.sync.obsidian_vault}")
-        click.echo(f"Would write to: {config.sync.remarkable_output}")
+        click.echo(f"Would upload to: {config.cloud.base_url}")
         state.close()
         return
 
@@ -237,12 +237,11 @@ def init(output: str | None) -> None:
         if not click.confirm(f"{output_path} exists. Overwrite?"):
             return
 
-    example_config = """# reMarkable-Obsidian Sync Configuration
-# Edit paths below to match your setup
+    example_config = """# rock-paper-sync Configuration
+# Sync Obsidian markdown to reMarkable via cloud API
 
 [paths]
 obsidian_vault = "~/obsidian-vault"
-remarkable_output = "~/remarkable-sync"
 state_database = "~/.local/share/rock-paper-sync/state.db"
 
 [sync]
@@ -261,22 +260,19 @@ margin_right = 50
 level = "info"
 file = "~/.local/share/rock-paper-sync/sync.log"
 
-[rm_cloud]
-# Optional: Enable Sync v3 API integration for live sync with xochitl
-# This uses pure API calls - no filesystem access required!
-# Uncomment and configure the following to enable:
-# enabled = true
-# base_url = "http://localhost:3000"  # Your rm_cloud URL
+[cloud]
+# reMarkable cloud (or rm_cloud) connection
+base_url = "http://localhost:3000"  # Change to https://webapp-prod.cloud.remarkable.com for real cloud
 """
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(example_config)
     click.echo(f"Created config file: {output_path}")
     click.echo("\nNext steps:")
-    click.echo("1. Edit the config file to set your vault and output paths")
-    click.echo("2. Create the directories specified in the config")
-    click.echo("3. (Optional) Configure rm_cloud integration")
-    click.echo("4. Run: rock-paper-sync sync")
+    click.echo("1. Edit the config file to set your vault path and cloud URL")
+    click.echo("2. Register as a device: rock-paper-sync register <code>")
+    click.echo("   (Get code from rm_cloud web UI or reMarkable app)")
+    click.echo("3. Run: rock-paper-sync sync")
 
 
 @main.command()

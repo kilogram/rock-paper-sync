@@ -3,10 +3,8 @@
 import json
 import logging
 import time
-from pathlib import Path
 from typing import Optional
 
-from .rm_filesystem import RemarkableFilesystem
 from .rm_cloud_client import RmCloudClient
 from .sync_v3 import SyncV3Client
 

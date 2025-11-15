@@ -20,7 +20,6 @@ from typing import Optional
 from .config import AppConfig
 from .generator import RemarkableGenerator
 from .parser import parse_markdown_file
-from .rm_filesystem import RemarkableFilesystem
 from .rm_cloud_client import RmCloudClient
 from .rm_cloud_sync import RmCloudSync
 from .state import StateManager, SyncRecord
@@ -68,20 +67,18 @@ class SyncEngine:
         self.state = state
         self.generator = RemarkableGenerator(config.layout)
 
-        # Initialize rm_cloud sync if configured
-        self.rm_cloud_sync: Optional[RmCloudSync] = None
-        if config.rm_cloud and config.rm_cloud.enabled:
-            try:
-                client = RmCloudClient(base_url=config.rm_cloud.base_url)
-                self.rm_cloud_sync = RmCloudSync(
-                    base_url=config.rm_cloud.base_url,
-                    client=client,
-                )
-                logger.info("rm_cloud Sync v3 enabled (pure API mode)")
-            except ValueError as e:
-                logger.warning(f"rm_cloud sync disabled: {e}")
-                logger.warning("Run: rock-paper-sync register <code>")
-                self.rm_cloud_sync = None
+        # Initialize cloud sync (required)
+        try:
+            client = RmCloudClient(base_url=config.cloud.base_url)
+            self.cloud_sync = RmCloudSync(
+                base_url=config.cloud.base_url,
+                client=client,
+            )
+            logger.info("Cloud sync initialized (Sync v3 API)")
+        except ValueError as e:
+            logger.error(f"Cloud sync initialization failed: {e}")
+            logger.error("Device must be registered. Run: rock-paper-sync register <code>")
+            raise
 
         logger.debug("Sync engine initialized")
 
@@ -150,20 +147,13 @@ class SyncEngine:
                 logger.info(f"Generating new reMarkable document for {markdown_path}")
             rm_doc = self.generator.generate_document(md_doc, parent_uuid, existing_uuid)
 
-            # Write files to output directory
-            if self.rm_cloud_sync:
-                # Upload via Sync v3 API (pure cloud, no filesystem)
-                self.rm_cloud_sync.upload_document(
-                    doc_uuid=rm_doc.uuid,
-                    document_name=rm_doc.metadata.get("visibleName", md_doc.title),
-                    pages=rm_doc.pages,  # List of (page_uuid, rm_data) tuples
-                    parent_uuid=parent_uuid,
-                )
-            else:
-                # Write to regular output directory (filesystem)
-                self.generator.write_document_files(
-                    rm_doc, self.config.sync.remarkable_output
-                )
+            # Upload via cloud API (Sync v3 protocol)
+            self.cloud_sync.upload_document(
+                doc_uuid=rm_doc.uuid,
+                document_name=rm_doc.metadata.get("visibleName", md_doc.title),
+                pages=rm_doc.pages,  # List of (page_uuid, rm_data) tuples
+                parent_uuid=parent_uuid,
+            )
 
             # Update state database
             new_state = SyncRecord(

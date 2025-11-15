@@ -32,7 +32,6 @@ class SyncConfig:
     """Synchronization configuration."""
 
     obsidian_vault: Path
-    remarkable_output: Path
     state_database: Path
     include_patterns: list[str]
     exclude_patterns: list[str]
@@ -51,10 +50,9 @@ class LayoutConfig:
 
 
 @dataclass(frozen=True)
-class RmCloudConfig:
-    """rm_cloud integration configuration (optional)."""
+class CloudConfig:
+    """reMarkable cloud integration configuration."""
 
-    enabled: bool
     base_url: str
 
 
@@ -66,7 +64,7 @@ class AppConfig:
     layout: LayoutConfig
     log_level: str
     log_file: Path
-    rm_cloud: Optional[RmCloudConfig] = None
+    cloud: CloudConfig
 
 
 def expand_path(path_str: str) -> Path:
@@ -116,13 +114,10 @@ def load_config(config_path: Path) -> AppConfig:
             raise ConfigError("Missing required [paths] section in config")
 
         obsidian_vault = paths.get("obsidian_vault")
-        remarkable_output = paths.get("remarkable_output")
         state_database = paths.get("state_database")
 
         if not obsidian_vault:
             raise ConfigError("Missing required field: paths.obsidian_vault")
-        if not remarkable_output:
-            raise ConfigError("Missing required field: paths.remarkable_output")
         if not state_database:
             raise ConfigError("Missing required field: paths.state_database")
 
@@ -160,7 +155,6 @@ def load_config(config_path: Path) -> AppConfig:
         # Create configuration objects
         sync_config = SyncConfig(
             obsidian_vault=expand_path(obsidian_vault),
-            remarkable_output=expand_path(remarkable_output),
             state_database=expand_path(state_database),
             include_patterns=include_patterns,
             exclude_patterns=exclude_patterns,
@@ -175,23 +169,23 @@ def load_config(config_path: Path) -> AppConfig:
             margin_right=margin_right,
         )
 
-        # Extract optional rm_cloud section
-        rm_cloud_config = None
-        rm_cloud = config_dict.get("rm_cloud", {})
-        if rm_cloud.get("enabled", False):
-            base_url = rm_cloud.get("base_url", "http://localhost:3000")
+        # Extract cloud section (required)
+        cloud = config_dict.get("cloud", {})
+        if not cloud:
+            raise ConfigError("Missing required [cloud] section in config")
 
-            rm_cloud_config = RmCloudConfig(
-                enabled=True,
-                base_url=base_url,
-            )
+        base_url = cloud.get("base_url")
+        if not base_url:
+            raise ConfigError("Missing required field: cloud.base_url")
+
+        cloud_config = CloudConfig(base_url=base_url)
 
         app_config = AppConfig(
             sync=sync_config,
             layout=layout_config,
             log_level=log_level,
             log_file=expand_path(log_file),
-            rm_cloud=rm_cloud_config,
+            cloud=cloud_config,
         )
 
         return app_config
@@ -229,23 +223,7 @@ def validate_config(config: AppConfig) -> None:
             "Please check file permissions."
         )
 
-    # Validate remarkable output directory exists and is writable
-    if not config.sync.remarkable_output.exists():
-        raise ConfigError(
-            f"reMarkable output directory does not exist: {config.sync.remarkable_output}\n"
-            "Please create the directory or update paths.remarkable_output in your config."
-        )
-
-    if not config.sync.remarkable_output.is_dir():
-        raise ConfigError(
-            f"reMarkable output path is not a directory: {config.sync.remarkable_output}"
-        )
-
-    if not os.access(config.sync.remarkable_output, os.W_OK):
-        raise ConfigError(
-            f"reMarkable output directory is not writable: {config.sync.remarkable_output}\n"
-            "Please check file permissions."
-        )
+    # No output directory validation needed - we use cloud API only!
 
     # Validate state database directory is writable (create if needed)
     db_dir = config.sync.state_database.parent
