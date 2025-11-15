@@ -101,14 +101,17 @@ class RemarkableFilesystem:
 
         # Write root-level metadata files
         self._write_document_metadata(doc_uuid, visible_name, parent_uuid, modified_time)
-        self._write_local_file(doc_uuid)
 
         # Write page files (in subdirectory)
         for page_uuid, rm_bytes in pages:
             self._write_page(doc_dir, page_uuid, rm_bytes)
 
-        # Write .content file last (makes document visible to xochitl)
+        # Write .content file (makes document visible to xochitl)
         self._write_content_metadata(doc_uuid, [page_uuid for page_uuid, _ in pages])
+
+        # Touch .local file LAST to signal xochitl to reload
+        # xochitl watches .local mtime to detect document changes
+        self._write_local_file(doc_uuid)
 
         logger.info(
             f"{'Updated' if is_update else 'Created'} document {doc_uuid} "
