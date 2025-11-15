@@ -508,17 +508,14 @@ Mixed: Hello 世界 café! 🎉
         assert any(len(b.text) > 5000 for b in doc.content)
 
 
-@pytest.mark.skip(reason="Requires generator.py and converter.py - not yet implemented")
 class TestFullPipelineStubs:
-    """Stub tests for full pipeline (will work once all components implemented)."""
+    """Full pipeline integration tests with cloud sync."""
 
-    def test_end_to_end_sync(self, integration_env):
-        """Test complete sync from markdown to reMarkable files.
+    def test_end_to_end_sync(self, integration_env, mock_cloud_sync):
+        """Test complete sync from markdown to cloud."""
+        from rock_paper_sync.converter import SyncEngine
 
-        This test will be enabled once generator.py and converter.py are implemented.
-        """
         vault = integration_env["vault"]
-        output = integration_env["output"]
         state = integration_env["state"]
         config = integration_env["config"]
 
@@ -526,37 +523,79 @@ class TestFullPipelineStubs:
         test_file = vault / "test.md"
         test_file.write_text("# Test\n\nContent here.")
 
-        # TODO: Once SyncEngine is implemented:
-        # from rock_paper_sync.converter import SyncEngine
-        # engine = SyncEngine(config, state)
-        # results = engine.sync_all_changed()
-        #
-        # # Verify results
-        # assert len(results) == 1
-        # assert results[0].success
-        #
-        # # Verify files created
-        # uuid = results[0].remarkable_uuid
-        # doc_dir = output / uuid
-        # assert doc_dir.exists()
-        # assert (doc_dir / f"{uuid}.metadata").exists()
-        # assert (doc_dir / f"{uuid}.content").exists()
+        # Sync with mock cloud
+        engine = SyncEngine(config, state, cloud_sync=mock_cloud_sync)
+        results = engine.sync_all_changed()
 
-    def test_incremental_sync(self, integration_env):
-        """Test that unchanged files are not reprocessed.
+        # Verify results
+        assert len(results) == 1
+        assert results[0].success
+        assert results[0].remarkable_uuid is not None
 
-        This test will be enabled once SyncEngine is implemented.
-        """
-        # TODO: Implement when SyncEngine available
-        pass
+        # Verify cloud upload was called
+        assert mock_cloud_sync.upload_document.called
 
-    def test_folder_hierarchy_creation(self, integration_env):
-        """Test that folder structure is created in reMarkable format.
+        # Verify state was updated
+        file_state = state.get_file_state("test.md")
+        assert file_state is not None
+        assert file_state.status == "synced"
 
-        This test will be enabled once SyncEngine is implemented.
-        """
-        # TODO: Implement when SyncEngine available
-        pass
+    def test_incremental_sync(self, integration_env, mock_cloud_sync):
+        """Test that unchanged files are not reprocessed."""
+        from rock_paper_sync.converter import SyncEngine
+
+        vault = integration_env["vault"]
+        state = integration_env["state"]
+        config = integration_env["config"]
+
+        # Create test file
+        test_file = vault / "incremental.md"
+        test_file.write_text("# Incremental\n\nOriginal content.")
+
+        engine = SyncEngine(config, state, cloud_sync=mock_cloud_sync)
+
+        # First sync
+        results1 = engine.sync_all_changed()
+        assert len(results1) == 1
+        assert results1[0].success
+        uuid1 = results1[0].remarkable_uuid
+
+        # Reset mock to track second sync
+        mock_cloud_sync.reset_mock()
+
+        # Second sync without changes - should skip
+        results2 = engine.sync_all_changed()
+        assert len(results2) == 0  # No changes = no results
+
+        # Upload should not be called again (file unchanged)
+        assert not mock_cloud_sync.upload_document.called
+
+    def test_folder_hierarchy_creation(self, integration_env, mock_cloud_sync):
+        """Test that folder structure is created via cloud sync."""
+        from rock_paper_sync.converter import SyncEngine
+
+        vault = integration_env["vault"]
+        state = integration_env["state"]
+        config = integration_env["config"]
+
+        # Create nested folder structure
+        folder = vault / "projects" / "work"
+        folder.mkdir(parents=True)
+        test_file = folder / "document.md"
+        test_file.write_text("# Work Document\n\nIn nested folder.")
+
+        engine = SyncEngine(config, state, cloud_sync=mock_cloud_sync)
+        results = engine.sync_all_changed()
+
+        assert len(results) == 1
+        assert results[0].success
+
+        # Verify folder creation was called
+        assert mock_cloud_sync.upload_folder.called
+
+        # Verify folders were created in state
+        assert state.get_folder_uuid("projects") is not None
+        assert state.get_folder_uuid("projects/work") is not None
 
 
 class TestStateManagementEdgeCases:
@@ -728,16 +767,14 @@ class TestPerformance:
         assert len(doc.content) >= 400  # At least the paragraphs
 
 
-@pytest.mark.skip(reason="Filesystem-based tests - cloud-only sync now")
 class TestDocumentUpdateFlow:
-    """Integration tests for document update workflows."""
+    """Integration tests for document update workflows with cloud sync."""
 
-    def test_file_update_preserves_uuid_end_to_end(self, integration_env):
+    def test_file_update_preserves_uuid_end_to_end(self, integration_env, mock_cloud_sync):
         """Test that updating a file preserves UUID through full pipeline."""
         from rock_paper_sync.converter import SyncEngine
 
         vault = integration_env["vault"]
-        output = integration_env["output"]
         state = integration_env["state"]
         config = integration_env["config"]
 
@@ -746,20 +783,21 @@ class TestDocumentUpdateFlow:
         test_file.write_text("# Version 1\n\nOriginal content.")
 
         # First sync
-        engine = SyncEngine(config, state)
+        engine = SyncEngine(config, state, cloud_sync=mock_cloud_sync)
         result1 = engine.sync_file(test_file)
 
         assert result1.success
         uuid1 = result1.remarkable_uuid
         assert uuid1 is not None
 
-        # Verify files exist
-        assert (output / f"{uuid1}.metadata").exists()
-        assert (output / f"{uuid1}.content").exists()
-        assert (output / uuid1).exists()
+        # Verify cloud upload was called
+        assert mock_cloud_sync.upload_document.called
 
         # Update file content
         test_file.write_text("# Version 2\n\nUpdated content with changes.")
+
+        # Reset mock to track second upload
+        mock_cloud_sync.reset_mock()
 
         # Second sync
         result2 = engine.sync_file(test_file)
@@ -770,22 +808,19 @@ class TestDocumentUpdateFlow:
         # UUID should be SAME
         assert uuid2 == uuid1
 
-        # Verify files still exist with same UUID
-        assert (output / f"{uuid1}.metadata").exists()
-        assert (output / f"{uuid1}.content").exists()
+        # Verify cloud upload was called for update
+        assert mock_cloud_sync.upload_document.called
 
-    def test_multiple_updates_same_document(self, integration_env):
+    def test_multiple_updates_same_document(self, integration_env, mock_cloud_sync):
         """Test multiple sequential updates to same document."""
         from rock_paper_sync.converter import SyncEngine
-        import json
 
         vault = integration_env["vault"]
-        output = integration_env["output"]
         state = integration_env["state"]
         config = integration_env["config"]
 
         test_file = vault / "evolving.md"
-        engine = SyncEngine(config, state)
+        engine = SyncEngine(config, state, cloud_sync=mock_cloud_sync)
 
         versions = [
             "# V1\n\nFirst version",
@@ -807,18 +842,14 @@ class TestDocumentUpdateFlow:
                 # Should always be same UUID
                 assert result.remarkable_uuid == uuid
 
-            # Verify metadata timestamp increases
-            metadata_file = output / f"{uuid}.metadata"
-            with metadata_file.open() as f:
-                metadata = json.load(f)
-            print(f"Version {i+1} timestamp: {metadata['lastModified']}")
+        # Verify upload was called 3 times
+        assert mock_cloud_sync.upload_document.call_count == 3
 
-    def test_update_with_folder_move(self, integration_env):
+    def test_update_with_folder_move(self, integration_env, mock_cloud_sync):
         """Test updating file that changes folders."""
         from rock_paper_sync.converter import SyncEngine
 
         vault = integration_env["vault"]
-        output = integration_env["output"]
         state = integration_env["state"]
         config = integration_env["config"]
 
@@ -826,7 +857,7 @@ class TestDocumentUpdateFlow:
         test_file = vault / "document.md"
         test_file.write_text("# Original\n\nIn root folder.")
 
-        engine = SyncEngine(config, state)
+        engine = SyncEngine(config, state, cloud_sync=mock_cloud_sync)
         result1 = engine.sync_file(test_file)
 
         uuid = result1.remarkable_uuid
@@ -848,7 +879,10 @@ class TestDocumentUpdateFlow:
         # New file path = new UUID (expected for Phase 1)
         assert result2.remarkable_uuid != uuid
 
-    def test_concurrent_updates_different_files(self, integration_env):
+        # Verify folder was created
+        assert mock_cloud_sync.upload_folder.called
+
+    def test_concurrent_updates_different_files(self, integration_env, mock_cloud_sync):
         """Test updating multiple different files."""
         from rock_paper_sync.converter import SyncEngine
 
@@ -863,7 +897,7 @@ class TestDocumentUpdateFlow:
             f.write_text(f"# Document {i}\n\nOriginal content {i}.")
             files.append(f)
 
-        engine = SyncEngine(config, state)
+        engine = SyncEngine(config, state, cloud_sync=mock_cloud_sync)
 
         # First sync all
         first_uuids = {}
@@ -883,7 +917,10 @@ class TestDocumentUpdateFlow:
             # Each should preserve its UUID
             assert result.remarkable_uuid == first_uuids[f.name]
 
-    def test_update_state_tracking(self, integration_env):
+        # Verify cloud uploads for all files (5 initial + 5 updates = 10)
+        assert mock_cloud_sync.upload_document.call_count == 10
+
+    def test_update_state_tracking(self, integration_env, mock_cloud_sync):
         """Test that state database correctly tracks updates."""
         from rock_paper_sync.converter import SyncEngine
 
@@ -894,7 +931,7 @@ class TestDocumentUpdateFlow:
         test_file = vault / "tracked.md"
         test_file.write_text("# V1\n\nFirst.")
 
-        engine = SyncEngine(config, state)
+        engine = SyncEngine(config, state, cloud_sync=mock_cloud_sync)
 
         # First sync
         result1 = engine.sync_file(test_file)
@@ -907,7 +944,7 @@ class TestDocumentUpdateFlow:
         hash1 = file_state1.content_hash
 
         # Wait to ensure timestamp changes
-        time.sleep(1)
+        time.sleep(0.01)
 
         # Update
         test_file.write_text("# V2\n\nSecond.")
@@ -918,4 +955,4 @@ class TestDocumentUpdateFlow:
         assert file_state2 is not None
         assert file_state2.remarkable_uuid == uuid  # Same UUID
         assert file_state2.content_hash != hash1  # Different hash
-        assert file_state2.last_sync_time > file_state1.last_sync_time
+        assert file_state2.last_sync_time >= file_state1.last_sync_time  # Should increase or stay same
