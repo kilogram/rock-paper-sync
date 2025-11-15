@@ -7,7 +7,7 @@ import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 # Python 3.11+ has tomllib built-in, 3.10 needs tomli
 if sys.version_info >= (3, 11):
@@ -51,6 +51,16 @@ class LayoutConfig:
 
 
 @dataclass(frozen=True)
+class RmCloudConfig:
+    """rm_cloud integration configuration (optional)."""
+
+    enabled: bool
+    data_dir: Path
+    user_id: str
+    base_url: str
+
+
+@dataclass(frozen=True)
 class AppConfig:
     """Complete application configuration."""
 
@@ -58,6 +68,7 @@ class AppConfig:
     layout: LayoutConfig
     log_level: str
     log_file: Path
+    rm_cloud: Optional[RmCloudConfig] = None
 
 
 def expand_path(path_str: str) -> Path:
@@ -166,11 +177,32 @@ def load_config(config_path: Path) -> AppConfig:
             margin_right=margin_right,
         )
 
+        # Extract optional rm_cloud section
+        rm_cloud_config = None
+        rm_cloud = config_dict.get("rm_cloud", {})
+        if rm_cloud.get("enabled", False):
+            data_dir = rm_cloud.get("data_dir")
+            user_id = rm_cloud.get("user_id")
+            base_url = rm_cloud.get("base_url", "http://localhost:3000")
+
+            if not data_dir:
+                raise ConfigError("Missing required field: rm_cloud.data_dir")
+            if not user_id:
+                raise ConfigError("Missing required field: rm_cloud.user_id")
+
+            rm_cloud_config = RmCloudConfig(
+                enabled=True,
+                data_dir=expand_path(data_dir),
+                user_id=user_id,
+                base_url=base_url,
+            )
+
         app_config = AppConfig(
             sync=sync_config,
             layout=layout_config,
             log_level=log_level,
             log_file=expand_path(log_file),
+            rm_cloud=rm_cloud_config,
         )
 
         return app_config

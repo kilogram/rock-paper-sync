@@ -19,6 +19,7 @@ import click
 from .config import AppConfig, load_config, validate_config
 from .converter import SyncEngine
 from .logging_setup import setup_logging
+from .rm_cloud_client import RmCloudClient
 from .state import StateManager
 from .watcher import VaultWatcher
 
@@ -259,6 +260,14 @@ margin_right = 50
 [logging]
 level = "info"
 file = "~/.local/share/rock-paper-sync/sync.log"
+
+[rm_cloud]
+# Optional: Configure rm_cloud integration for live sync with xochitl
+# Uncomment and configure the following to enable:
+# enabled = true
+# data_dir = "/path/to/rm_cloud/data"  # rm_cloud's DATADIR
+# user_id = "your-email@example.com"      # Your rm_cloud username/email
+# base_url = "http://localhost:3000"      # rm_cloud URL
 """
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -267,7 +276,84 @@ file = "~/.local/share/rock-paper-sync/sync.log"
     click.echo("\nNext steps:")
     click.echo("1. Edit the config file to set your vault and output paths")
     click.echo("2. Create the directories specified in the config")
-    click.echo("3. Run: rock-paper-sync sync")
+    click.echo("3. (Optional) Configure rm_cloud integration")
+    click.echo("4. Run: rock-paper-sync sync")
+
+
+@main.command()
+@click.option(
+    "--url",
+    "-u",
+    default="http://localhost:3000",
+    help="rm_cloud base URL",
+)
+@click.option(
+    "--device-id",
+    "-d",
+    default="rock-paper-sync-001",
+    help="Unique device identifier",
+)
+@click.argument("code")
+def register(url: str, device_id: str, code: str) -> None:
+    """Register as a device with rm_cloud.
+
+    CODE is the one-time registration code from rm_cloud web UI.
+
+    Steps to get a code:
+    1. Open rm_cloud web UI (usually http://localhost:3000)
+    2. Go to Settings > Connect a device
+    3. Copy the one-time code
+    4. Run: rock-paper-sync register <code>
+
+    This command only needs to be run once. Credentials are saved locally.
+    """
+    client = RmCloudClient(base_url=url)
+
+    if client.is_registered():
+        if not click.confirm("Device already registered. Re-register?"):
+            return
+
+    try:
+        click.echo(f"Registering device '{device_id}' with {url}...")
+        creds = client.register_device(code, device_id)
+        click.echo(f"✓ Device registered successfully!")
+        click.echo(f"  Device ID: {creds.device_id}")
+        click.echo(f"  Credentials saved to: {client.credentials_path}")
+    except Exception as e:
+        click.echo(f"✗ Registration failed: {e}", err=True)
+        sys.exit(1)
+
+
+@main.command()
+@click.option(
+    "--url",
+    "-u",
+    default="http://localhost:3000",
+    help="rm_cloud base URL",
+)
+def trigger_sync(url: str) -> None:
+    """Manually trigger sync notification to xochitl.
+
+    Sends a sync-complete notification to all connected devices,
+    telling xochitl to reload and display any new/updated documents.
+
+    Requires device registration (run 'register' command first).
+    """
+    client = RmCloudClient(base_url=url)
+
+    if not client.is_registered():
+        click.echo("Error: Device not registered", err=True)
+        click.echo("Run: rock-paper-sync register <code>", err=True)
+        sys.exit(1)
+
+    try:
+        click.echo("Triggering sync notification...")
+        notification_id = client.trigger_sync()
+        click.echo(f"✓ Sync notification sent (ID: {notification_id})")
+        click.echo("  xochitl should reload documents now")
+    except Exception as e:
+        click.echo(f"✗ Failed to trigger sync: {e}", err=True)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

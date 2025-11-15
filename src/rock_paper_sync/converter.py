@@ -21,6 +21,8 @@ from .config import AppConfig
 from .generator import RemarkableGenerator
 from .parser import parse_markdown_file
 from .rm_filesystem import RemarkableFilesystem
+from .rm_cloud_client import RmCloudClient
+from .rm_cloud_sync import RmCloudSync
 from .state import StateManager, SyncRecord
 
 logger = logging.getLogger("rock_paper_sync.converter")
@@ -65,6 +67,24 @@ class SyncEngine:
         self.config = config
         self.state = state
         self.generator = RemarkableGenerator(config.layout)
+
+        # Initialize rm_cloud sync if configured
+        self.rm_cloud_sync: Optional[RmCloudSync] = None
+        if config.rm_cloud and config.rm_cloud.enabled:
+            client = RmCloudClient(base_url=config.rm_cloud.base_url)
+            self.rm_cloud_sync = RmCloudSync(
+                rm_cloud_data_dir=config.rm_cloud.data_dir,
+                user_id=config.rm_cloud.user_id,
+                client=client,
+            )
+            if self.rm_cloud_sync.is_sync_enabled():
+                logger.info("rm_cloud live sync enabled")
+            else:
+                logger.warning(
+                    "rm_cloud configured but device not registered - "
+                    "run: rock-paper-sync register <code>"
+                )
+
         logger.debug("Sync engine initialized")
 
     def sync_file(self, markdown_path: Path) -> SyncResult:
@@ -133,9 +153,20 @@ class SyncEngine:
             rm_doc = self.generator.generate_document(md_doc, parent_uuid, existing_uuid)
 
             # Write files to output directory
-            self.generator.write_document_files(
-                rm_doc, self.config.sync.remarkable_output
-            )
+            if self.rm_cloud_sync:
+                # Write to rm_cloud directory and trigger sync notification
+                self.rm_cloud_sync.write_document(
+                    doc_uuid=rm_doc.uuid,
+                    document_name=rm_doc.metadata.get("visibleName", md_doc.title),
+                    pages=rm_doc.pages,
+                    parent_uuid=parent_uuid,
+                    trigger_sync=True,
+                )
+            else:
+                # Write to regular output directory
+                self.generator.write_document_files(
+                    rm_doc, self.config.sync.remarkable_output
+                )
 
             # Update state database
             new_state = SyncRecord(
