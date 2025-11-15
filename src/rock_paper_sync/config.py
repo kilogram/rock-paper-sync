@@ -55,8 +55,6 @@ class RmCloudConfig:
     """rm_cloud integration configuration (optional)."""
 
     enabled: bool
-    data_dir: Path
-    user_id: str
     base_url: str
 
 
@@ -181,19 +179,10 @@ def load_config(config_path: Path) -> AppConfig:
         rm_cloud_config = None
         rm_cloud = config_dict.get("rm_cloud", {})
         if rm_cloud.get("enabled", False):
-            data_dir = rm_cloud.get("data_dir")
-            user_id = rm_cloud.get("user_id")
             base_url = rm_cloud.get("base_url", "http://localhost:3000")
-
-            if not data_dir:
-                raise ConfigError("Missing required field: rm_cloud.data_dir")
-            if not user_id:
-                raise ConfigError("Missing required field: rm_cloud.user_id")
 
             rm_cloud_config = RmCloudConfig(
                 enabled=True,
-                data_dir=expand_path(data_dir),
-                user_id=user_id,
                 base_url=base_url,
             )
 

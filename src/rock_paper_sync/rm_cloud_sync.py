@@ -1,100 +1,146 @@
 """Integration layer for rm_cloud sync."""
 
+import json
 import logging
+import time
 from pathlib import Path
 from typing import Optional
 
 from .rm_filesystem import RemarkableFilesystem
 from .rm_cloud_client import RmCloudClient
+from .sync_v3 import SyncV3Client
 
 logger = logging.getLogger(__name__)
 
 
 class RmCloudSync:
     """
-    Sync documents to rm_cloud and trigger live reload on xochitl.
+    Sync documents to rm_cloud using Sync v3 protocol.
 
-    This combines:
-    1. Writing files to rm_cloud's data directory
-    2. Triggering sync-complete notification via API
+    Pure API approach - no filesystem writes required!
     """
 
     def __init__(
         self,
-        rm_cloud_data_dir: Path,
-        user_id: str,
+        base_url: str,
         client: Optional[RmCloudClient] = None,
     ):
         """
         Initialize rm_cloud sync.
 
         Args:
-            rm_cloud_data_dir: Root data directory of rm_cloud instance
-            user_id: User ID (email/username used in rm_cloud)
+            base_url: Base URL of rm_cloud instance
             client: Optional RmCloudClient (will create default if not provided)
         """
-        self.rm_cloud_data_dir = rm_cloud_data_dir
-        self.user_id = user_id
-        self.client = client or RmCloudClient()
+        self.base_url = base_url
+        self.client = client or RmCloudClient(base_url=base_url)
 
-        # Calculate the user's output directory
-        # Structure: {DataDir}/users/{user_id}/
-        self.user_output_dir = rm_cloud_data_dir / "users" / user_id
-
-        if not self.user_output_dir.exists():
-            logger.warning(
-                f"rm_cloud user directory does not exist: {self.user_output_dir}"
+        if not self.client.is_registered():
+            raise ValueError(
+                "Device not registered. Run: rock-paper-sync register <code>"
             )
-            logger.warning("Will create it when writing files")
 
-        # Create filesystem that writes to rm_cloud directory
-        self.filesystem = RemarkableFilesystem(output_dir=self.user_output_dir)
+        # Create Sync v3 client
+        self.sync_client = SyncV3Client(
+            base_url=base_url,
+            device_token=self.client.credentials.device_token,
+        )
 
-        logger.info(f"rm_cloud sync initialized for user: {user_id}")
-        logger.info(f"Writing to: {self.user_output_dir}")
+        logger.info(f"rm_cloud Sync v3 initialized")
+        logger.info(f"Connected to: {base_url}")
 
-    def write_document(
+    def _create_metadata_file(
+        self, doc_uuid: str, document_name: str, parent_uuid: str
+    ) -> bytes:
+        """Create .metadata file content."""
+        now_ms = int(time.time() * 1000)
+        metadata = {
+            "visibleName": document_name,
+            "type": "DocumentType",
+            "parent": parent_uuid,
+            "lastModified": str(now_ms),
+            "lastOpened": "0",
+            "lastOpenedPage": 0,
+            "version": 1,
+            "pinned": False,
+            "synced": True,
+            "modified": False,
+            "deleted": False,
+            "metadatamodified": False,
+        }
+        return json.dumps(metadata).encode("utf-8")
+
+    def _create_content_file(self, page_count: int) -> bytes:
+        """Create .content file."""
+        content = {
+            "fileType": "notebook",
+            "fontName": "",
+            "lastOpenedPage": 0,
+            "lineHeight": -1,
+            "margins": 180,
+            "orientation": "portrait",
+            "pageCount": page_count,
+            "pages": [],
+            "textScale": 1,
+            "transform": {
+                "m11": 1,
+                "m12": 0,
+                "m13": 0,
+                "m21": 0,
+                "m22": 1,
+                "m23": 0,
+                "m31": 0,
+                "m32": 0,
+                "m33": 1,
+            },
+        }
+        return json.dumps(content).encode("utf-8")
+
+    def upload_document(
         self,
         doc_uuid: str,
         document_name: str,
         pages: list,
         parent_uuid: str = "",
-        trigger_sync: bool = True,
     ) -> None:
         """
-        Write a document and optionally trigger sync notification.
+        Upload a document using Sync v3 protocol.
 
         Args:
             doc_uuid: Document UUID
             document_name: Display name for the document
-            pages: List of page data (from generator)
+            pages: List of page data (tuples of page_uuid, rm_data)
             parent_uuid: Parent folder UUID (empty for root)
-            trigger_sync: Whether to trigger sync notification after writing
 
         Raises:
-            Exception: If writing fails or sync trigger fails
+            Exception: If upload fails
         """
-        # Write files using the filesystem
-        logger.info(f"Writing document to rm_cloud: {document_name} ({doc_uuid})")
-        self.filesystem.write_document(
-            doc_uuid=doc_uuid,
-            document_name=document_name,
-            pages=pages,
-            parent_uuid=parent_uuid,
+        logger.info(f"Uploading document via Sync v3: {document_name} ({doc_uuid})")
+
+        # Build files dict
+        files = {}
+
+        # Add metadata file
+        files[f"{doc_uuid}.metadata"] = self._create_metadata_file(
+            doc_uuid, document_name, parent_uuid
         )
 
-        # Trigger sync notification if requested
-        if trigger_sync and self.client.is_registered():
-            try:
-                notification_id = self.client.trigger_sync()
-                logger.info(f"Sync notification sent: {notification_id}")
-            except Exception as e:
-                logger.warning(f"Failed to trigger sync notification: {e}")
-                logger.warning("Document written but xochitl may not reload automatically")
-        elif trigger_sync and not self.client.is_registered():
-            logger.warning("Device not registered - cannot trigger sync notification")
-            logger.warning("Run: rock-paper-sync register <code>")
+        # Add content file
+        files[f"{doc_uuid}.content"] = self._create_content_file(len(pages))
+
+        # Add page files
+        for page_uuid, rm_data in pages:
+            files[f"{doc_uuid}/{page_uuid}.rm"] = rm_data
+
+        # Upload via Sync v3
+        self.sync_client.upload_document(
+            doc_uuid=doc_uuid,
+            files=files,
+            broadcast=True,  # Always trigger sync notification
+        )
+
+        logger.info(f"Document uploaded successfully: {doc_uuid}")
 
     def is_sync_enabled(self) -> bool:
-        """Check if automatic sync triggering is enabled (device registered)."""
+        """Check if sync is enabled (device registered)."""
         return self.client.is_registered()

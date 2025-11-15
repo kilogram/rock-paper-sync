@@ -71,19 +71,17 @@ class SyncEngine:
         # Initialize rm_cloud sync if configured
         self.rm_cloud_sync: Optional[RmCloudSync] = None
         if config.rm_cloud and config.rm_cloud.enabled:
-            client = RmCloudClient(base_url=config.rm_cloud.base_url)
-            self.rm_cloud_sync = RmCloudSync(
-                rm_cloud_data_dir=config.rm_cloud.data_dir,
-                user_id=config.rm_cloud.user_id,
-                client=client,
-            )
-            if self.rm_cloud_sync.is_sync_enabled():
-                logger.info("rm_cloud live sync enabled")
-            else:
-                logger.warning(
-                    "rm_cloud configured but device not registered - "
-                    "run: rock-paper-sync register <code>"
+            try:
+                client = RmCloudClient(base_url=config.rm_cloud.base_url)
+                self.rm_cloud_sync = RmCloudSync(
+                    base_url=config.rm_cloud.base_url,
+                    client=client,
                 )
+                logger.info("rm_cloud Sync v3 enabled (pure API mode)")
+            except ValueError as e:
+                logger.warning(f"rm_cloud sync disabled: {e}")
+                logger.warning("Run: rock-paper-sync register <code>")
+                self.rm_cloud_sync = None
 
         logger.debug("Sync engine initialized")
 
@@ -154,16 +152,15 @@ class SyncEngine:
 
             # Write files to output directory
             if self.rm_cloud_sync:
-                # Write to rm_cloud directory and trigger sync notification
-                self.rm_cloud_sync.write_document(
+                # Upload via Sync v3 API (pure cloud, no filesystem)
+                self.rm_cloud_sync.upload_document(
                     doc_uuid=rm_doc.uuid,
                     document_name=rm_doc.metadata.get("visibleName", md_doc.title),
-                    pages=rm_doc.pages,
+                    pages=rm_doc.pages,  # List of (page_uuid, rm_data) tuples
                     parent_uuid=parent_uuid,
-                    trigger_sync=True,
                 )
             else:
-                # Write to regular output directory
+                # Write to regular output directory (filesystem)
                 self.generator.write_document_files(
                     rm_doc, self.config.sync.remarkable_output
                 )

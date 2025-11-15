@@ -262,12 +262,11 @@ level = "info"
 file = "~/.local/share/rock-paper-sync/sync.log"
 
 [rm_cloud]
-# Optional: Configure rm_cloud integration for live sync with xochitl
+# Optional: Enable Sync v3 API integration for live sync with xochitl
+# This uses pure API calls - no filesystem access required!
 # Uncomment and configure the following to enable:
 # enabled = true
-# data_dir = "/path/to/rm_cloud/data"  # rm_cloud's DATADIR
-# user_id = "your-email@example.com"      # Your rm_cloud username/email
-# base_url = "http://localhost:3000"      # rm_cloud URL
+# base_url = "http://localhost:3000"  # Your rm_cloud URL
 """
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
