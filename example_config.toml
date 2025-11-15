@@ -1,0 +1,56 @@
+# reMarkable-Obsidian Sync Configuration
+# Copy this file to ~/.config/rm-obsidian-sync/config.toml
+# and adjust paths for your setup
+
+[paths]
+# Path to your Obsidian vault directory
+obsidian_vault = "~/obsidian-vault"
+
+# Path where reMarkable files will be written
+# This should be your Syncthing sync folder for the reMarkable
+# Typically: ~/.local/share/remarkable/xochitl/ (if syncing directly)
+# Or a custom sync folder that Syncthing monitors
+remarkable_output = "~/remarkable-sync"
+
+# Path to sync state database (SQLite)
+# Stores file mappings and sync history
+state_database = "~/.local/share/rm-obsidian-sync/state.db"
+
+[sync]
+# Which files to include (glob patterns, relative to vault)
+include_patterns = [
+    "**/*.md"  # All markdown files
+]
+
+# Which files to exclude (glob patterns)
+exclude_patterns = [
+    ".obsidian/**",      # Obsidian config
+    "templates/**",      # Template files
+    ".git/**",           # Git directory
+    ".trash/**",         # Obsidian trash
+    "*.excalidraw.md",   # Excalidraw files (not useful as text)
+    "_*",                # Files starting with underscore
+]
+
+# Seconds to wait after file change before syncing
+# Prevents multiple syncs during rapid editing
+debounce_seconds = 5
+
+[layout]
+# Approximate number of text lines per page
+# Affects pagination of long documents
+lines_per_page = 45
+
+# Page margins in pixels
+# reMarkable resolution: 1404 x 1872 pixels
+margin_top = 50
+margin_bottom = 50
+margin_left = 50
+margin_right = 50
+
+[logging]
+# Log level: debug, info, warning, error
+level = "info"
+
+# Log file path (supports ~ expansion)
+file = "~/.local/share/rm-obsidian-sync/sync.log"

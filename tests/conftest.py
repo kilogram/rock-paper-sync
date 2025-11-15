@@ -1,0 +1,140 @@
+"""
+Shared pytest fixtures for rm-obsidian-sync tests.
+"""
+import pytest
+from pathlib import Path
+import tempfile
+
+
+@pytest.fixture
+def sample_markdown_dir() -> Path:
+    """Path to sample markdown fixtures"""
+    return Path(__file__).parent / "fixtures" / "sample_markdown"
+
+
+@pytest.fixture
+def simple_markdown(sample_markdown_dir: Path) -> str:
+    """Load simple.md fixture"""
+    return (sample_markdown_dir / "simple.md").read_text()
+
+
+@pytest.fixture
+def comprehensive_markdown(sample_markdown_dir: Path) -> str:
+    """Load comprehensive.md fixture"""
+    return (sample_markdown_dir / "comprehensive.md").read_text()
+
+
+@pytest.fixture
+def temp_vault(tmp_path: Path) -> Path:
+    """Create temporary Obsidian vault directory"""
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    return vault
+
+
+@pytest.fixture
+def temp_output(tmp_path: Path) -> Path:
+    """Create temporary reMarkable output directory"""
+    output = tmp_path / "remarkable_output"
+    output.mkdir()
+    return output
+
+
+@pytest.fixture
+def temp_state_db(tmp_path: Path) -> Path:
+    """Path for temporary state database"""
+    return tmp_path / "state.db"
+
+
+@pytest.fixture
+def sample_config(temp_vault: Path, temp_output: Path, temp_state_db: Path):
+    """Create sample AppConfig for testing"""
+    # Import here to avoid circular imports during test collection
+    from rm_obsidian_sync.config import AppConfig, SyncConfig, LayoutConfig
+    
+    return AppConfig(
+        sync=SyncConfig(
+            obsidian_vault=temp_vault,
+            remarkable_output=temp_output,
+            state_database=temp_state_db,
+            include_patterns=["**/*.md"],
+            exclude_patterns=[".obsidian/**"],
+            debounce_seconds=1
+        ),
+        layout=LayoutConfig(
+            lines_per_page=45,
+            margin_top=50,
+            margin_bottom=50,
+            margin_left=50,
+            margin_right=50
+        ),
+        log_level="debug",
+        log_file=temp_state_db.parent / "test.log"
+    )
+
+
+@pytest.fixture
+def state_manager(temp_state_db: Path):
+    """Create StateManager instance for testing"""
+    from rm_obsidian_sync.state import StateManager
+    
+    manager = StateManager(temp_state_db)
+    yield manager
+    manager.close()
+
+
+@pytest.fixture
+def markdown_with_frontmatter() -> str:
+    """Sample markdown with YAML frontmatter"""
+    return """---
+title: Test Document
+author: Test Author
+tags:
+  - test
+  - fixture
+date: 2024-11-15
+---
+
+# Introduction
+
+This is the main content after frontmatter.
+
+## Section
+
+More content here.
+"""
+
+
+@pytest.fixture
+def markdown_with_formatting() -> str:
+    """Sample markdown with various formatting"""
+    return """# Formatted Document
+
+This paragraph has **bold text** and *italic text*.
+
+It also has ***bold and italic*** together.
+
+Here's `inline code` too.
+
+## Lists
+
+- Item with **bold**
+- Item with *italic*
+- Plain item
+"""
+
+
+@pytest.fixture
+def long_markdown() -> str:
+    """Generate long markdown document for pagination testing"""
+    paragraphs = []
+    for i in range(100):
+        paragraphs.append(
+            f"## Section {i+1}\n\n"
+            f"This is paragraph {i+1} of the test document. "
+            f"It contains enough text to take up multiple lines when rendered. "
+            f"The purpose is to test pagination logic and ensure that long documents "
+            f"are properly split across multiple pages. Each section should be "
+            f"distinct and the page breaks should occur at logical boundaries.\n"
+        )
+    return "\n".join(paragraphs)
