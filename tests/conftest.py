@@ -1,5 +1,5 @@
 """
-Shared pytest fixtures for rm-obsidian-sync tests.
+Shared pytest fixtures for rock-paper-sync tests.
 """
 import pytest
 from pathlib import Path
@@ -50,7 +50,7 @@ def temp_state_db(tmp_path: Path) -> Path:
 def sample_config(temp_vault: Path, temp_output: Path, temp_state_db: Path):
     """Create sample AppConfig for testing"""
     # Import here to avoid circular imports during test collection
-    from rm_obsidian_sync.config import AppConfig, SyncConfig, LayoutConfig
+    from rock_paper_sync.config import AppConfig, SyncConfig, LayoutConfig
     
     return AppConfig(
         sync=SyncConfig(
@@ -76,7 +76,7 @@ def sample_config(temp_vault: Path, temp_output: Path, temp_state_db: Path):
 @pytest.fixture
 def state_manager(temp_state_db: Path):
     """Create StateManager instance for testing"""
-    from rm_obsidian_sync.state import StateManager
+    from rock_paper_sync.state import StateManager
     
     manager = StateManager(temp_state_db)
     yield manager

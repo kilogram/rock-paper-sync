@@ -17,7 +17,7 @@ from .metadata import (
     generate_page_metadata,
 )
 
-logger = logging.getLogger("rm_obsidian_sync.rm_filesystem")
+logger = logging.getLogger("rock_paper_sync.rm_filesystem")
 
 
 class RemarkableFilesystem:

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from rm_obsidian_sync.parser import (
+from rock_paper_sync.parser import (
     BlockType,
     ContentBlock,
     FormatStyle,
@@ -677,7 +677,7 @@ class TestParserRobustness:
 
     def test_markdown_parsing_exception_handling(self, tmp_path: Path, mocker):
         """Test that markdown parsing exceptions are caught gracefully."""
-        from rm_obsidian_sync.parser import parse_content
+        from rock_paper_sync.parser import parse_content
 
         # Create a mock markdown parser that raises an exception when called
         mock_md = mocker.MagicMock()

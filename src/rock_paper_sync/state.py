@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-logger = logging.getLogger("rm_obsidian_sync.state")
+logger = logging.getLogger("rock_paper_sync.state")
 
 
 class StateError(Exception):

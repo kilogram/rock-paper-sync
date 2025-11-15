@@ -250,7 +250,7 @@ class SyncStatus(Enum):
 [paths]
 obsidian_vault = "/home/user/obsidian-vault"
 remarkable_output = "/home/user/remarkable-sync"
-state_database = "~/.local/share/rm-obsidian-sync/state.db"
+state_database = "~/.local/share/rock-paper-sync/state.db"
 
 [sync]
 include_patterns = ["**/*.md"]
@@ -266,7 +266,7 @@ margin_right = 50
 
 [logging]
 level = "info"
-file = "~/.local/share/rm-obsidian-sync/sync.log"
+file = "~/.local/share/rock-paper-sync/sync.log"
 ```
 
 ## Error Handling Specifications

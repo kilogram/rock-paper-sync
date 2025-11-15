@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from rm_obsidian_sync.config import AppConfig
-from rm_obsidian_sync.converter import SyncEngine, SyncResult
-from rm_obsidian_sync.state import StateManager
+from rock_paper_sync.config import AppConfig
+from rock_paper_sync.converter import SyncEngine, SyncResult
+from rock_paper_sync.state import StateManager
 
 
 class TestSyncEngine:

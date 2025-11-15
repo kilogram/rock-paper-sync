@@ -27,7 +27,7 @@ from .watcher import VaultWatcher
 @click.option(
     "--config",
     "-c",
-    default="~/.config/rm-obsidian-sync/config.toml",
+    default="~/.config/rock-paper-sync/config.toml",
     help="Path to config file",
 )
 @click.option("--verbose", "-v", is_flag=True, help="Enable debug logging")
@@ -47,7 +47,7 @@ def main(ctx: click.Context, config: str, verbose: bool) -> None:
     # Check if config exists (except for init command)
     if ctx.invoked_subcommand != "init" and not config_path.exists():
         click.echo(f"Error: Config file not found: {config_path}", err=True)
-        click.echo(f"Create one using: rm-obsidian-sync init {config_path}", err=True)
+        click.echo(f"Create one using: rock-paper-sync init {config_path}", err=True)
         sys.exit(1)
 
     # Load and validate config (except for init command)
@@ -225,10 +225,10 @@ def init(output: str | None) -> None:
     Creates a TOML configuration file with default settings.
     Edit the file to set your vault and output paths.
 
-    If OUTPUT is not specified, defaults to ~/.config/rm-obsidian-sync/config.toml
+    If OUTPUT is not specified, defaults to ~/.config/rock-paper-sync/config.toml
     """
     if output is None:
-        output = "~/.config/rm-obsidian-sync/config.toml"
+        output = "~/.config/rock-paper-sync/config.toml"
 
     output_path = Path(output).expanduser()
 
@@ -242,7 +242,7 @@ def init(output: str | None) -> None:
 [paths]
 obsidian_vault = "~/obsidian-vault"
 remarkable_output = "~/remarkable-sync"
-state_database = "~/.local/share/rm-obsidian-sync/state.db"
+state_database = "~/.local/share/rock-paper-sync/state.db"
 
 [sync]
 include_patterns = ["**/*.md"]
@@ -258,7 +258,7 @@ margin_right = 50
 
 [logging]
 level = "info"
-file = "~/.local/share/rm-obsidian-sync/sync.log"
+file = "~/.local/share/rock-paper-sync/sync.log"
 """
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -267,7 +267,7 @@ file = "~/.local/share/rm-obsidian-sync/sync.log"
     click.echo("\nNext steps:")
     click.echo("1. Edit the config file to set your vault and output paths")
     click.echo("2. Create the directories specified in the config")
-    click.echo("3. Run: rm-obsidian-sync sync")
+    click.echo("3. Run: rock-paper-sync sync")
 
 
 if __name__ == "__main__":

@@ -30,7 +30,7 @@ remarkable-obsidian-sync/
 │   ├── ARCHITECTURE.md          # Technical architecture
 │   └── TASKS.md                 # Implementation tasks
 ├── src/
-│   └── rm_obsidian_sync/
+│   └── rock_paper_sync/
 │       ├── __init__.py
 │       ├── cli.py               # Command-line interface
 │       ├── config.py            # Configuration management

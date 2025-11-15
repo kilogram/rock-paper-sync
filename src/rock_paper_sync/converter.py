@@ -23,7 +23,7 @@ from .parser import parse_markdown_file
 from .rm_filesystem import RemarkableFilesystem
 from .state import StateManager, SyncRecord
 
-logger = logging.getLogger("rm_obsidian_sync.converter")
+logger = logging.getLogger("rock_paper_sync.converter")
 
 
 @dataclass

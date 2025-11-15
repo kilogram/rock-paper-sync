@@ -19,7 +19,7 @@ from .config import LayoutConfig
 from .parser import BlockType, ContentBlock, FormatStyle, MarkdownDocument, TextFormat
 from .rm_filesystem import RemarkableFilesystem
 
-logger = logging.getLogger("rm_obsidian_sync.generator")
+logger = logging.getLogger("rock_paper_sync.generator")
 
 
 @dataclass

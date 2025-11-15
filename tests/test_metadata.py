@@ -8,7 +8,7 @@ import time
 
 import pytest
 
-from rm_obsidian_sync.metadata import (
+from rock_paper_sync.metadata import (
     current_rm_timestamp,
     generate_content_metadata,
     generate_document_metadata,

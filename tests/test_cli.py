@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from rm_obsidian_sync import cli
+from rock_paper_sync import cli
 
 
 @pytest.fixture
@@ -380,7 +380,7 @@ class TestInitCommandEdgeCases:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             fake_home = Path(tmpdir)
-            fake_config_dir = fake_home / ".config" / "rm-obsidian-sync"
+            fake_config_dir = fake_home / ".config" / "rock-paper-sync"
             fake_config_dir.mkdir(parents=True)
             fake_config_path = fake_config_dir / "config.toml"
 
@@ -410,7 +410,7 @@ class TestSyncCommandErrors:
         (temp_vault / "test.md").write_text("# Test")
 
         # Mock the SyncEngine to return an error result
-        from rm_obsidian_sync.converter import SyncResult
+        from rock_paper_sync.converter import SyncResult
 
         mock_result = SyncResult(
             path=temp_vault / "test.md",
@@ -420,7 +420,7 @@ class TestSyncCommandErrors:
         )
 
         mocker.patch(
-            "rm_obsidian_sync.converter.SyncEngine.sync_all_changed",
+            "rock_paper_sync.converter.SyncEngine.sync_all_changed",
             return_value=[mock_result],
         )
 

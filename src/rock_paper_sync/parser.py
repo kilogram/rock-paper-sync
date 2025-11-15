@@ -16,7 +16,7 @@ from typing import Any, Optional
 import mistune
 import yaml
 
-logger = logging.getLogger("rm_obsidian_sync.parser")
+logger = logging.getLogger("rock_paper_sync.parser")
 
 
 class BlockType(Enum):

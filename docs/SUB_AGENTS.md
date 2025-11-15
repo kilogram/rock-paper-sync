@@ -1,6 +1,6 @@
 # Sub-Agent Usage Guide
 
-This document explains how to effectively use sub-agents during implementation of the rm-obsidian-sync tool.
+This document explains how to effectively use sub-agents during implementation of the rock-paper-sync tool.
 
 ## What Are Sub-Agents?
 

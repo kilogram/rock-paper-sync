@@ -46,7 +46,7 @@
 
 ```python
 @click.group()
-@click.option('--config', '-c', default='~/.config/rm-obsidian-sync/config.toml')
+@click.option('--config', '-c', default='~/.config/rock-paper-sync/config.toml')
 @click.option('--verbose', '-v', is_flag=True)
 def main(config: str, verbose: bool) -> None:
     """reMarkable-Obsidian Sync Tool"""
@@ -812,10 +812,10 @@ For a 150-line markdown file:
 import logging
 
 # Configure hierarchical loggers
-logger = logging.getLogger('rm_obsidian_sync')
-parser_logger = logging.getLogger('rm_obsidian_sync.parser')
-generator_logger = logging.getLogger('rm_obsidian_sync.generator')
-state_logger = logging.getLogger('rm_obsidian_sync.state')
+logger = logging.getLogger('rock_paper_sync')
+parser_logger = logging.getLogger('rock_paper_sync.parser')
+generator_logger = logging.getLogger('rock_paper_sync.generator')
+state_logger = logging.getLogger('rock_paper_sync.state')
 
 # Log levels by component:
 # - CLI: INFO (user-facing progress)
@@ -969,7 +969,7 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "rm-obsidian-sync"
+name = "rock-paper-sync"
 version = "0.1.0"
 description = "Sync Obsidian markdown to reMarkable Paper Pro"
 requires-python = ">=3.10"
@@ -990,7 +990,7 @@ dev = [
 ]
 
 [project.scripts]
-rm-obsidian-sync = "rm_obsidian_sync.cli:main"
+rock-paper-sync = "rock_paper_sync.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -999,14 +999,14 @@ where = ["src"]
 ### System Service (systemd)
 
 ```ini
-# /etc/systemd/user/rm-obsidian-sync.service
+# /etc/systemd/user/rock-paper-sync.service
 [Unit]
 Description=reMarkable Obsidian Sync
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/rm-obsidian-sync watch
+ExecStart=/usr/local/bin/rock-paper-sync watch
 Restart=on-failure
 RestartSec=10
 

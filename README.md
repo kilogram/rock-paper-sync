@@ -32,8 +32,8 @@ Generated documents appear on your reMarkable device as native notebooks with ty
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/rm-obsidian-sync.git
-cd rm-obsidian-sync
+git clone https://github.com/yourusername/rock-paper-sync.git
+cd rock-paper-sync
 
 # Create virtual environment
 python -m venv .venv
@@ -47,12 +47,12 @@ pip install -e ".[dev]"
 
 1. Create config directory:
 ```bash
-mkdir -p ~/.config/rm-obsidian-sync
+mkdir -p ~/.config/rock-paper-sync
 ```
 
 2. Copy and edit example config:
 ```bash
-cp example_config.toml ~/.config/rm-obsidian-sync/config.toml
+cp example_config.toml ~/.config/rock-paper-sync/config.toml
 ```
 
 3. Edit paths in config file:
@@ -60,7 +60,7 @@ cp example_config.toml ~/.config/rm-obsidian-sync/config.toml
 [paths]
 obsidian_vault = "/path/to/your/obsidian/vault"
 remarkable_output = "/path/to/syncthing/remarkable/folder"
-state_database = "~/.local/share/rm-obsidian-sync/state.db"
+state_database = "~/.local/share/rock-paper-sync/state.db"
 ```
 
 ## Usage
@@ -68,31 +68,31 @@ state_database = "~/.local/share/rm-obsidian-sync/state.db"
 ### Sync All Changed Files
 
 ```bash
-rm-obsidian-sync sync
+rock-paper-sync sync
 ```
 
 ### Watch for Changes (Continuous Sync)
 
 ```bash
-rm-obsidian-sync watch
+rock-paper-sync watch
 ```
 
 ### Check Sync Status
 
 ```bash
-rm-obsidian-sync status
+rock-paper-sync status
 ```
 
 ### Reset Sync State
 
 ```bash
-rm-obsidian-sync reset
+rock-paper-sync reset
 ```
 
 ### Create Example Config
 
 ```bash
-rm-obsidian-sync init ~/.config/rm-obsidian-sync/config.toml
+rock-paper-sync init ~/.config/rock-paper-sync/config.toml
 ```
 
 ## How It Works
@@ -157,7 +157,7 @@ mypy src/
 ### Test Coverage
 
 ```bash
-pytest --cov=rm_obsidian_sync tests/
+pytest --cov=rock_paper_sync tests/
 ```
 
 ## Project Structure
@@ -169,7 +169,7 @@ remarkable-obsidian-sync/
 │   ├── REQUIREMENTS.md    # Detailed requirements
 │   ├── ARCHITECTURE.md    # Technical architecture
 │   └── TASKS.md          # Implementation tasks
-├── src/rm_obsidian_sync/
+├── src/rock_paper_sync/
 │   ├── cli.py            # Command-line interface
 │   ├── config.py         # Configuration loading
 │   ├── watcher.py        # File system monitoring

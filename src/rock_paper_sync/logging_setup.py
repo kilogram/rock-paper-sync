@@ -11,21 +11,21 @@ def setup_logging(log_level: str, log_file: Path) -> None:
     """Configure application logging with console and file handlers.
 
     Creates a hierarchical logger structure:
-    - Root logger: 'rm_obsidian_sync'
-    - Component loggers: 'rm_obsidian_sync.config', 'rm_obsidian_sync.parser', etc.
+    - Root logger: 'rock_paper_sync'
+    - Component loggers: 'rock_paper_sync.config', 'rock_paper_sync.parser', etc.
 
     Args:
         log_level: Logging level for console output (debug, info, warning, error)
         log_file: Path to log file (will be created if it doesn't exist)
 
     Example:
-        >>> setup_logging('info', Path('~/.local/share/rm-obsidian-sync/sync.log'))
+        >>> setup_logging('info', Path('~/.local/share/rock-paper-sync/sync.log'))
     """
     # Create log file directory if needed
     log_file.parent.mkdir(parents=True, exist_ok=True)
 
     # Get root logger for this application
-    root_logger = logging.getLogger("rm_obsidian_sync")
+    root_logger = logging.getLogger("rock_paper_sync")
     root_logger.setLevel(logging.DEBUG)  # Capture everything, filter at handler level
 
     # Remove any existing handlers to avoid duplicates

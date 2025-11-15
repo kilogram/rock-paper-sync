@@ -10,9 +10,9 @@ from pathlib import Path
 import pytest
 import rmscene
 
-from rm_obsidian_sync.config import LayoutConfig
-from rm_obsidian_sync.generator import RemarkableGenerator
-from rm_obsidian_sync.parser import (
+from rock_paper_sync.config import LayoutConfig
+from rock_paper_sync.generator import RemarkableGenerator
+from rock_paper_sync.parser import (
     BlockType,
     ContentBlock,
     FormatStyle,

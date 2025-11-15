@@ -10,7 +10,7 @@ All deliverables implemented, tested, and documented.
 
 ### 1. metadata.py - Complete ✅
 
-**Location**: `/home/user/rock-paper-sync/src/rm_obsidian_sync/metadata.py`
+**Location**: `/home/user/rock-paper-sync/src/rock_paper_sync/metadata.py`
 
 **Functions Implemented**:
 - ✅ `current_rm_timestamp()` - Generate 13-digit millisecond timestamps
@@ -23,7 +23,7 @@ All deliverables implemented, tested, and documented.
 
 ### 2. generator.py - Complete ✅
 
-**Location**: `/home/user/rock-paper-sync/src/rm_obsidian_sync/generator.py`
+**Location**: `/home/user/rock-paper-sync/src/rock_paper_sync/generator.py`
 
 **Classes Implemented**:
 - ✅ `TextItem` - Positioned text element dataclass
@@ -131,8 +131,8 @@ Example file sizes:
 ================================ tests coverage ================================
 Name                                Stmts   Miss   Cover   Missing
 ------------------------------------------------------------------
-src/rm_obsidian_sync/generator.py     137      1  99.27%   244
-src/rm_obsidian_sync/metadata.py       13      0 100.00%
+src/rock_paper_sync/generator.py     137      1  99.27%   244
+src/rock_paper_sync/metadata.py       13      0 100.00%
 ------------------------------------------------------------------
 TOTAL                                 150      1  99.33%
 ============================== 55 passed in 0.27s ==============================
@@ -234,8 +234,8 @@ Consider:
 ## Files Modified/Created
 
 ### Modified:
-- `/home/user/rock-paper-sync/src/rm_obsidian_sync/metadata.py` - Added `current_rm_timestamp()`
-- `/home/user/rock-paper-sync/src/rm_obsidian_sync/generator.py` - Complete implementation
+- `/home/user/rock-paper-sync/src/rock_paper_sync/metadata.py` - Added `current_rm_timestamp()`
+- `/home/user/rock-paper-sync/src/rock_paper_sync/generator.py` - Complete implementation
 
 ### Created:
 - `/home/user/rock-paper-sync/tests/test_metadata.py` - 23 tests

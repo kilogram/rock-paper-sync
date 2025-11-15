@@ -4,7 +4,7 @@ import os
 import pytest
 from pathlib import Path
 
-from rm_obsidian_sync.config import (
+from rock_paper_sync.config import (
     AppConfig,
     ConfigError,
     LayoutConfig,

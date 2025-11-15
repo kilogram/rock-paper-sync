@@ -416,7 +416,19 @@ wheels = [
 ]
 
 [[package]]
-name = "rm-obsidian-sync"
+name = "rmscene"
+version = "0.7.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "packaging" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b1/c3/a468ee1c4c2e3ba3292a7e519d7d9af15a1bbac63295ac40ad6ff3f177f6/rmscene-0.7.0.tar.gz", hash = "sha256:1e321f197b4a79b946bba1c17532f9fe7bd3f7343c216a8db8a8197925a5b9d1", size = 22536, upload-time = "2025-03-21T07:57:54.733Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/11/e0/2adf86cefb8763d8e93a8efb89ef3e941813145f2cf0c9a93cdb6601dbef/rmscene-0.7.0-py3-none-any.whl", hash = "sha256:10a271ddda9d407ae0c33e8c91e7269e51d5e34a6861f6cf98dca608bffdbbe1", size = 25552, upload-time = "2025-03-21T07:57:53.203Z" },
+]
+
+[[package]]
+name = "rock-paper-sync"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
@@ -467,18 +479,6 @@ dev = [
     { name = "pytest", specifier = ">=9.0.1" },
     { name = "pytest-cov", specifier = ">=7.0.0" },
     { name = "pytest-mock", specifier = ">=3.15.1" },
-]
-
-[[package]]
-name = "rmscene"
-version = "0.7.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "packaging" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/b1/c3/a468ee1c4c2e3ba3292a7e519d7d9af15a1bbac63295ac40ad6ff3f177f6/rmscene-0.7.0.tar.gz", hash = "sha256:1e321f197b4a79b946bba1c17532f9fe7bd3f7343c216a8db8a8197925a5b9d1", size = 22536, upload-time = "2025-03-21T07:57:54.733Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/11/e0/2adf86cefb8763d8e93a8efb89ef3e941813145f2cf0c9a93cdb6601dbef/rmscene-0.7.0-py3-none-any.whl", hash = "sha256:10a271ddda9d407ae0c33e8c91e7269e51d5e34a6861f6cf98dca608bffdbbe1", size = 25552, upload-time = "2025-03-21T07:57:53.203Z" },
 ]
 
 [[package]]

@@ -1,6 +1,6 @@
 # Test Suite Documentation
 
-This directory contains the comprehensive test suite for the rm-obsidian-sync project.
+This directory contains the comprehensive test suite for the rock-paper-sync project.
 
 ## Test Structure
 
@@ -171,7 +171,7 @@ pytest tests/ -v
 ### Run with Coverage
 
 ```bash
-pytest --cov=rm_obsidian_sync --cov-report=html --cov-report=term tests/
+pytest --cov=rock_paper_sync --cov-report=html --cov-report=term tests/
 ```
 
 This generates:
@@ -344,7 +344,7 @@ Drops into debugger on first failure.
 ### Check Coverage for Specific File
 
 ```bash
-pytest --cov=rm_obsidian_sync.parser --cov-report=term-missing tests/test_parser.py
+pytest --cov=rock_paper_sync.parser --cov-report=term-missing tests/test_parser.py
 ```
 
 Shows which lines aren't covered.

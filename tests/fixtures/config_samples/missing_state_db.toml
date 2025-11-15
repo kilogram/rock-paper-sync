@@ -17,4 +17,4 @@ margin_right = 50
 
 [logging]
 level = "info"
-file = "~/.local/share/rm-obsidian-sync/sync.log"
+file = "~/.local/share/rock-paper-sync/sync.log"

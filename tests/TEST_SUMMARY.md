@@ -8,7 +8,7 @@
 
 ## Executive Summary
 
-Successfully implemented a comprehensive integration test suite for the rm-obsidian-sync project, achieving **90.23% test coverage** (exceeding the 80% target). The test suite includes 194 tests across unit, integration, and performance categories.
+Successfully implemented a comprehensive integration test suite for the rock-paper-sync project, achieving **90.23% test coverage** (exceeding the 80% target). The test suite includes 194 tests across unit, integration, and performance categories.
 
 ---
 

@@ -13,7 +13,7 @@ from typing import Callable
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
-logger = logging.getLogger("rm_obsidian_sync.watcher")
+logger = logging.getLogger("rock_paper_sync.watcher")
 
 
 class ChangeHandler(FileSystemEventHandler):

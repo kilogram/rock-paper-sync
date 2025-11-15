@@ -6,7 +6,7 @@ from threading import Event
 
 import pytest
 
-from rm_obsidian_sync.watcher import ChangeHandler, VaultWatcher
+from rock_paper_sync.watcher import ChangeHandler, VaultWatcher
 
 
 class TestChangeHandler:

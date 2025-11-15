@@ -5,7 +5,7 @@ import time
 import pytest
 from pathlib import Path
 
-from rm_obsidian_sync.state import StateError, StateManager, SyncRecord
+from rock_paper_sync.state import StateError, StateManager, SyncRecord
 
 
 class TestStateManagerInit:
@@ -76,7 +76,7 @@ class TestStateManagerInit:
     def test_init_database_connection_error(self, tmp_path: Path, mocker) -> None:
         """Test that initialization fails gracefully when database connection fails."""
         import sqlite3
-        from rm_obsidian_sync.state import StateError
+        from rock_paper_sync.state import StateError
 
         # Mock sqlite3.connect to raise an exception
         mocker.patch("sqlite3.connect", side_effect=sqlite3.OperationalError("Test error"))

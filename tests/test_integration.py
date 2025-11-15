@@ -10,9 +10,9 @@ from pathlib import Path
 
 import pytest
 
-from rm_obsidian_sync.config import AppConfig, LayoutConfig, SyncConfig
-from rm_obsidian_sync.parser import BlockType, FormatStyle, parse_markdown_file
-from rm_obsidian_sync.state import StateManager, SyncRecord
+from rock_paper_sync.config import AppConfig, LayoutConfig, SyncConfig
+from rock_paper_sync.parser import BlockType, FormatStyle, parse_markdown_file
+from rock_paper_sync.state import StateManager, SyncRecord
 
 
 @pytest.fixture
@@ -529,7 +529,7 @@ class TestFullPipelineStubs:
         test_file.write_text("# Test\n\nContent here.")
 
         # TODO: Once SyncEngine is implemented:
-        # from rm_obsidian_sync.converter import SyncEngine
+        # from rock_paper_sync.converter import SyncEngine
         # engine = SyncEngine(config, state)
         # results = engine.sync_all_changed()
         #
@@ -735,7 +735,7 @@ class TestDocumentUpdateFlow:
 
     def test_file_update_preserves_uuid_end_to_end(self, integration_env):
         """Test that updating a file preserves UUID through full pipeline."""
-        from rm_obsidian_sync.converter import SyncEngine
+        from rock_paper_sync.converter import SyncEngine
 
         vault = integration_env["vault"]
         output = integration_env["output"]
@@ -777,7 +777,7 @@ class TestDocumentUpdateFlow:
 
     def test_multiple_updates_same_document(self, integration_env):
         """Test multiple sequential updates to same document."""
-        from rm_obsidian_sync.converter import SyncEngine
+        from rock_paper_sync.converter import SyncEngine
         import json
 
         vault = integration_env["vault"]
@@ -816,7 +816,7 @@ class TestDocumentUpdateFlow:
 
     def test_update_with_folder_move(self, integration_env):
         """Test updating file that changes folders."""
-        from rm_obsidian_sync.converter import SyncEngine
+        from rock_paper_sync.converter import SyncEngine
 
         vault = integration_env["vault"]
         output = integration_env["output"]
@@ -851,7 +851,7 @@ class TestDocumentUpdateFlow:
 
     def test_concurrent_updates_different_files(self, integration_env):
         """Test updating multiple different files."""
-        from rm_obsidian_sync.converter import SyncEngine
+        from rock_paper_sync.converter import SyncEngine
 
         vault = integration_env["vault"]
         state = integration_env["state"]
@@ -886,7 +886,7 @@ class TestDocumentUpdateFlow:
 
     def test_update_state_tracking(self, integration_env):
         """Test that state database correctly tracks updates."""
-        from rm_obsidian_sync.converter import SyncEngine
+        from rock_paper_sync.converter import SyncEngine
 
         vault = integration_env["vault"]
         state = integration_env["state"]

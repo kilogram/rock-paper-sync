@@ -22,7 +22,7 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "rm-obsidian-sync"
+name = "rock-paper-sync"
 version = "0.1.0"
 description = "Sync Obsidian markdown to reMarkable Paper Pro"
 readme = "README.md"
@@ -49,7 +49,7 @@ dev = [
 ]
 
 [project.scripts]
-rm-obsidian-sync = "rm_obsidian_sync.cli:main"
+rock-paper-sync = "rock_paper_sync.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -69,9 +69,9 @@ select = ["E", "F", "I", "N", "W"]
 ### 1.2 Create Directory Structure
 
 ```bash
-mkdir -p src/rm_obsidian_sync tests/fixtures/sample_markdown
-touch src/rm_obsidian_sync/__init__.py
-touch src/rm_obsidian_sync/py.typed  # PEP 561 marker
+mkdir -p src/rock_paper_sync tests/fixtures/sample_markdown
+touch src/rock_paper_sync/__init__.py
+touch src/rock_paper_sync/py.typed  # PEP 561 marker
 ```
 
 ### 1.3 Create Basic README.md
@@ -91,7 +91,7 @@ echo "*.db" >> .gitignore
 ### Acceptance Criteria
 - [ ] `pip install -e .` succeeds
 - [ ] `pip install -e ".[dev]"` installs dev dependencies
-- [ ] `rm-obsidian-sync --help` shows usage (after CLI implemented)
+- [ ] `rock-paper-sync --help` shows usage (after CLI implemented)
 - [ ] All type hints pass mypy strict mode
 - [ ] Code formatted with black
 
@@ -108,7 +108,7 @@ echo "*.db" >> .gitignore
 Create configuration loading and validation:
 
 ```python
-# src/rm_obsidian_sync/config.py
+# src/rock_paper_sync/config.py
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -171,7 +171,7 @@ obsidian_vault = "~/obsidian-vault"
 remarkable_output = "~/remarkable-sync"
 
 # Path to sync state database
-state_database = "~/.local/share/rm-obsidian-sync/state.db"
+state_database = "~/.local/share/rock-paper-sync/state.db"
 
 [sync]
 # Which files to include (glob patterns)
@@ -203,7 +203,7 @@ margin_right = 50
 level = "info"
 
 # Log file path
-file = "~/.local/share/rm-obsidian-sync/sync.log"
+file = "~/.local/share/rock-paper-sync/sync.log"
 ```
 
 ### 2.3 Write Config Tests
@@ -235,7 +235,7 @@ Test cases:
 ### 3.1 Setup Hierarchical Logging
 
 ```python
-# src/rm_obsidian_sync/logging_setup.py
+# src/rock_paper_sync/logging_setup.py
 import logging
 from pathlib import Path
 
@@ -246,7 +246,7 @@ def setup_logging(log_level: str, log_file: Path) -> None:
     log_file.parent.mkdir(parents=True, exist_ok=True)
     
     # Configure root logger
-    root_logger = logging.getLogger('rm_obsidian_sync')
+    root_logger = logging.getLogger('rock_paper_sync')
     root_logger.setLevel(logging.DEBUG)  # Capture all, filter at handler level
     
     # Console handler (user-facing)
@@ -275,7 +275,7 @@ Each module gets its own logger:
 ```python
 # In each module
 import logging
-logger = logging.getLogger('rm_obsidian_sync.parser')  # or .generator, .state, etc.
+logger = logging.getLogger('rock_paper_sync.parser')  # or .generator, .state, etc.
 ```
 
 ### Acceptance Criteria
@@ -299,7 +299,7 @@ logger = logging.getLogger('rm_obsidian_sync.parser')  # or .generator, .state, 
 **Sub-agent recommended for schema design and migration handling.**
 
 ```python
-# src/rm_obsidian_sync/state.py
+# src/rock_paper_sync/state.py
 import sqlite3
 import hashlib
 from pathlib import Path
@@ -307,7 +307,7 @@ from dataclasses import dataclass
 from typing import Optional
 import logging
 
-logger = logging.getLogger('rm_obsidian_sync.state')
+logger = logging.getLogger('rock_paper_sync.state')
 
 @dataclass
 class SyncRecord:
@@ -485,7 +485,7 @@ Test cases:
 **Consider sub-agent for complex formatting edge cases.**
 
 ```python
-# src/rm_obsidian_sync/parser.py
+# src/rock_paper_sync/parser.py
 import mistune
 import yaml
 from pathlib import Path
@@ -496,7 +496,7 @@ import logging
 import hashlib
 from datetime import datetime
 
-logger = logging.getLogger('rm_obsidian_sync.parser')
+logger = logging.getLogger('rock_paper_sync.parser')
 
 class BlockType(Enum):
     PARAGRAPH = "paragraph"
@@ -880,7 +880,7 @@ Key modules to examine:
 Start with single page, single text item:
 
 ```python
-# src/rm_obsidian_sync/generator.py
+# src/rock_paper_sync/generator.py
 from rmscene import scene_items, write_blocks
 import uuid
 import io
@@ -911,7 +911,7 @@ def validate_rm_file(rm_bytes: bytes) -> bool:
 ### 6.3 Implement Full Generator
 
 ```python
-# src/rm_obsidian_sync/generator.py
+# src/rock_paper_sync/generator.py
 from dataclasses import dataclass
 from pathlib import Path
 import uuid as uuid_module
@@ -922,7 +922,7 @@ import logging
 from .parser import MarkdownDocument, ContentBlock, TextFormat, BlockType, FormatStyle
 from .config import LayoutConfig
 
-logger = logging.getLogger('rm_obsidian_sync.generator')
+logger = logging.getLogger('rock_paper_sync.generator')
 
 @dataclass
 class TextItem:
@@ -1129,7 +1129,7 @@ class RemarkableGenerator:
 ### 6.4 Implement Metadata Generator
 
 ```python
-# src/rm_obsidian_sync/metadata.py
+# src/rock_paper_sync/metadata.py
 import time
 import json
 
@@ -1245,7 +1245,7 @@ Test cases:
 ### 7.1 Implement converter.py
 
 ```python
-# src/rm_obsidian_sync/converter.py
+# src/rock_paper_sync/converter.py
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional
@@ -1259,7 +1259,7 @@ from .parser import parse_markdown_file
 from .generator import RemarkableGenerator
 from .metadata import generate_folder_metadata
 
-logger = logging.getLogger('rm_obsidian_sync.converter')
+logger = logging.getLogger('rock_paper_sync.converter')
 
 @dataclass
 class SyncResult:
@@ -1425,7 +1425,7 @@ Test cases:
 ### 8.1 Implement watcher.py
 
 ```python
-# src/rm_obsidian_sync/watcher.py
+# src/rock_paper_sync/watcher.py
 from pathlib import Path
 from typing import Callable
 import threading
@@ -1435,7 +1435,7 @@ import logging
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileSystemEvent
 
-logger = logging.getLogger('rm_obsidian_sync.watcher')
+logger = logging.getLogger('rock_paper_sync.watcher')
 
 class ChangeHandler(FileSystemEventHandler):
     def __init__(self, callback: Callable[[Path], None], 
@@ -1558,7 +1558,7 @@ Test cases:
 ### 9.1 Implement cli.py
 
 ```python
-# src/rm_obsidian_sync/cli.py
+# src/rock_paper_sync/cli.py
 import click
 from pathlib import Path
 import signal
@@ -1573,7 +1573,7 @@ from .watcher import VaultWatcher
 
 @click.group()
 @click.option('--config', '-c', 
-              default='~/.config/rm-obsidian-sync/config.toml',
+              default='~/.config/rock-paper-sync/config.toml',
               help='Path to config file')
 @click.option('--verbose', '-v', is_flag=True, help='Enable debug logging')
 @click.pass_context
@@ -1584,7 +1584,7 @@ def main(ctx: click.Context, config: str, verbose: bool) -> None:
     config_path = Path(config).expanduser()
     if not config_path.exists():
         click.echo(f"Error: Config file not found: {config_path}", err=True)
-        click.echo(f"Create one using: rm-obsidian-sync init", err=True)
+        click.echo(f"Create one using: rock-paper-sync init", err=True)
         sys.exit(1)
     
     try:
@@ -1599,7 +1599,7 @@ def main(ctx: click.Context, config: str, verbose: bool) -> None:
     setup_logging(log_level, app_config.log_file)
     
     ctx.obj['config'] = app_config
-    ctx.obj['logger'] = logging.getLogger('rm_obsidian_sync')
+    ctx.obj['logger'] = logging.getLogger('rock_paper_sync')
 
 @main.command()
 @click.option('--dry-run', is_flag=True, help='Preview without writing')
@@ -1744,7 +1744,7 @@ def init(output: str) -> None:
 [paths]
 obsidian_vault = "~/obsidian-vault"
 remarkable_output = "~/remarkable-sync"
-state_database = "~/.local/share/rm-obsidian-sync/state.db"
+state_database = "~/.local/share/rock-paper-sync/state.db"
 
 [sync]
 include_patterns = ["**/*.md"]
@@ -1760,7 +1760,7 @@ margin_right = 50
 
 [logging]
 level = "info"
-file = "~/.local/share/rm-obsidian-sync/sync.log"
+file = "~/.local/share/rock-paper-sync/sync.log"
 '''
     
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1808,9 +1808,9 @@ from pathlib import Path
 import tempfile
 import time
 
-from rm_obsidian_sync.config import AppConfig, SyncConfig, LayoutConfig
-from rm_obsidian_sync.state import StateManager
-from rm_obsidian_sync.converter import SyncEngine
+from rock_paper_sync.config import AppConfig, SyncConfig, LayoutConfig
+from rock_paper_sync.state import StateManager
+from rock_paper_sync.converter import SyncEngine
 
 @pytest.fixture
 def integration_setup(tmp_path):
@@ -2004,7 +2004,7 @@ Include:
 Ensure all public functions have complete type hints:
 
 ```bash
-mypy src/rm_obsidian_sync --strict
+mypy src/rock_paper_sync --strict
 ```
 
 ### 11.3 Format Code
@@ -2017,7 +2017,7 @@ ruff check src/ tests/ --fix
 ### 11.4 Generate Test Coverage Report
 
 ```bash
-pytest --cov=rm_obsidian_sync --cov-report=html tests/
+pytest --cov=rock_paper_sync --cov-report=html tests/
 ```
 
 Target: >80% coverage

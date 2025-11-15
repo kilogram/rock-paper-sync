@@ -17,7 +17,7 @@ Current test coverage: **93.46%**
 uv run pytest tests/test_parser.py -v
 
 # Run with coverage report
-uv run pytest tests/test_parser.py --cov=rm_obsidian_sync.parser --cov-report=term-missing
+uv run pytest tests/test_parser.py --cov=rock_paper_sync.parser --cov-report=term-missing
 
 # Run specific test class
 uv run pytest tests/test_parser.py::TestInlineFormatting -v
@@ -172,7 +172,7 @@ See full output by running:
 ```bash
 uv run python -c "
 from pathlib import Path
-from rm_obsidian_sync.parser import parse_markdown_file
+from rock_paper_sync.parser import parse_markdown_file
 
 fixtures_dir = Path('tests/fixtures/sample_markdown')
 doc = parse_markdown_file(fixtures_dir / 'complex.md')
@@ -236,7 +236,7 @@ Both formats cover the same text range.
 The parser includes a `visualize_formatting()` function for debugging:
 
 ```python
-from rm_obsidian_sync.parser import visualize_formatting, TextFormat, FormatStyle
+from rock_paper_sync.parser import visualize_formatting, TextFormat, FormatStyle
 
 text = "This is bold and italic text"
 formatting = [
