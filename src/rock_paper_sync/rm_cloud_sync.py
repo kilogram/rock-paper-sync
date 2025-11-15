@@ -12,10 +12,38 @@ logger = logging.getLogger(__name__)
 
 
 class RmCloudSync:
-    """
-    Sync documents to rm_cloud using Sync v3 protocol.
+    """Sync documents to rm_cloud using Sync v3 protocol.
 
-    Pure API approach - no filesystem writes required!
+    This class implements the reMarkable Sync v3 protocol for uploading documents
+    directly to rm_cloud without filesystem manipulation. Documents sync to the
+    device via WebSocket notifications.
+
+    Sync v3 Protocol Overview
+    -------------------------
+
+    **hashOfHashesV3 Algorithm**:
+    - Concatenate binary SHA256 hashes of all document files (sorted by filename)
+    - Compute SHA256 of the concatenated bytes
+    - Used for content addressing and deduplication
+
+    **CRDT formatVersion 2** (.content file):
+    - Static timestamp counters: "1:1", "1:2", etc. (NOT Unix timestamps)
+    - "modifed" field (typo intentional): Actual modification time in milliseconds
+    - The "modifed" field signals xochitl that content has changed
+    - cPages structure with lexicographically sortable idx values
+
+    **Required Files**:
+    - {uuid}.metadata: Document metadata (name, parent, type)
+    - {uuid}.content: CRDT page structure (formatVersion 2)
+    - {uuid}.local: Empty JSON "{}" (required by xochitl for recognition)
+    - {uuid}/{page-uuid}.rm: Binary v6 format page content
+
+    **Double Upload Pattern**:
+    - Document index stored under content hash (blob)
+    - Also stored under hashOfHashesV3 (document index)
+    - Ensures CRDT consistency and content deduplication
+
+    For complete protocol details, see docs/SYNC_PROTOCOL.md.
     """
 
     def __init__(

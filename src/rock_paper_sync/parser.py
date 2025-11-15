@@ -1,8 +1,38 @@
 """Markdown parser for reMarkable-Obsidian sync.
 
 This module parses markdown files into structured content blocks that can be
-converted to reMarkable format. It uses mistune 3.0+ for AST-based parsing and
-preserves inline formatting with exact character positions.
+converted to reMarkable format.
+
+Parsing Pipeline
+----------------
+
+1. **File Reading**: Load markdown file and extract YAML frontmatter
+2. **Title Extraction**: Use frontmatter 'title' field or fallback to filename
+3. **Content Hashing**: SHA-256 hash of raw content for change detection
+4. **AST Parsing**: mistune 3.0+ converts markdown to Abstract Syntax Tree
+5. **Block Extraction**: Walk AST to extract content blocks with formatting
+6. **Inline Formatting**: Preserve bold, italic, code, links with character offsets
+
+Supported Elements
+------------------
+
+**Block-level**:
+- Paragraphs (PARAGRAPH)
+- Headers level 1-6 (HEADER with level)
+- List items with nesting (LIST_ITEM with level)
+- Code blocks (CODE_BLOCK)
+- Blockquotes (BLOCKQUOTE)
+- Horizontal rules (HORIZONTAL_RULE)
+
+**Inline formatting**:
+- Bold (**text** or __text__)
+- Italic (*text* or _text_)
+- Code (`text`)
+- Links ([text](url))
+- Strikethrough (~~text~~)
+
+Formatting is stored as TextFormat objects with start/end character offsets,
+allowing precise rendering while preserving plain text for search/indexing.
 """
 
 import hashlib

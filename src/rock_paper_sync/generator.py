@@ -79,12 +79,40 @@ class RemarkableGenerator:
     properly positioned text items. It uses the rmscene library to create
     binary .rm files compatible with reMarkable firmware v3.0+.
 
+    Pagination Algorithm
+    --------------------
+
+    The pagination algorithm breaks markdown content into pages by estimating
+    line counts and applying smart breaking rules:
+
+    1. **Line Estimation**: Calculate lines per block based on:
+       - Text length and available width (considering margins)
+       - Block type (headers get extra spacing, code blocks count newlines)
+       - List item indentation and bullets
+
+    2. **Page Breaking Rules**:
+       - Never exceed lines_per_page (default: 45 lines)
+       - Never split blocks mid-way (atomic block placement)
+       - Headers near page bottom (< 10 lines remaining) start new page
+       - Prevents orphan headers at bottom of pages
+
+    3. **Text Positioning**:
+       - Y position accumulates from margin_top
+       - X position respects margin_left plus list indentation
+       - Text width accounts for right margin
+       - List items get 20px indent per nesting level
+
+    4. **rmscene Integration**:
+       - Uses simple_text_document() for text generation
+       - Combines all text items with newlines (Phase 1 simplification)
+       - Future: Multiple Text scene items for precise positioning
+
     Attributes:
         layout: Page layout configuration
-        page_width: Page width in pixels (reMarkable standard)
-        page_height: Page height in pixels (reMarkable standard)
-        line_height: Approximate pixels per line of text
-        char_width: Approximate pixels per character
+        page_width: Page width in pixels (1404 for reMarkable Paper Pro)
+        page_height: Page height in pixels (1872 for reMarkable Paper Pro)
+        line_height: Approximate pixels per line (35px)
+        char_width: Approximate pixels per character (10px)
     """
 
     # reMarkable Paper Pro dimensions

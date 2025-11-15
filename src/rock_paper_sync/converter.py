@@ -1,12 +1,48 @@
 """Sync engine for reMarkable-Obsidian synchronization.
 
-Orchestrates the full conversion pipeline:
-1. Parse markdown files
-2. Check if sync is needed (hash comparison)
-3. Ensure folder hierarchy exists
-4. Generate reMarkable documents
-5. Write files to output directory
-6. Update state database
+Orchestrates the complete conversion and sync pipeline from Obsidian vaults
+to reMarkable cloud via Sync v3 protocol.
+
+Sync Pipeline
+-------------
+
+For each vault configured in the application:
+
+1. **File Discovery**: Scan vault for markdown files matching include/exclude patterns
+2. **Change Detection**: Compare file content hash against state database
+3. **Folder Hierarchy**: Ensure parent folders exist on reMarkable
+   - Create vault root folder if remarkable_folder is configured
+   - Create nested subfolders matching Obsidian directory structure
+   - Reuse existing folder UUIDs from state database
+4. **Document Generation**: Convert markdown to reMarkable format
+   - Parse markdown with mistune (see parser.py)
+   - Paginate content (see generator.py)
+   - Generate binary .rm files with rmscene
+5. **Cloud Upload**: Upload via Sync v3 protocol (see rm_cloud_sync.py)
+   - Upload .metadata, .content, .local, and .rm files
+   - Reuse existing page UUIDs to avoid CRDT conflicts on updates
+   - Trigger WebSocket sync notification to device
+6. **State Update**: Record sync in SQLite database
+   - Store remarkable_uuid, content_hash, sync timestamp
+   - Log to sync_history for status reporting
+
+Incremental Sync
+----------------
+
+Only files with changed content are re-synced:
+- SHA-256 hash comparison against last sync
+- Reuse document UUID for updates (overwrites existing document)
+- Reuse page UUIDs to maintain CRDT consistency
+- Skip unchanged files entirely (no cloud API calls)
+
+Multi-Vault Support
+-------------------
+
+Each vault is synced independently:
+- State database tracks (vault_name, obsidian_path) pairs
+- Optional vault-specific folder on reMarkable (remarkable_folder config)
+- Per-vault statistics and history tracking
+- CLI --vault flag to sync specific vault
 """
 
 import json
@@ -51,11 +87,40 @@ class SyncResult:
 class SyncEngine:
     """Orchestrates markdown to reMarkable conversion pipeline.
 
-    Handles:
-    - Incremental sync (skip unchanged files)
-    - Folder hierarchy creation
-    - Error handling and recovery
-    - State database updates
+    This is the main coordinator for syncing Obsidian vaults to reMarkable.
+    It combines all pipeline components (parser, generator, cloud sync, state)
+    into a cohesive sync engine with incremental updates and error recovery.
+
+    Responsibilities
+    ----------------
+
+    **Incremental Sync**:
+    - Hash-based change detection (skip unchanged files)
+    - Reuse document/page UUIDs for updates (preserves device annotations)
+    - Only sync files matching include/exclude patterns
+
+    **Folder Management**:
+    - Create vault root folder if remarkable_folder configured
+    - Mirror Obsidian directory structure on reMarkable
+    - Maintain folder UUID mappings in state database
+
+    **Error Handling**:
+    - Graceful failure (continue syncing other files)
+    - Detailed error logging to sync_history
+    - Return SyncResult for each file (success/error details)
+
+    **State Tracking**:
+    - Update state database after successful sync
+    - Record sync history for status/statistics
+    - Track per-vault file states with composite keys
+
+    Key Methods
+    -----------
+
+    - `sync_file()`: Sync single markdown file to reMarkable
+    - `sync_vault()`: Sync all changed files in a vault
+    - `sync_all_changed()`: Sync all changed files across all vaults
+    - `ensure_folder_hierarchy()`: Create folder structure for a file
     """
 
     def __init__(

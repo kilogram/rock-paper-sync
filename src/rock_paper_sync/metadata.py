@@ -1,10 +1,33 @@
 """Metadata generation for reMarkable documents.
 
 This module generates the JSON metadata files required by reMarkable v6 format.
-Each document needs:
-- {uuid}.metadata - Document-level metadata (name, parent, timestamps)
-- {uuid}.content - Content structure (pages, tool settings)
-- {page-uuid}-metadata.json - Per-page layer information
+
+File Structure
+--------------
+Each document requires these metadata files:
+
+1. **{uuid}.metadata** - Document-level metadata
+   - visibleName: Display name in reMarkable UI
+   - type: "DocumentType" for documents, "CollectionType" for folders
+   - parent: UUID of parent folder (empty string for root)
+   - lastModified: 13-digit Unix timestamp (milliseconds)
+   - version: Always 1
+   - deleted/pinned/synced/modified flags
+
+2. **{uuid}.content** - Content structure and page list
+   - fileType: "notebook" for documents
+   - pageCount: Number of pages
+   - pages: Array of page UUIDs
+   - orientation: "portrait" or "landscape"
+   - margins, textScale, fontName, lineHeight: Display settings
+   - extraMetadata: Tool defaults (pen type, colors, thickness)
+
+3. **{page-uuid}-metadata.json** - Per-page layer information
+   - layers: Array of layer objects (name, visible flag)
+   - reMarkable supports multiple layers for annotations
+
+Note: For cloud sync via Sync v3 protocol, the .content file uses CRDT
+formatVersion 2 with static timestamp counters. See rm_cloud_sync.py for details.
 """
 
 import time
