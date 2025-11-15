@@ -113,18 +113,24 @@ class RemarkableGenerator:
         logger.info("RemarkableGenerator initialized with rmscene integration")
 
     def generate_document(
-        self, md_doc: MarkdownDocument, parent_uuid: str = ""
+        self, md_doc: MarkdownDocument, parent_uuid: str = "", doc_uuid: str | None = None
     ) -> RemarkableDocument:
         """Convert markdown document to reMarkable format.
 
         Args:
             md_doc: Parsed markdown document
             parent_uuid: UUID of parent folder (empty for root)
+            doc_uuid: Existing document UUID to reuse (for updates), or None for new documents
 
         Returns:
             RemarkableDocument ready to be written to disk
+
+        Note:
+            When doc_uuid is provided (update case), the existing document will be
+            overwritten, including any annotations the user made on the device.
         """
-        doc_uuid = str(uuid_module.uuid4())
+        # Reuse existing UUID for updates, or generate new one for new documents
+        doc_uuid = doc_uuid or str(uuid_module.uuid4())
         timestamp = int(time.time() * 1000)
 
         # Paginate content blocks

@@ -124,9 +124,13 @@ class SyncEngine:
             # Ensure parent folder hierarchy exists
             parent_uuid = self.ensure_folder_hierarchy(markdown_path)
 
-            # Generate reMarkable document
-            logger.info(f"Generating reMarkable document for {markdown_path}")
-            rm_doc = self.generator.generate_document(md_doc, parent_uuid)
+            # Generate reMarkable document (reuse UUID if updating existing file)
+            existing_uuid = current_state.remarkable_uuid if current_state else None
+            if existing_uuid:
+                logger.info(f"Updating existing document {existing_uuid} for {markdown_path}")
+            else:
+                logger.info(f"Generating new reMarkable document for {markdown_path}")
+            rm_doc = self.generator.generate_document(md_doc, parent_uuid, existing_uuid)
 
             # Write files to output directory
             self.generator.write_document_files(

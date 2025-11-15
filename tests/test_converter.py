@@ -115,11 +115,11 @@ class TestSyncEngine:
         # Modify file
         test_file.write_text("# Test\n\nModified content")
 
-        # Second sync should detect change
+        # Second sync should detect change and UPDATE the same document
         result2 = engine.sync_file(test_file)
         assert result2.success
-        # UUID should be different (new document generated)
-        assert result2.remarkable_uuid != result1.remarkable_uuid
+        # UUID should be the SAME (document updated, not replaced)
+        assert result2.remarkable_uuid == result1.remarkable_uuid
 
     def test_sync_all_changed(
         self,
