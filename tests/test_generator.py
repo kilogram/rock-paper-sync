@@ -619,9 +619,10 @@ class TestWriteDocumentFiles:
         # Should have:
         # - 1 .metadata file
         # - 1 .content file
+        # - 1 .local file
         # - N .rm files (one per page)
         # - N -metadata.json files (one per page)
-        expected_count = 2 + (2 * len(doc.pages))
+        expected_count = 3 + (2 * len(doc.pages))
         assert len(files) == expected_count
 
 

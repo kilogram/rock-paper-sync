@@ -346,6 +346,7 @@ class RemarkableGenerator:
         - {uuid}/ directory
         - {uuid}.metadata - Document metadata JSON
         - {uuid}.content - Page list and settings JSON
+        - {uuid}.local - Empty JSON object (required for xochitl recognition)
         - {page-uuid}.rm - Binary page content (v6 format)
         - {page-uuid}-metadata.json - Page layer settings
 
@@ -376,6 +377,9 @@ class RemarkableGenerator:
         (doc_dir / f"{doc.uuid}.content").write_text(
             json.dumps(content, indent=2)
         )
+
+        # Write .local file (required by xochitl for document recognition)
+        (doc_dir / f"{doc.uuid}.local").write_text("{}")
 
         # Write page files
         for page in doc.pages:

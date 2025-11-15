@@ -251,4 +251,8 @@ class SyncEngine:
         metadata_path = folder_dir / f"{uuid}.metadata"
         metadata_path.write_text(json.dumps(metadata, indent=2))
 
+        # Write .local file (required by xochitl for folder recognition)
+        local_path = folder_dir / f"{uuid}.local"
+        local_path.write_text("{}")
+
         logger.debug(f"Created folder metadata: {metadata_path}")
