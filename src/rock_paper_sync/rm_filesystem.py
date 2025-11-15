@@ -87,6 +87,11 @@ class RemarkableFilesystem:
         if is_update:
             logger.debug(f"Updating existing document {doc_uuid}")
             self._cleanup_old_pages(doc_uuid)
+            # Delete .content file to prevent xochitl CRDT state from merging old pages
+            content_file = self.output_dir / f"{doc_uuid}.content"
+            if content_file.exists():
+                content_file.unlink()
+                logger.debug(f"Deleted old .content file to reset xochitl CRDT state")
         else:
             logger.debug(f"Creating new document {doc_uuid}")
 
