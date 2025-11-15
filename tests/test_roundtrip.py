@@ -488,6 +488,203 @@ title: My Awesome Document
         assert rm_doc.visible_name == "My Awesome Document"
 
 
+class TestDocumentUpdates:
+    """Test document updates preserve identity and update content correctly."""
+
+    def test_update_preserves_uuid(self, tmp_path: Path) -> None:
+        """Test that updating a document preserves its UUID."""
+        from datetime import datetime
+
+        layout = LayoutConfig(
+            lines_per_page=45,
+            margin_top=50,
+            margin_bottom=50,
+            margin_left=50,
+            margin_right=50
+        )
+        generator = RemarkableGenerator(layout)
+
+        # Create initial document
+        md_doc_v1 = MarkdownDocument(
+            path=tmp_path / "test.md",
+            title="Test Doc",
+            content=[
+                ContentBlock(BlockType.HEADER, 1, "Version 1", []),
+                ContentBlock(BlockType.PARAGRAPH, 0, "Original content", []),
+            ],
+            frontmatter={},
+            last_modified=datetime.now(),
+            content_hash="hash1"
+        )
+
+        # Generate with specific UUID
+        rm_doc_v1 = generator.generate_document(md_doc_v1, "", "test-uuid-123")
+        assert rm_doc_v1.uuid == "test-uuid-123"
+
+        # Create updated document
+        md_doc_v2 = MarkdownDocument(
+            path=tmp_path / "test.md",
+            title="Test Doc",
+            content=[
+                ContentBlock(BlockType.HEADER, 1, "Version 2", []),
+                ContentBlock(BlockType.PARAGRAPH, 0, "Updated content", []),
+            ],
+            frontmatter={},
+            last_modified=datetime.now(),
+            content_hash="hash2"
+        )
+
+        # Generate update with SAME UUID
+        rm_doc_v2 = generator.generate_document(md_doc_v2, "", "test-uuid-123")
+        assert rm_doc_v2.uuid == "test-uuid-123"
+
+        # UUIDs match but content should be different
+        assert rm_doc_v1.uuid == rm_doc_v2.uuid
+        assert rm_doc_v1.pages[0].text_items[0].text != rm_doc_v2.pages[0].text_items[0].text
+
+    def test_update_with_page_count_change(self, tmp_path: Path) -> None:
+        """Test updating a document that changes page count."""
+        from datetime import datetime
+
+        layout = LayoutConfig(lines_per_page=5, margin_top=50, margin_bottom=50, margin_left=50, margin_right=50)
+        generator = RemarkableGenerator(layout)
+
+        # Short document (1 page)
+        short_content = [ContentBlock(BlockType.PARAGRAPH, 0, "Short", [])]
+        md_short = MarkdownDocument(
+            path=tmp_path / "test.md",
+            title="test",
+            content=short_content,
+            frontmatter={},
+            last_modified=datetime.now(),
+            content_hash="hash1"
+        )
+
+        rm_short = generator.generate_document(md_short, "", "fixed-uuid")
+        assert len(rm_short.pages) == 1
+        assert rm_short.uuid == "fixed-uuid"
+
+        # Long document (multiple pages)
+        long_content = [
+            ContentBlock(BlockType.PARAGRAPH, 0, f"Paragraph {i}", [])
+            for i in range(20)
+        ]
+        md_long = MarkdownDocument(
+            path=tmp_path / "test.md",
+            title="test",
+            content=long_content,
+            frontmatter={},
+            last_modified=datetime.now(),
+            content_hash="hash2"
+        )
+
+        rm_long = generator.generate_document(md_long, "", "fixed-uuid")
+        assert len(rm_long.pages) > 1
+        assert rm_long.uuid == "fixed-uuid"  # UUID preserved
+
+    def test_update_roundtrip_content_changes(self, tmp_path: Path) -> None:
+        """Test round-trip with content updates."""
+        from datetime import datetime
+
+        layout = LayoutConfig(lines_per_page=45, margin_top=50, margin_bottom=50, margin_left=50, margin_right=50)
+        generator = RemarkableGenerator(layout)
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        # Version 1
+        md_v1 = MarkdownDocument(
+            path=tmp_path / "test.md",
+            title="test",
+            content=[
+                ContentBlock(BlockType.HEADER, 1, "Original Header", []),
+                ContentBlock(BlockType.PARAGRAPH, 0, "Original content here.", []),
+            ],
+            frontmatter={},
+            last_modified=datetime.now(),
+            content_hash="v1"
+        )
+
+        rm_v1 = generator.generate_document(md_v1, "", "stable-uuid")
+        generator.write_document_files(rm_v1, output_dir)
+
+        # Read back V1
+        rm_file_v1 = output_dir / "stable-uuid" / f"{rm_v1.pages[0].uuid}.rm"
+        with rm_file_v1.open('rb') as f:
+            blocks_v1 = list(rmscene.read_blocks(f))
+        text_v1 = extract_text_from_blocks(blocks_v1)
+        assert "Original Header" in text_v1
+        assert "Original content" in text_v1
+
+        # Version 2 (update)
+        md_v2 = MarkdownDocument(
+            path=tmp_path / "test.md",
+            title="test",
+            content=[
+                ContentBlock(BlockType.HEADER, 1, "Updated Header", []),
+                ContentBlock(BlockType.PARAGRAPH, 0, "Updated content here.", []),
+            ],
+            frontmatter={},
+            last_modified=datetime.now(),
+            content_hash="v2"
+        )
+
+        rm_v2 = generator.generate_document(md_v2, "", "stable-uuid")
+        generator.write_document_files(rm_v2, output_dir)
+
+        # Read back V2
+        rm_file_v2 = output_dir / "stable-uuid" / f"{rm_v2.pages[0].uuid}.rm"
+        with rm_file_v2.open('rb') as f:
+            blocks_v2 = list(rmscene.read_blocks(f))
+        text_v2 = extract_text_from_blocks(blocks_v2)
+        assert "Updated Header" in text_v2
+        assert "Updated content" in text_v2
+        assert "Original" not in text_v2  # Old content gone
+
+    def test_metadata_timestamp_updates(self, tmp_path: Path) -> None:
+        """Test that metadata timestamp is updated on content changes."""
+        import time
+        import json
+        from datetime import datetime
+
+        layout = LayoutConfig(lines_per_page=45, margin_top=50, margin_bottom=50, margin_left=50, margin_right=50)
+        generator = RemarkableGenerator(layout)
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        md_doc = MarkdownDocument(
+            path=tmp_path / "test.md",
+            title="test",
+            content=[ContentBlock(BlockType.PARAGRAPH, 0, "Content", [])],
+            frontmatter={},
+            last_modified=datetime.now(),
+            content_hash="v1"
+        )
+
+        # First generation
+        rm_v1 = generator.generate_document(md_doc, "", "uuid-123")
+        generator.write_document_files(rm_v1, output_dir)
+
+        metadata_file = output_dir / "uuid-123.metadata"
+        with metadata_file.open() as f:
+            metadata_v1 = json.load(f)
+        timestamp_v1 = int(metadata_v1["lastModified"])
+
+        # Wait a bit
+        time.sleep(0.1)
+
+        # Update
+        md_doc.content_hash = "v2"
+        rm_v2 = generator.generate_document(md_doc, "", "uuid-123")
+        generator.write_document_files(rm_v2, output_dir)
+
+        with metadata_file.open() as f:
+            metadata_v2 = json.load(f)
+        timestamp_v2 = int(metadata_v2["lastModified"])
+
+        # Timestamp should be updated
+        assert timestamp_v2 > timestamp_v1
+
+
 # Helper functions
 
 def extract_text_from_blocks(blocks: list) -> str:

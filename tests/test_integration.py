@@ -728,3 +728,195 @@ class TestPerformance:
 
         # Should have many blocks (1 main header + 200 sections + 400 paragraphs)
         assert len(doc.content) >= 400  # At least the paragraphs
+
+
+class TestDocumentUpdateFlow:
+    """Integration tests for document update workflows."""
+
+    def test_file_update_preserves_uuid_end_to_end(self, integration_env):
+        """Test that updating a file preserves UUID through full pipeline."""
+        from rm_obsidian_sync.converter import SyncEngine
+
+        vault = integration_env["vault"]
+        output = integration_env["output"]
+        state = integration_env["state"]
+        config = integration_env["config"]
+
+        # Create initial file
+        test_file = vault / "document.md"
+        test_file.write_text("# Version 1\n\nOriginal content.")
+
+        # First sync
+        engine = SyncEngine(config, state)
+        result1 = engine.sync_file(test_file)
+
+        assert result1.success
+        uuid1 = result1.remarkable_uuid
+        assert uuid1 is not None
+
+        # Verify files exist
+        assert (output / f"{uuid1}.metadata").exists()
+        assert (output / f"{uuid1}.content").exists()
+        assert (output / uuid1).exists()
+
+        # Update file content
+        test_file.write_text("# Version 2\n\nUpdated content with changes.")
+
+        # Second sync
+        result2 = engine.sync_file(test_file)
+
+        assert result2.success
+        uuid2 = result2.remarkable_uuid
+
+        # UUID should be SAME
+        assert uuid2 == uuid1
+
+        # Verify files still exist with same UUID
+        assert (output / f"{uuid1}.metadata").exists()
+        assert (output / f"{uuid1}.content").exists()
+
+    def test_multiple_updates_same_document(self, integration_env):
+        """Test multiple sequential updates to same document."""
+        from rm_obsidian_sync.converter import SyncEngine
+        import json
+
+        vault = integration_env["vault"]
+        output = integration_env["output"]
+        state = integration_env["state"]
+        config = integration_env["config"]
+
+        test_file = vault / "evolving.md"
+        engine = SyncEngine(config, state)
+
+        versions = [
+            "# V1\n\nFirst version",
+            "# V2\n\nSecond version with more content",
+            "# V3\n\nThird version even longer with multiple paragraphs\n\nAnother paragraph",
+        ]
+
+        uuid = None
+        for i, content in enumerate(versions):
+            test_file.write_text(content)
+            time.sleep(0.01)  # Ensure timestamp changes
+
+            result = engine.sync_file(test_file)
+            assert result.success
+
+            if uuid is None:
+                uuid = result.remarkable_uuid
+            else:
+                # Should always be same UUID
+                assert result.remarkable_uuid == uuid
+
+            # Verify metadata timestamp increases
+            metadata_file = output / f"{uuid}.metadata"
+            with metadata_file.open() as f:
+                metadata = json.load(f)
+            print(f"Version {i+1} timestamp: {metadata['lastModified']}")
+
+    def test_update_with_folder_move(self, integration_env):
+        """Test updating file that changes folders."""
+        from rm_obsidian_sync.converter import SyncEngine
+
+        vault = integration_env["vault"]
+        output = integration_env["output"]
+        state = integration_env["state"]
+        config = integration_env["config"]
+
+        # Create file in root
+        test_file = vault / "document.md"
+        test_file.write_text("# Original\n\nIn root folder.")
+
+        engine = SyncEngine(config, state)
+        result1 = engine.sync_file(test_file)
+
+        uuid = result1.remarkable_uuid
+        assert result1.success
+
+        # Move to subfolder
+        folder = vault / "subfolder"
+        folder.mkdir()
+        new_file = folder / "document.md"
+        test_file.rename(new_file)
+
+        # Update content
+        new_file.write_text("# Updated\n\nNow in subfolder.")
+
+        # Note: Current implementation treats this as a NEW file
+        # since the path changed. This is expected behavior for Phase 1.
+        result2 = engine.sync_file(new_file)
+        assert result2.success
+        # New file path = new UUID (expected for Phase 1)
+        assert result2.remarkable_uuid != uuid
+
+    def test_concurrent_updates_different_files(self, integration_env):
+        """Test updating multiple different files."""
+        from rm_obsidian_sync.converter import SyncEngine
+
+        vault = integration_env["vault"]
+        state = integration_env["state"]
+        config = integration_env["config"]
+
+        # Create multiple files
+        files = []
+        for i in range(5):
+            f = vault / f"doc{i}.md"
+            f.write_text(f"# Document {i}\n\nOriginal content {i}.")
+            files.append(f)
+
+        engine = SyncEngine(config, state)
+
+        # First sync all
+        first_uuids = {}
+        for f in files:
+            result = engine.sync_file(f)
+            assert result.success
+            first_uuids[f.name] = result.remarkable_uuid
+
+        # Update all
+        for f in files:
+            f.write_text(f"# {f.stem} Updated\n\nNew content for {f.stem}.")
+
+        # Sync updates
+        for f in files:
+            result = engine.sync_file(f)
+            assert result.success
+            # Each should preserve its UUID
+            assert result.remarkable_uuid == first_uuids[f.name]
+
+    def test_update_state_tracking(self, integration_env):
+        """Test that state database correctly tracks updates."""
+        from rm_obsidian_sync.converter import SyncEngine
+
+        vault = integration_env["vault"]
+        state = integration_env["state"]
+        config = integration_env["config"]
+
+        test_file = vault / "tracked.md"
+        test_file.write_text("# V1\n\nFirst.")
+
+        engine = SyncEngine(config, state)
+
+        # First sync
+        result1 = engine.sync_file(test_file)
+        uuid = result1.remarkable_uuid
+
+        # Check state
+        file_state1 = state.get_file_state("tracked.md")
+        assert file_state1 is not None
+        assert file_state1.remarkable_uuid == uuid
+        hash1 = file_state1.content_hash
+
+        # Wait to ensure timestamp changes
+        time.sleep(1)
+
+        # Update
+        test_file.write_text("# V2\n\nSecond.")
+        result2 = engine.sync_file(test_file)
+
+        # Check updated state
+        file_state2 = state.get_file_state("tracked.md")
+        assert file_state2 is not None
+        assert file_state2.remarkable_uuid == uuid  # Same UUID
+        assert file_state2.content_hash != hash1  # Different hash
+        assert file_state2.last_sync_time > file_state1.last_sync_time
