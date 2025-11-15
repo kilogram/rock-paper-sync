@@ -5,9 +5,21 @@ from pathlib import Path
 
 import pytest
 
-from rock_paper_sync.config import AppConfig
+from rock_paper_sync.config import AppConfig, VaultConfig
 from rock_paper_sync.converter import SyncEngine, SyncResult
 from rock_paper_sync.state import StateManager
+
+
+@pytest.fixture
+def test_vault_config(temp_vault: Path) -> VaultConfig:
+    """Create a test vault configuration."""
+    return VaultConfig(
+        name="test-vault",
+        path=temp_vault,
+        remarkable_folder="Test",
+        include_patterns=["**/*.md"],
+        exclude_patterns=[".obsidian/**"],
+    )
 
 
 class TestSyncEngine:
@@ -25,6 +37,7 @@ class TestSyncEngine:
         sample_config: AppConfig,
         state_manager: StateManager,
         temp_vault: Path,
+        test_vault_config: VaultConfig,
         mock_cloud_sync,
     ) -> None:
         """Test successful file sync."""
@@ -33,9 +46,10 @@ class TestSyncEngine:
         test_file.write_text("# Test\n\nThis is a test document.")
 
         engine = SyncEngine(sample_config, state_manager, cloud_sync=mock_cloud_sync)
-        result = engine.sync_file(test_file)
+        result = engine.sync_file(test_vault_config, test_file)
 
         assert result.success
+        assert result.vault_name == "test-vault"
         assert result.remarkable_uuid is not None
         assert result.page_count == 1
         assert result.error is None
@@ -44,29 +58,31 @@ class TestSyncEngine:
         assert mock_cloud_sync.upload_document.called
 
     def test_sync_file_not_found(
-        self, sample_config: AppConfig, state_manager: StateManager, temp_vault: Path, mock_cloud_sync
+        self, sample_config: AppConfig, state_manager: StateManager, temp_vault: Path, test_vault_config: VaultConfig, mock_cloud_sync
     ) -> None:
         """Test sync fails gracefully for non-existent file."""
         nonexistent = temp_vault / "nonexistent.md"
         engine = SyncEngine(sample_config, state_manager, cloud_sync=mock_cloud_sync)
 
-        result = engine.sync_file(nonexistent)
+        result = engine.sync_file(test_vault_config, nonexistent)
 
         assert not result.success
+        assert result.vault_name == "test-vault"
         assert result.error is not None
         assert "not found" in result.error.lower()
 
     def test_sync_file_outside_vault(
-        self, sample_config: AppConfig, state_manager: StateManager, tmp_path: Path, mock_cloud_sync
+        self, sample_config: AppConfig, state_manager: StateManager, tmp_path: Path, test_vault_config: VaultConfig, mock_cloud_sync
     ) -> None:
         """Test sync fails for file outside vault."""
         outside_file = tmp_path / "outside.md"
         outside_file.write_text("# Outside")
 
         engine = SyncEngine(sample_config, state_manager, cloud_sync=mock_cloud_sync)
-        result = engine.sync_file(outside_file)
+        result = engine.sync_file(test_vault_config, outside_file)
 
         assert not result.success
+        assert result.vault_name == "test-vault"
         assert result.error is not None
         assert "not in vault" in result.error.lower()
 
@@ -75,6 +91,7 @@ class TestSyncEngine:
         sample_config: AppConfig,
         state_manager: StateManager,
         temp_vault: Path,
+        test_vault_config: VaultConfig,
         mock_cloud_sync,
     ) -> None:
         """Test unchanged files are skipped."""
@@ -84,12 +101,12 @@ class TestSyncEngine:
         engine = SyncEngine(sample_config, state_manager, cloud_sync=mock_cloud_sync)
 
         # First sync
-        result1 = engine.sync_file(test_file)
+        result1 = engine.sync_file(test_vault_config, test_file)
         assert result1.success
         uuid1 = result1.remarkable_uuid
 
         # Second sync without changes
-        result2 = engine.sync_file(test_file)
+        result2 = engine.sync_file(test_vault_config, test_file)
         assert result2.success
         assert result2.remarkable_uuid == uuid1  # Same UUID means skipped
 
@@ -98,6 +115,7 @@ class TestSyncEngine:
         sample_config: AppConfig,
         state_manager: StateManager,
         temp_vault: Path,
+        test_vault_config: VaultConfig,
         mock_cloud_sync,
     ) -> None:
         """Test changed files are re-synced."""
@@ -107,14 +125,14 @@ class TestSyncEngine:
         engine = SyncEngine(sample_config, state_manager, cloud_sync=mock_cloud_sync)
 
         # First sync
-        result1 = engine.sync_file(test_file)
+        result1 = engine.sync_file(test_vault_config, test_file)
         assert result1.success
 
         # Modify file
         test_file.write_text("# Test\n\nModified content")
 
         # Second sync should detect change and UPDATE the same document
-        result2 = engine.sync_file(test_file)
+        result2 = engine.sync_file(test_vault_config, test_file)
         assert result2.success
         # UUID should be the SAME (document updated, not replaced)
         assert result2.remarkable_uuid == result1.remarkable_uuid
@@ -181,6 +199,7 @@ class TestSyncEngine:
         sample_config: AppConfig,
         state_manager: StateManager,
         temp_vault: Path,
+        test_vault_config: VaultConfig,
         mock_cloud_sync,
     ) -> None:
         """Test folder hierarchy creation for single level."""
@@ -191,7 +210,7 @@ class TestSyncEngine:
         file_path.write_text("# Test")
 
         engine = SyncEngine(sample_config, state_manager, cloud_sync=mock_cloud_sync)
-        parent_uuid = engine.ensure_folder_hierarchy(file_path)
+        parent_uuid = engine.ensure_folder_hierarchy(test_vault_config, file_path)
 
         assert parent_uuid != ""
         # Verify folder was uploaded via cloud sync
@@ -202,6 +221,7 @@ class TestSyncEngine:
         sample_config: AppConfig,
         state_manager: StateManager,
         temp_vault: Path,
+        test_vault_config: VaultConfig,
         mock_cloud_sync,
     ) -> None:
         """Test folder hierarchy creation for nested folders."""
@@ -212,36 +232,39 @@ class TestSyncEngine:
         file_path.write_text("# Test")
 
         engine = SyncEngine(sample_config, state_manager, cloud_sync=mock_cloud_sync)
-        parent_uuid = engine.ensure_folder_hierarchy(file_path)
+        parent_uuid = engine.ensure_folder_hierarchy(test_vault_config, file_path)
 
         assert parent_uuid != ""
 
         # Verify all folders were created
-        assert state_manager.get_folder_uuid("projects") is not None
-        assert state_manager.get_folder_uuid("projects/work") is not None
-        assert state_manager.get_folder_uuid("projects/work/notes") is not None
+        assert state_manager.get_folder_uuid("test-vault", "projects") is not None
+        assert state_manager.get_folder_uuid("test-vault", "projects/work") is not None
+        assert state_manager.get_folder_uuid("test-vault", "projects/work/notes") is not None
 
     def test_ensure_folder_hierarchy_root_file(
         self,
         sample_config: AppConfig,
         state_manager: StateManager,
         temp_vault: Path,
+        test_vault_config: VaultConfig,
         mock_cloud_sync,
     ) -> None:
-        """Test files at vault root have empty parent UUID."""
+        """Test files at vault root have vault folder UUID as parent."""
         file_path = temp_vault / "root.md"
         file_path.write_text("# Root")
 
         engine = SyncEngine(sample_config, state_manager, cloud_sync=mock_cloud_sync)
-        parent_uuid = engine.ensure_folder_hierarchy(file_path)
+        parent_uuid = engine.ensure_folder_hierarchy(test_vault_config, file_path)
 
-        assert parent_uuid == ""
+        # Should return vault root folder UUID since test_vault_config has remarkable_folder set
+        assert parent_uuid != ""
 
     def test_ensure_folder_hierarchy_reuses_existing(
         self,
         sample_config: AppConfig,
         state_manager: StateManager,
         temp_vault: Path,
+        test_vault_config: VaultConfig,
         mock_cloud_sync,
     ) -> None:
         """Test folder hierarchy reuses existing folder UUIDs."""
@@ -256,10 +279,10 @@ class TestSyncEngine:
         engine = SyncEngine(sample_config, state_manager, cloud_sync=mock_cloud_sync)
 
         # First file creates folder
-        parent1 = engine.ensure_folder_hierarchy(file1)
+        parent1 = engine.ensure_folder_hierarchy(test_vault_config, file1)
 
         # Second file should reuse same folder UUID
-        parent2 = engine.ensure_folder_hierarchy(file2)
+        parent2 = engine.ensure_folder_hierarchy(test_vault_config, file2)
 
         assert parent1 == parent2
 
@@ -268,6 +291,7 @@ class TestSyncEngine:
         sample_config: AppConfig,
         state_manager: StateManager,
         temp_vault: Path,
+        test_vault_config: VaultConfig,
         mock_cloud_sync,
     ) -> None:
         """Test state database is updated after sync."""
@@ -275,12 +299,12 @@ class TestSyncEngine:
         test_file.write_text("# Test")
 
         engine = SyncEngine(sample_config, state_manager, cloud_sync=mock_cloud_sync)
-        result = engine.sync_file(test_file)
+        result = engine.sync_file(test_vault_config, test_file)
 
         assert result.success
 
         # Verify state was recorded
-        state = state_manager.get_file_state("test.md")
+        state = state_manager.get_file_state("test-vault", "test.md")
         assert state is not None
         assert state.remarkable_uuid == result.remarkable_uuid
         assert state.status == "synced"
@@ -290,6 +314,7 @@ class TestSyncEngine:
         sample_config: AppConfig,
         state_manager: StateManager,
         temp_vault: Path,
+        test_vault_config: VaultConfig,
         mock_cloud_sync,
     ) -> None:
         """Test sync actions are logged to history."""
@@ -297,13 +322,14 @@ class TestSyncEngine:
         test_file.write_text("# Test")
 
         engine = SyncEngine(sample_config, state_manager, cloud_sync=mock_cloud_sync)
-        engine.sync_file(test_file)
+        engine.sync_file(test_vault_config, test_file)
 
         # Check history
         history = state_manager.get_recent_history(limit=5)
         assert len(history) > 0
-        # Most recent entry should be our sync
-        obsidian_path, action, timestamp, details = history[0]
+        # Most recent entry should be our sync (format: vault_name, path, action, timestamp, details)
+        vault_name, obsidian_path, action, timestamp, details = history[0]
+        assert vault_name == "test-vault"
         assert obsidian_path == "test.md"
         assert action == "synced"
 
@@ -312,6 +338,7 @@ class TestSyncEngine:
         sample_config: AppConfig,
         state_manager: StateManager,
         temp_vault: Path,
+        test_vault_config: VaultConfig,
         mock_cloud_sync,
         mocker,
     ) -> None:
@@ -328,17 +355,17 @@ class TestSyncEngine:
             side_effect=RuntimeError("Test error during generation"),
         )
 
-        result = engine.sync_file(test_file)
+        result = engine.sync_file(test_vault_config, test_file)
 
         # Should return failure result
         assert not result.success
         assert "Test error during generation" in result.error
 
-        # Error should be logged to history
+        # Error should be logged to history (format: vault_name, path, action, timestamp, details)
         history = state_manager.get_recent_history(limit=5)
         assert len(history) > 0
-        obsidian_path, action, timestamp, details = history[0]
-        assert str(test_file) in obsidian_path or "test.md" in obsidian_path
+        vault_name, obsidian_path, action, timestamp, details = history[0]
+        assert vault_name == "test-vault"
         assert action == "error"
         assert "Test error during generation" in details
 
@@ -349,12 +376,14 @@ class TestSyncResult:
     def test_sync_result_success(self) -> None:
         """Test successful sync result."""
         result = SyncResult(
+            vault_name="test-vault",
             path=Path("/test/file.md"),
             success=True,
             remarkable_uuid="abc-123",
             page_count=2,
         )
 
+        assert result.vault_name == "test-vault"
         assert result.success
         assert result.remarkable_uuid == "abc-123"
         assert result.page_count == 2
@@ -363,9 +392,13 @@ class TestSyncResult:
     def test_sync_result_failure(self) -> None:
         """Test failed sync result."""
         result = SyncResult(
-            path=Path("/test/file.md"), success=False, error="Test error"
+            vault_name="test-vault",
+            path=Path("/test/file.md"),
+            success=False,
+            error="Test error"
         )
 
+        assert result.vault_name == "test-vault"
         assert not result.success
         assert result.error == "Test error"
         assert result.remarkable_uuid is None

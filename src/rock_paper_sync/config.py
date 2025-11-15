@@ -28,13 +28,22 @@ class ConfigError(Exception):
 
 
 @dataclass(frozen=True)
+class VaultConfig:
+    """Configuration for a single Obsidian vault."""
+
+    name: str
+    path: Path
+    remarkable_folder: Optional[str]  # None = files go to root
+    include_patterns: list[str]
+    exclude_patterns: list[str]
+
+
+@dataclass(frozen=True)
 class SyncConfig:
     """Synchronization configuration."""
 
-    obsidian_vault: Path
+    vaults: list[VaultConfig]
     state_database: Path
-    include_patterns: list[str]
-    exclude_patterns: list[str]
     debounce_seconds: int
 
 
@@ -113,22 +122,46 @@ def load_config(config_path: Path) -> AppConfig:
         if not paths:
             raise ConfigError("Missing required [paths] section in config")
 
-        obsidian_vault = paths.get("obsidian_vault")
         state_database = paths.get("state_database")
-
-        if not obsidian_vault:
-            raise ConfigError("Missing required field: paths.obsidian_vault")
         if not state_database:
             raise ConfigError("Missing required field: paths.state_database")
 
-        # Extract sync section
-        sync = config_dict.get("sync", {})
-        if not sync:
-            raise ConfigError("Missing required [sync] section in config")
+        # Extract vaults - array of vault configurations
+        vaults_config = config_dict.get("vaults", [])
+        if not vaults_config:
+            raise ConfigError(
+                "Missing required [[vaults]] section in config\n"
+                "At least one vault must be configured."
+            )
 
-        include_patterns = sync.get("include_patterns", ["**/*.md"])
-        exclude_patterns = sync.get("exclude_patterns", [])
-        debounce_seconds = sync.get("debounce_seconds", 5)
+        # Parse vault configurations
+        vaults = []
+        for i, vault_dict in enumerate(vaults_config):
+            name = vault_dict.get("name")
+            if not name:
+                raise ConfigError(f"Vault at index {i} is missing required 'name' field")
+
+            path = vault_dict.get("path")
+            if not path:
+                raise ConfigError(f"Vault '{name}' is missing required 'path' field")
+
+            remarkable_folder = vault_dict.get("remarkable_folder")  # Optional
+            include_patterns = vault_dict.get("include_patterns", ["**/*.md"])
+            exclude_patterns = vault_dict.get("exclude_patterns", [])
+
+            vaults.append(
+                VaultConfig(
+                    name=name,
+                    path=expand_path(path),
+                    remarkable_folder=remarkable_folder,
+                    include_patterns=include_patterns,
+                    exclude_patterns=exclude_patterns,
+                )
+            )
+
+        # Extract sync section for global settings
+        sync = config_dict.get("sync", {})
+        debounce_seconds = sync.get("debounce_seconds", 5) if sync else 5
 
         # Extract layout section
         layout = config_dict.get("layout", {})
@@ -154,10 +187,8 @@ def load_config(config_path: Path) -> AppConfig:
 
         # Create configuration objects
         sync_config = SyncConfig(
-            obsidian_vault=expand_path(obsidian_vault),
+            vaults=vaults,
             state_database=expand_path(state_database),
-            include_patterns=include_patterns,
-            exclude_patterns=exclude_patterns,
             debounce_seconds=debounce_seconds,
         )
 
@@ -205,23 +236,50 @@ def validate_config(config: AppConfig) -> None:
     Raises:
         ConfigError: If validation fails with clear error message
     """
-    # Validate obsidian vault exists and is readable
-    if not config.sync.obsidian_vault.exists():
-        raise ConfigError(
-            f"Obsidian vault directory does not exist: {config.sync.obsidian_vault}\n"
-            "Please create the directory or update paths.obsidian_vault in your config."
-        )
+    # Validate vaults
+    if not config.sync.vaults:
+        raise ConfigError("No vaults configured. At least one vault is required.")
 
-    if not config.sync.obsidian_vault.is_dir():
-        raise ConfigError(
-            f"Obsidian vault path is not a directory: {config.sync.obsidian_vault}"
-        )
+    # Check vault names are unique
+    vault_names = [v.name for v in config.sync.vaults]
+    if len(vault_names) != len(set(vault_names)):
+        raise ConfigError("Vault names must be unique")
 
-    if not os.access(config.sync.obsidian_vault, os.R_OK):
-        raise ConfigError(
-            f"Obsidian vault directory is not readable: {config.sync.obsidian_vault}\n"
-            "Please check file permissions."
-        )
+    # Validate: if multiple vaults, at most one can have no remarkable_folder
+    if len(config.sync.vaults) > 1:
+        vaults_without_folder = [v for v in config.sync.vaults if v.remarkable_folder is None]
+        if len(vaults_without_folder) > 1:
+            vault_list = ", ".join(f"'{v.name}'" for v in vaults_without_folder)
+            raise ConfigError(
+                f"When multiple vaults are configured, at most one vault can omit 'remarkable_folder'.\n"
+                f"Found {len(vaults_without_folder)} vaults without folders: {vault_list}\n"
+                f"Please specify a 'remarkable_folder' for all but one vault to avoid mixing files in the root."
+            )
+
+    # Validate each vault
+    for vault in config.sync.vaults:
+        if not vault.path.exists():
+            raise ConfigError(
+                f"Vault '{vault.name}' directory does not exist: {vault.path}\n"
+                "Please create the directory or update the vault path in your config."
+            )
+
+        if not vault.path.is_dir():
+            raise ConfigError(
+                f"Vault '{vault.name}' path is not a directory: {vault.path}"
+            )
+
+        if not os.access(vault.path, os.R_OK):
+            raise ConfigError(
+                f"Vault '{vault.name}' directory is not readable: {vault.path}\n"
+                "Please check file permissions."
+            )
+
+        if not vault.include_patterns:
+            raise ConfigError(
+                f"Vault '{vault.name}' has no include_patterns.\n"
+                "Specify at least one pattern, e.g., ['**/*.md']"
+            )
 
     # No output directory validation needed - we use cloud API only!
 
@@ -282,9 +340,3 @@ def validate_config(config: AppConfig) -> None:
             f"Must be one of: {', '.join(valid_log_levels)}"
         )
 
-    # Validate patterns are reasonable (basic check)
-    if not config.sync.include_patterns:
-        raise ConfigError(
-            "include_patterns cannot be empty\n"
-            "Specify at least one pattern, e.g., ['**/*.md']"
-        )

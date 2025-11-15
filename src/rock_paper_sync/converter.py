@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from .config import AppConfig
+from .config import AppConfig, VaultConfig
 from .generator import RemarkableGenerator
 from .parser import parse_markdown_file
 from .rm_cloud_client import RmCloudClient
@@ -32,6 +32,7 @@ class SyncResult:
     """Result of syncing a single file.
 
     Attributes:
+        vault_name: Name of the vault
         path: Path to the markdown file that was synced
         success: Whether sync completed successfully
         remarkable_uuid: UUID of generated reMarkable document (if successful)
@@ -39,6 +40,7 @@ class SyncResult:
         error: Error message (if failed)
     """
 
+    vault_name: str
     path: Path
     success: bool
     remarkable_uuid: Optional[str] = None
@@ -100,7 +102,7 @@ class SyncEngine:
 
         logger.debug("Sync engine initialized")
 
-    def sync_file(self, markdown_path: Path) -> SyncResult:
+    def sync_file(self, vault: VaultConfig, markdown_path: Path) -> SyncResult:
         """Sync a single markdown file to reMarkable format.
 
         Full pipeline for one file:
@@ -112,6 +114,7 @@ class SyncEngine:
         6. Update state database
 
         Args:
+            vault: Vault configuration
             markdown_path: Absolute path to markdown file
 
         Returns:
@@ -121,13 +124,15 @@ class SyncEngine:
             # Validate file exists and is in vault
             if not markdown_path.exists():
                 return SyncResult(
+                    vault_name=vault.name,
                     path=markdown_path,
                     success=False,
                     error=f"File not found: {markdown_path}",
                 )
 
-            if not markdown_path.is_relative_to(self.config.sync.obsidian_vault):
+            if not markdown_path.is_relative_to(vault.path):
                 return SyncResult(
+                    vault_name=vault.name,
                     path=markdown_path,
                     success=False,
                     error=f"File is not in vault: {markdown_path}",
@@ -138,24 +143,23 @@ class SyncEngine:
             md_doc = parse_markdown_file(markdown_path)
 
             # Get relative path for state tracking
-            relative_path = str(
-                markdown_path.relative_to(self.config.sync.obsidian_vault)
-            )
+            relative_path = str(markdown_path.relative_to(vault.path))
 
             # Check if needs sync (compare hash)
-            current_state = self.state.get_file_state(relative_path)
+            current_state = self.state.get_file_state(vault.name, relative_path)
 
             if current_state and current_state.content_hash == md_doc.content_hash:
-                logger.debug(f"File unchanged, skipping: {relative_path}")
+                logger.debug(f"File unchanged, skipping: {vault.name}:{relative_path}")
                 return SyncResult(
+                    vault_name=vault.name,
                     path=markdown_path,
                     success=True,
                     remarkable_uuid=current_state.remarkable_uuid,
                     page_count=current_state.page_count,
                 )
 
-            # Ensure parent folder hierarchy exists
-            parent_uuid = self.ensure_folder_hierarchy(markdown_path)
+            # Ensure parent folder hierarchy exists (including vault root folder if configured)
+            parent_uuid = self.ensure_folder_hierarchy(vault, markdown_path)
 
             # Generate reMarkable document (reuse UUID if updating existing file)
             existing_uuid = current_state.remarkable_uuid if current_state else None
@@ -190,6 +194,7 @@ class SyncEngine:
 
             # Update state database
             new_state = SyncRecord(
+                vault_name=vault.name,
                 obsidian_path=relative_path,
                 remarkable_uuid=rm_doc.uuid,
                 content_hash=md_doc.content_hash,
@@ -199,14 +204,15 @@ class SyncEngine:
             )
             self.state.update_file_state(new_state)
             self.state.log_sync_action(
-                relative_path, "synced", f"Generated {len(rm_doc.pages)} page(s)"
+                vault.name, relative_path, "synced", f"Generated {len(rm_doc.pages)} page(s)"
             )
 
             logger.info(
-                f"Successfully synced {markdown_path} -> {rm_doc.uuid} "
+                f"Successfully synced {vault.name}:{markdown_path} -> {rm_doc.uuid} "
                 f"({len(rm_doc.pages)} page(s))"
             )
             return SyncResult(
+                vault_name=vault.name,
                 path=markdown_path,
                 success=True,
                 remarkable_uuid=rm_doc.uuid,
@@ -214,14 +220,17 @@ class SyncEngine:
             )
 
         except Exception as e:
-            logger.error(f"Failed to sync {markdown_path}: {e}", exc_info=True)
-            self.state.log_sync_action(str(markdown_path), "error", str(e))
-            return SyncResult(path=markdown_path, success=False, error=str(e))
+            logger.error(f"Failed to sync {vault.name}:{markdown_path}: {e}", exc_info=True)
+            self.state.log_sync_action(vault.name, str(markdown_path), "error", str(e))
+            return SyncResult(
+                vault_name=vault.name, path=markdown_path, success=False, error=str(e)
+            )
 
-    def delete_file(self, relative_path: str, uuid: str) -> bool:
+    def delete_file(self, vault_name: str, relative_path: str, uuid: str) -> bool:
         """Delete a file from the cloud and state database.
 
         Args:
+            vault_name: Name of the vault
             relative_path: Relative path in vault
             uuid: reMarkable UUID to delete
 
@@ -229,18 +238,61 @@ class SyncEngine:
             True if successful, False otherwise
         """
         try:
-            logger.info(f"Deleting {relative_path} (UUID: {uuid})")
+            logger.info(f"Deleting {vault_name}:{relative_path} (UUID: {uuid})")
             self.cloud_sync.delete_document(uuid)
-            self.state.delete_file_state(relative_path)
-            self.state.log_sync_action(relative_path, "deleted", f"Removed from cloud")
-            logger.info(f"Successfully deleted {relative_path}")
+            self.state.delete_file_state(vault_name, relative_path)
+            self.state.log_sync_action(vault_name, relative_path, "deleted", f"Removed from cloud")
+            logger.info(f"Successfully deleted {vault_name}:{relative_path}")
             return True
         except Exception as e:
-            logger.error(f"Failed to delete {relative_path}: {e}", exc_info=True)
-            self.state.log_sync_action(relative_path, "error", f"Delete failed: {e}")
+            logger.error(f"Failed to delete {vault_name}:{relative_path}: {e}", exc_info=True)
+            self.state.log_sync_action(
+                vault_name, relative_path, "error", f"Delete failed: {e}"
+            )
             return False
 
-    def sync_all_changed(self) -> list[SyncResult]:
+    def sync_vault(self, vault: VaultConfig) -> list[SyncResult]:
+        """Sync all changed files in a specific vault.
+
+        Args:
+            vault: Vault configuration
+
+        Returns:
+            List of SyncResults for all processed files in this vault
+        """
+        logger.info(f"Syncing vault '{vault.name}' at {vault.path}")
+
+        # Handle deletions first
+        deleted_files = self.state.find_deleted_files(vault.name, vault.path)
+
+        if deleted_files:
+            logger.info(f"Processing {len(deleted_files)} deleted file(s) in '{vault.name}'")
+            for relative_path, uuid in deleted_files:
+                self.delete_file(vault.name, relative_path, uuid)
+
+        # Then handle changed/new files
+        changed_files = self.state.find_changed_files(
+            vault.name,
+            vault.path,
+            vault.include_patterns,
+            vault.exclude_patterns,
+        )
+
+        logger.info(f"Found {len(changed_files)} file(s) to sync in '{vault.name}'")
+
+        results = []
+        for file_path in changed_files:
+            result = self.sync_file(vault, file_path)
+            results.append(result)
+
+        success_count = sum(1 for r in results if r.success)
+        logger.info(
+            f"Vault '{vault.name}' sync complete: {success_count}/{len(results)} succeeded"
+        )
+
+        return results
+
+    def sync_all_changed(self, vault_name: Optional[str] = None) -> list[SyncResult]:
         """Sync all files that have changed since last sync.
 
         Uses state database to identify files with different content hashes.
@@ -248,69 +300,85 @@ class SyncEngine:
 
         Also handles file deletions.
 
+        Args:
+            vault_name: Optional vault name to sync. If None, syncs all vaults.
+
         Returns:
             List of SyncResults for all processed files
         """
-        # Handle deletions first
-        deleted_files = self.state.find_deleted_files(self.config.sync.obsidian_vault)
-
-        if deleted_files:
-            logger.info(f"Processing {len(deleted_files)} deleted file(s)")
-            for relative_path, uuid in deleted_files:
-                self.delete_file(relative_path, uuid)
-
-        # Then handle changed/new files
-        changed_files = self.state.find_changed_files(
-            self.config.sync.obsidian_vault,
-            self.config.sync.include_patterns,
-            self.config.sync.exclude_patterns,
-        )
-
-        logger.info(f"Found {len(changed_files)} file(s) to sync")
-
         results = []
-        for file_path in changed_files:
-            result = self.sync_file(file_path)
-            results.append(result)
 
-        success_count = sum(1 for r in results if r.success)
-        logger.info(f"Sync complete: {success_count}/{len(results)} succeeded")
+        # Determine which vaults to sync
+        if vault_name:
+            vaults = [v for v in self.config.sync.vaults if v.name == vault_name]
+            if not vaults:
+                logger.error(f"Vault '{vault_name}' not found in configuration")
+                return results
+        else:
+            vaults = self.config.sync.vaults
+
+        # Sync each vault
+        for vault in vaults:
+            vault_results = self.sync_vault(vault)
+            results.extend(vault_results)
+
+        total_success = sum(1 for r in results if r.success)
+        logger.info(f"Total sync complete: {total_success}/{len(results)} succeeded")
 
         return results
 
-    def ensure_folder_hierarchy(self, obsidian_path: Path) -> str:
+    def ensure_folder_hierarchy(self, vault: VaultConfig, obsidian_path: Path) -> str:
         """Create reMarkable folders for directory structure.
 
         Creates folder metadata files for each directory level in the path.
+        If vault has a remarkable_folder configured, creates that as the root.
         Uses state database to track existing folder→UUID mappings.
 
         Args:
+            vault: Vault configuration
             obsidian_path: Absolute path to file in vault
 
         Returns:
-            UUID of immediate parent folder (empty string if file is at vault root)
+            UUID of immediate parent folder (empty string if file is at vault root with no vault folder)
 
         Example:
-            vault/projects/work/notes.md
-            Creates folders: "projects", "projects/work"
-            Returns UUID of "projects/work"
+            vault='work' with remarkable_folder='Work Notes'
+            vault/projects/notes.md
+            Creates: "Work Notes" (root) -> "Work Notes/projects"
+            Returns UUID of "Work Notes/projects"
         """
-        relative_path = obsidian_path.relative_to(self.config.sync.obsidian_vault)
+        relative_path = obsidian_path.relative_to(vault.path)
 
-        if not relative_path.parent.parts:
-            # File is in vault root
-            return ""
-
+        # Start with vault root folder (if configured)
         parent_uuid = ""
         folder_path_parts = []
 
-        # Create each folder level
+        if vault.remarkable_folder:
+            # Check if vault root folder exists
+            existing_uuid = self.state.get_folder_uuid(vault.name, "")
+            if existing_uuid:
+                parent_uuid = existing_uuid
+            else:
+                # Create vault root folder
+                new_uuid = str(uuid_module.uuid4())
+                self._create_rm_folder(vault.remarkable_folder, new_uuid, "")
+                self.state.create_folder_mapping(vault.name, "", new_uuid)
+                parent_uuid = new_uuid
+                logger.info(
+                    f"Created vault root folder: '{vault.remarkable_folder}' -> {new_uuid}"
+                )
+
+        # If file is directly in vault root, return parent (vault folder UUID or empty)
+        if not relative_path.parent.parts:
+            return parent_uuid
+
+        # Create each subfolder level
         for part in relative_path.parent.parts:
             folder_path_parts.append(part)
             folder_path = "/".join(folder_path_parts)
 
             # Check if folder already exists
-            existing_uuid = self.state.get_folder_uuid(folder_path)
+            existing_uuid = self.state.get_folder_uuid(vault.name, folder_path)
 
             if existing_uuid:
                 parent_uuid = existing_uuid
@@ -318,9 +386,9 @@ class SyncEngine:
                 # Create new folder
                 new_uuid = str(uuid_module.uuid4())
                 self._create_rm_folder(part, new_uuid, parent_uuid)
-                self.state.create_folder_mapping(folder_path, new_uuid)
+                self.state.create_folder_mapping(vault.name, folder_path, new_uuid)
                 parent_uuid = new_uuid
-                logger.info(f"Created folder: {folder_path} -> {new_uuid}")
+                logger.info(f"Created folder: {vault.name}:{folder_path} -> {new_uuid}")
 
         return parent_uuid
 

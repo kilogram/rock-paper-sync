@@ -48,17 +48,72 @@ def temp_state_db(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
+def temp_vault2(tmp_path: Path) -> Path:
+    """Create second temporary Obsidian vault directory"""
+    vault = tmp_path / "vault2"
+    vault.mkdir()
+    return vault
+
+
+@pytest.fixture
 def sample_config(temp_vault: Path, temp_state_db: Path):
-    """Create sample AppConfig for testing"""
+    """Create sample AppConfig for testing with single vault"""
     # Import here to avoid circular imports during test collection
-    from rock_paper_sync.config import AppConfig, SyncConfig, LayoutConfig, CloudConfig
+    from rock_paper_sync.config import AppConfig, SyncConfig, LayoutConfig, CloudConfig, VaultConfig
 
     return AppConfig(
         sync=SyncConfig(
-            obsidian_vault=temp_vault,
+            vaults=[
+                VaultConfig(
+                    name="test-vault",
+                    path=temp_vault,
+                    remarkable_folder="Test Vault",
+                    include_patterns=["**/*.md"],
+                    exclude_patterns=[".obsidian/**"],
+                )
+            ],
             state_database=temp_state_db,
-            include_patterns=["**/*.md"],
-            exclude_patterns=[".obsidian/**"],
+            debounce_seconds=1
+        ),
+        cloud=CloudConfig(
+            base_url="http://localhost:3000"
+        ),
+        layout=LayoutConfig(
+            lines_per_page=45,
+            margin_top=50,
+            margin_bottom=50,
+            margin_left=50,
+            margin_right=50
+        ),
+        log_level="debug",
+        log_file=temp_state_db.parent / "test.log"
+    )
+
+
+@pytest.fixture
+def multi_vault_config(temp_vault: Path, temp_vault2: Path, temp_state_db: Path):
+    """Create sample AppConfig with multiple vaults for testing"""
+    from rock_paper_sync.config import AppConfig, SyncConfig, LayoutConfig, CloudConfig, VaultConfig
+
+    return AppConfig(
+        sync=SyncConfig(
+            vaults=[
+                VaultConfig(
+                    name="personal",
+                    path=temp_vault,
+                    remarkable_folder="Personal",
+                    include_patterns=["**/*.md"],
+                    exclude_patterns=[".obsidian/**"],
+                ),
+                VaultConfig(
+                    name="work",
+                    path=temp_vault2,
+                    remarkable_folder="Work",
+                    include_patterns=["**/*.md"],
+                    exclude_patterns=["archive/**"],
+                )
+            ],
+            state_database=temp_state_db,
             debounce_seconds=1
         ),
         cloud=CloudConfig(
@@ -151,16 +206,63 @@ def temp_db(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def valid_config_toml(tmp_path: Path, temp_vault: Path) -> Path:
-    """Create a valid TOML config file for testing."""
+    """Create a valid TOML config file for testing (single vault)."""
     config_path = tmp_path / "config.toml"
     config_content = f"""
 [paths]
-obsidian_vault = "{temp_vault}"
 state_database = "{tmp_path / 'state.db'}"
 
-[sync]
+[[vaults]]
+name = "test-vault"
+path = "{temp_vault}"
+remarkable_folder = "Test Vault"
 include_patterns = ["**/*.md"]
 exclude_patterns = [".obsidian/**", "templates/**"]
+
+[sync]
+debounce_seconds = 5
+
+[cloud]
+base_url = "http://localhost:3000"
+
+[layout]
+lines_per_page = 45
+margin_top = 50
+margin_bottom = 50
+margin_left = 50
+margin_right = 50
+
+[logging]
+level = "info"
+file = "{tmp_path / 'sync.log'}"
+"""
+    config_path.write_text(config_content)
+    return config_path
+
+
+@pytest.fixture
+def multi_vault_config_toml(tmp_path: Path, temp_vault: Path, temp_vault2: Path) -> Path:
+    """Create a valid multi-vault TOML config file for testing."""
+    config_path = tmp_path / "multi_config.toml"
+    config_content = f"""
+[paths]
+state_database = "{tmp_path / 'state.db'}"
+
+[[vaults]]
+name = "personal"
+path = "{temp_vault}"
+remarkable_folder = "Personal"
+include_patterns = ["**/*.md"]
+exclude_patterns = [".obsidian/**"]
+
+[[vaults]]
+name = "work"
+path = "{temp_vault2}"
+remarkable_folder = "Work"
+include_patterns = ["**/*.md"]
+exclude_patterns = ["archive/**"]
+
+[sync]
 debounce_seconds = 5
 
 [cloud]

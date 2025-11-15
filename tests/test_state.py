@@ -56,6 +56,7 @@ class TestStateManagerInit:
         # Create and populate database
         manager1 = StateManager(temp_db)
         record = SyncRecord(
+            vault_name="test-vault",
             obsidian_path="test.md",
             remarkable_uuid="uuid-1",
             content_hash="hash-1",
@@ -68,7 +69,7 @@ class TestStateManagerInit:
 
         # Reopen database
         manager2 = StateManager(temp_db)
-        retrieved = manager2.get_file_state("test.md")
+        retrieved = manager2.get_file_state("test-vault", "test.md")
         assert retrieved is not None
         assert retrieved.remarkable_uuid == "uuid-1"
         manager2.close()
@@ -92,7 +93,7 @@ class TestFileState:
     def test_get_file_state_nonexistent(self, temp_db: Path) -> None:
         """Test getting state for file that hasn't been synced."""
         manager = StateManager(temp_db)
-        state = manager.get_file_state("nonexistent.md")
+        state = manager.get_file_state("test-vault", "nonexistent.md")
         assert state is None
         manager.close()
 
@@ -101,6 +102,7 @@ class TestFileState:
         manager = StateManager(temp_db)
 
         record = SyncRecord(
+            vault_name="test-vault",
             obsidian_path="notes/test.md",
             remarkable_uuid="uuid-123",
             content_hash="abc123def456",
@@ -110,9 +112,10 @@ class TestFileState:
         )
 
         manager.update_file_state(record)
-        retrieved = manager.get_file_state("notes/test.md")
+        retrieved = manager.get_file_state("test-vault", "notes/test.md")
 
         assert retrieved is not None
+        assert retrieved.vault_name == "test-vault"
         assert retrieved.obsidian_path == "notes/test.md"
         assert retrieved.remarkable_uuid == "uuid-123"
         assert retrieved.content_hash == "abc123def456"
@@ -128,6 +131,7 @@ class TestFileState:
 
         # Insert initial state
         record1 = SyncRecord(
+            vault_name="test-vault",
             obsidian_path="test.md",
             remarkable_uuid="uuid-1",
             content_hash="hash-1",
@@ -139,6 +143,7 @@ class TestFileState:
 
         # Update with new state
         record2 = SyncRecord(
+            vault_name="test-vault",
             obsidian_path="test.md",
             remarkable_uuid="uuid-1",  # Same UUID
             content_hash="hash-2",  # Different hash
@@ -149,7 +154,7 @@ class TestFileState:
         manager.update_file_state(record2)
 
         # Should have new state
-        retrieved = manager.get_file_state("test.md")
+        retrieved = manager.get_file_state("test-vault", "test.md")
         assert retrieved is not None
         assert retrieved.content_hash == "hash-2"
         assert retrieved.last_sync_time == 200
@@ -162,6 +167,7 @@ class TestFileState:
         manager = StateManager(temp_db)
 
         record = SyncRecord(
+            vault_name="test-vault",
             obsidian_path="to_delete.md",
             remarkable_uuid="uuid-1",
             content_hash="hash-1",
@@ -172,13 +178,13 @@ class TestFileState:
         manager.update_file_state(record)
 
         # Verify it exists
-        assert manager.get_file_state("to_delete.md") is not None
+        assert manager.get_file_state("test-vault", "to_delete.md") is not None
 
         # Delete it
-        manager.delete_file_state("to_delete.md")
+        manager.delete_file_state("test-vault", "to_delete.md")
 
         # Verify it's gone
-        assert manager.get_file_state("to_delete.md") is None
+        assert manager.get_file_state("test-vault", "to_delete.md") is None
 
         manager.close()
 
@@ -189,6 +195,7 @@ class TestFileState:
         # Insert multiple records
         for i in range(5):
             record = SyncRecord(
+                vault_name="test-vault",
                 obsidian_path=f"file{i}.md",
                 remarkable_uuid=f"uuid-{i}",
                 content_hash=f"hash-{i}",
@@ -198,7 +205,7 @@ class TestFileState:
             )
             manager.update_file_state(record)
 
-        all_files = manager.get_all_synced_files()
+        all_files = manager.get_all_synced_files(vault_name="test-vault")
         assert len(all_files) == 5
 
         # Check they're all present
@@ -214,7 +221,7 @@ class TestFolderMapping:
     def test_get_folder_uuid_nonexistent(self, temp_db: Path) -> None:
         """Test getting UUID for folder that hasn't been mapped."""
         manager = StateManager(temp_db)
-        uuid = manager.get_folder_uuid("nonexistent/folder")
+        uuid = manager.get_folder_uuid("test-vault", "nonexistent/folder")
         assert uuid is None
         manager.close()
 
@@ -222,8 +229,8 @@ class TestFolderMapping:
         """Test creating and retrieving folder mapping."""
         manager = StateManager(temp_db)
 
-        manager.create_folder_mapping("projects/work", "folder-uuid-123")
-        retrieved_uuid = manager.get_folder_uuid("projects/work")
+        manager.create_folder_mapping("test-vault", "projects/work", "folder-uuid-123")
+        retrieved_uuid = manager.get_folder_uuid("test-vault", "projects/work")
 
         assert retrieved_uuid == "folder-uuid-123"
         manager.close()
@@ -232,10 +239,10 @@ class TestFolderMapping:
         """Test that updating folder mapping replaces old UUID."""
         manager = StateManager(temp_db)
 
-        manager.create_folder_mapping("folder", "uuid-1")
-        manager.create_folder_mapping("folder", "uuid-2")
+        manager.create_folder_mapping("test-vault", "folder", "uuid-1")
+        manager.create_folder_mapping("test-vault", "folder", "uuid-2")
 
-        retrieved = manager.get_folder_uuid("folder")
+        retrieved = manager.get_folder_uuid("test-vault", "folder")
         assert retrieved == "uuid-2"
 
         manager.close()
@@ -252,11 +259,11 @@ class TestFolderMapping:
         }
 
         for folder, uuid in folders.items():
-            manager.create_folder_mapping(folder, uuid)
+            manager.create_folder_mapping("test-vault", folder, uuid)
 
         # Verify all mappings
         for folder, expected_uuid in folders.items():
-            retrieved = manager.get_folder_uuid(folder)
+            retrieved = manager.get_folder_uuid("test-vault", folder)
             assert retrieved == expected_uuid
 
         manager.close()
@@ -361,7 +368,7 @@ class TestFindChangedFiles:
         (temp_vault / "notes").mkdir()
         (temp_vault / "notes" / "file3.md").write_text("Content 3")
 
-        changed = manager.find_changed_files(temp_vault, ["**/*.md"], [])
+        changed = manager.find_changed_files("test-vault", temp_vault, ["**/*.md"], [])
 
         assert len(changed) == 3
         paths = {f.name for f in changed}
@@ -378,6 +385,7 @@ class TestFindChangedFiles:
         test_file.write_text("Content")
 
         record = SyncRecord(
+            vault_name="test-vault",
             obsidian_path="test.md",
             remarkable_uuid="uuid-1",
             content_hash=manager.compute_file_hash(test_file),
@@ -388,7 +396,7 @@ class TestFindChangedFiles:
         manager.update_file_state(record)
 
         # Find changed files
-        changed = manager.find_changed_files(temp_vault, ["**/*.md"], [])
+        changed = manager.find_changed_files("test-vault", temp_vault, ["**/*.md"], [])
 
         assert len(changed) == 0
 
@@ -404,6 +412,7 @@ class TestFindChangedFiles:
 
         original_hash = manager.compute_file_hash(test_file)
         record = SyncRecord(
+            vault_name="test-vault",
             obsidian_path="test.md",
             remarkable_uuid="uuid-1",
             content_hash=original_hash,
@@ -417,7 +426,7 @@ class TestFindChangedFiles:
         test_file.write_text("Modified content")
 
         # Find changed files
-        changed = manager.find_changed_files(temp_vault, ["**/*.md"], [])
+        changed = manager.find_changed_files("test-vault", temp_vault, ["**/*.md"], [])
 
         assert len(changed) == 1
         assert changed[0].name == "test.md"
@@ -434,7 +443,7 @@ class TestFindChangedFiles:
         (temp_vault / "image.png").write_bytes(b"fake image")
 
         # Only find .md files
-        changed = manager.find_changed_files(temp_vault, ["**/*.md"], [])
+        changed = manager.find_changed_files("test-vault", temp_vault, ["**/*.md"], [])
 
         assert len(changed) == 1
         assert changed[0].name == "note.md"
@@ -454,7 +463,7 @@ class TestFindChangedFiles:
 
         # Find changed, excluding .obsidian and templates
         changed = manager.find_changed_files(
-            temp_vault, ["**/*.md"], [".obsidian/**", "templates/**"]
+            "test-vault", temp_vault, ["**/*.md"], [".obsidian/**", "templates/**"]
         )
 
         assert len(changed) == 1
@@ -476,7 +485,7 @@ class TestFindChangedFiles:
 
         # Include all .md, exclude files starting with _ and archive folder
         changed = manager.find_changed_files(
-            temp_vault, ["**/*.md"], ["_*", "archive/**"]
+            "test-vault", temp_vault, ["**/*.md"], ["_*", "archive/**"]
         )
 
         paths = {str(f.relative_to(temp_vault)) for f in changed}
@@ -497,7 +506,7 @@ class TestFindChangedFiles:
         (temp_vault / "folder.md" / "nested.md").write_text("Nested content")
 
         # Find files - should not include the directory itself
-        changed = manager.find_changed_files(temp_vault, ["**/*.md"], [])
+        changed = manager.find_changed_files("test-vault", temp_vault, ["**/*.md"], [])
 
         paths = {f.name for f in changed}
         # Should find the files but not the directory "folder.md"
@@ -516,14 +525,15 @@ class TestSyncHistory:
         """Test logging a sync action."""
         manager = StateManager(temp_db)
 
-        manager.log_sync_action("test.md", "created", "Generated 3 pages")
+        manager.log_sync_action("test-vault", "test.md", "created", "Generated 3 pages")
 
         # Verify it was logged
         history = manager.get_recent_history(limit=10)
         assert len(history) == 1
-        assert history[0][0] == "test.md"
-        assert history[0][1] == "created"
-        assert history[0][3] == "Generated 3 pages"
+        assert history[0][0] == "test-vault"
+        assert history[0][1] == "test.md"
+        assert history[0][2] == "created"
+        assert history[0][4] == "Generated 3 pages"
 
         manager.close()
 
@@ -540,16 +550,16 @@ class TestSyncHistory:
         ]
 
         for path, action, details in actions:
-            manager.log_sync_action(path, action, details)
+            manager.log_sync_action("test-vault", path, action, details)
             time.sleep(0.01)  # Small delay to ensure different timestamps
 
         history = manager.get_recent_history(limit=10)
         assert len(history) == 3
 
-        # Most recent should be first
-        assert history[0][0] == "file3.md"
-        assert history[1][0] == "file2.md"
-        assert history[2][0] == "file1.md"
+        # Most recent should be first (history format: vault_name, path, action, timestamp, details)
+        assert history[0][1] == "file3.md"
+        assert history[1][1] == "file2.md"
+        assert history[2][1] == "file1.md"
 
         manager.close()
 
@@ -561,7 +571,7 @@ class TestSyncHistory:
 
         # Log many actions
         for i in range(20):
-            manager.log_sync_action(f"file{i}.md", "created", "")
+            manager.log_sync_action("test-vault", f"file{i}.md", "created", "")
             time.sleep(0.001)  # Small delay to ensure different timestamps
 
         # Request only 5 most recent
@@ -569,7 +579,7 @@ class TestSyncHistory:
         assert len(history) == 5
 
         # Should be most recent (highest numbers)
-        paths = [h[0] for h in history]
+        paths = [h[1] for h in history]  # h[1] is the path
         assert "file19.md" in paths
         assert "file18.md" in paths
         assert "file0.md" not in paths
@@ -593,6 +603,7 @@ class TestStats:
 
         for i in range(3):
             record = SyncRecord(
+                vault_name="test-vault",
                 obsidian_path=f"file{i}.md",
                 remarkable_uuid=f"uuid-{i}",
                 content_hash=f"hash-{i}",
@@ -602,7 +613,7 @@ class TestStats:
             )
             manager.update_file_state(record)
 
-        stats = manager.get_stats()
+        stats = manager.get_stats(vault_name="test-vault")
         assert stats == {"synced": 3}
 
         manager.close()
@@ -621,6 +632,7 @@ class TestStats:
         for status, num in statuses.items():
             for i in range(num):
                 record = SyncRecord(
+                    vault_name="test-vault",
                     obsidian_path=f"file{count}.md",
                     remarkable_uuid=f"uuid-{count}",
                     content_hash=f"hash-{count}",
@@ -631,7 +643,7 @@ class TestStats:
                 manager.update_file_state(record)
                 count += 1
 
-        stats = manager.get_stats()
+        stats = manager.get_stats(vault_name="test-vault")
         assert stats == statuses
 
         manager.close()
@@ -647,6 +659,7 @@ class TestReset:
         # Add various data
         manager.update_file_state(
             SyncRecord(
+                vault_name="test-vault",
                 obsidian_path="file.md",
                 remarkable_uuid="uuid",
                 content_hash="hash",
@@ -655,15 +668,15 @@ class TestReset:
                 status="synced",
             )
         )
-        manager.create_folder_mapping("folder", "folder-uuid")
-        manager.log_sync_action("file.md", "created", "")
+        manager.create_folder_mapping("test-vault", "folder", "folder-uuid")
+        manager.log_sync_action("test-vault", "file.md", "created", "")
 
         # Reset
         manager.reset()
 
         # Verify all data is gone
-        assert manager.get_file_state("file.md") is None
-        assert manager.get_folder_uuid("folder") is None
+        assert manager.get_file_state("test-vault", "file.md") is None
+        assert manager.get_folder_uuid("test-vault", "folder") is None
         assert len(manager.get_recent_history()) == 0
         assert manager.get_stats() == {}
 

@@ -36,12 +36,16 @@ def config_file(tmp_path: Path, temp_vault: Path) -> Path:
     config_path = tmp_path / "config.toml"
     config_content = f"""
 [paths]
-obsidian_vault = "{temp_vault}"
 state_database = "{tmp_path / 'state.db'}"
 
-[sync]
+[[vaults]]
+name = "test-vault"
+path = "{temp_vault}"
+remarkable_folder = "Test"
 include_patterns = ["**/*.md"]
 exclude_patterns = [".obsidian/**"]
+
+[sync]
 debounce_seconds = 1
 
 [cloud]
@@ -430,6 +434,7 @@ class TestSyncCommandErrors:
         from rock_paper_sync.converter import SyncResult
 
         mock_result = SyncResult(
+            vault_name="test-vault",
             path=temp_vault / "test.md",
             success=False,
             error="Simulated error",

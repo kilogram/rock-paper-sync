@@ -24,6 +24,7 @@ class StateError(Exception):
 class SyncRecord:
     """Record of a synced file's state."""
 
+    vault_name: str
     obsidian_path: str
     remarkable_uuid: str
     content_hash: str
@@ -35,7 +36,7 @@ class SyncRecord:
 class StateManager:
     """Manages sync state using SQLite database."""
 
-    SCHEMA_VERSION = 1
+    SCHEMA_VERSION = 2
 
     def __init__(self, db_path: Path) -> None:
         """Initialize state manager with database at given path.
@@ -61,25 +62,30 @@ class StateManager:
         with self.conn:
             self.conn.executescript(
                 """
-                -- File sync state
+                -- File sync state (vault-aware)
                 CREATE TABLE IF NOT EXISTS sync_state (
-                    obsidian_path TEXT PRIMARY KEY,
+                    vault_name TEXT NOT NULL,
+                    obsidian_path TEXT NOT NULL,
                     remarkable_uuid TEXT NOT NULL,
                     content_hash TEXT NOT NULL,
                     last_sync_time INTEGER NOT NULL,
                     page_count INTEGER NOT NULL,
-                    status TEXT NOT NULL DEFAULT 'synced'
+                    status TEXT NOT NULL DEFAULT 'synced',
+                    PRIMARY KEY (vault_name, obsidian_path)
                 );
 
-                -- Folder mappings (Obsidian folder path -> reMarkable UUID)
+                -- Folder mappings (vault-aware: Obsidian folder path -> reMarkable UUID)
                 CREATE TABLE IF NOT EXISTS folder_mapping (
-                    obsidian_folder TEXT PRIMARY KEY,
-                    remarkable_uuid TEXT NOT NULL
+                    vault_name TEXT NOT NULL,
+                    obsidian_folder TEXT NOT NULL,
+                    remarkable_uuid TEXT NOT NULL,
+                    PRIMARY KEY (vault_name, obsidian_folder)
                 );
 
-                -- Sync history for debugging and auditing
+                -- Sync history for debugging and auditing (vault-aware)
                 CREATE TABLE IF NOT EXISTS sync_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    vault_name TEXT NOT NULL,
                     obsidian_path TEXT NOT NULL,
                     action TEXT NOT NULL,  -- 'created', 'updated', 'deleted', 'error'
                     timestamp INTEGER NOT NULL,
@@ -92,21 +98,23 @@ class StateManager:
                 );
 
                 -- Insert schema version if not exists
-                INSERT OR IGNORE INTO schema_version (version) VALUES (1);
+                INSERT OR IGNORE INTO schema_version (version) VALUES (2);
                 """
             )
 
-    def get_file_state(self, obsidian_path: str) -> Optional[SyncRecord]:
+    def get_file_state(self, vault_name: str, obsidian_path: str) -> Optional[SyncRecord]:
         """Get sync state for a file.
 
         Args:
+            vault_name: Name of the vault
             obsidian_path: Relative path of file in Obsidian vault
 
         Returns:
             SyncRecord if file has been synced before, None otherwise
         """
         cursor = self.conn.execute(
-            "SELECT * FROM sync_state WHERE obsidian_path = ?", (obsidian_path,)
+            "SELECT * FROM sync_state WHERE vault_name = ? AND obsidian_path = ?",
+            (vault_name, obsidian_path),
         )
         row = cursor.fetchone()
         if row:
@@ -126,10 +134,11 @@ class StateManager:
             self.conn.execute(
                 """
                 INSERT OR REPLACE INTO sync_state
-                (obsidian_path, remarkable_uuid, content_hash, last_sync_time, page_count, status)
-                VALUES (?, ?, ?, ?, ?, ?)
+                (vault_name, obsidian_path, remarkable_uuid, content_hash, last_sync_time, page_count, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
+                    record.vault_name,
                     record.obsidian_path,
                     record.remarkable_uuid,
                     record.content_hash,
@@ -138,57 +147,69 @@ class StateManager:
                     record.status,
                 ),
             )
-        logger.debug(f"Updated sync state for {record.obsidian_path}")
+        logger.debug(f"Updated sync state for {record.vault_name}:{record.obsidian_path}")
 
-    def delete_file_state(self, obsidian_path: str) -> None:
+    def delete_file_state(self, vault_name: str, obsidian_path: str) -> None:
         """Delete sync state for a file.
 
         Args:
+            vault_name: Name of the vault
             obsidian_path: Relative path of file in Obsidian vault
         """
         with self.conn:
             self.conn.execute(
-                "DELETE FROM sync_state WHERE obsidian_path = ?", (obsidian_path,)
+                "DELETE FROM sync_state WHERE vault_name = ? AND obsidian_path = ?",
+                (vault_name, obsidian_path),
             )
-        logger.debug(f"Deleted sync state for {obsidian_path}")
+        logger.debug(f"Deleted sync state for {vault_name}:{obsidian_path}")
 
-    def get_folder_uuid(self, folder_path: str) -> Optional[str]:
+    def get_folder_uuid(self, vault_name: str, folder_path: str) -> Optional[str]:
         """Get reMarkable UUID for an Obsidian folder.
 
         Args:
+            vault_name: Name of the vault
             folder_path: Relative path of folder in Obsidian vault
 
         Returns:
             UUID string if folder has been mapped, None otherwise
         """
         cursor = self.conn.execute(
-            "SELECT remarkable_uuid FROM folder_mapping WHERE obsidian_folder = ?",
-            (folder_path,),
+            "SELECT remarkable_uuid FROM folder_mapping WHERE vault_name = ? AND obsidian_folder = ?",
+            (vault_name, folder_path),
         )
         row = cursor.fetchone()
         return row[0] if row else None
 
-    def create_folder_mapping(self, folder_path: str, uuid: str) -> None:
+    def create_folder_mapping(self, vault_name: str, folder_path: str, uuid: str) -> None:
         """Store folder→UUID mapping.
 
         Args:
+            vault_name: Name of the vault
             folder_path: Relative path of folder in Obsidian vault
             uuid: reMarkable UUID for this folder
         """
         with self.conn:
             self.conn.execute(
-                "INSERT OR REPLACE INTO folder_mapping (obsidian_folder, remarkable_uuid) VALUES (?, ?)",
-                (folder_path, uuid),
+                "INSERT OR REPLACE INTO folder_mapping (vault_name, obsidian_folder, remarkable_uuid) VALUES (?, ?, ?)",
+                (vault_name, folder_path, uuid),
             )
-        logger.debug(f"Created folder mapping: {folder_path} -> {uuid}")
+        logger.debug(f"Created folder mapping: {vault_name}:{folder_path} -> {uuid}")
 
-    def get_all_synced_files(self) -> list[SyncRecord]:
+    def get_all_synced_files(self, vault_name: Optional[str] = None) -> list[SyncRecord]:
         """Get all files in sync state.
 
+        Args:
+            vault_name: Optional vault name to filter by. If None, returns all vaults.
+
         Returns:
-            List of all SyncRecords in database
+            List of all SyncRecords in database (optionally filtered by vault)
         """
-        cursor = self.conn.execute("SELECT * FROM sync_state")
+        if vault_name:
+            cursor = self.conn.execute(
+                "SELECT * FROM sync_state WHERE vault_name = ?", (vault_name,)
+            )
+        else:
+            cursor = self.conn.execute("SELECT * FROM sync_state")
         return [SyncRecord(**dict(row)) for row in cursor.fetchall()]
 
     def compute_file_hash(self, file_path: Path) -> str:
@@ -216,13 +237,18 @@ class StateManager:
             raise StateError(f"Cannot compute hash for {file_path}: {e}")
 
     def find_changed_files(
-        self, vault_path: Path, include_patterns: list[str], exclude_patterns: list[str]
+        self,
+        vault_name: str,
+        vault_path: Path,
+        include_patterns: list[str],
+        exclude_patterns: list[str],
     ) -> list[Path]:
         """Find files that need syncing based on content hash.
 
         Compares current file hashes with stored hashes to identify changes.
 
         Args:
+            vault_name: Name of the vault
             vault_path: Path to Obsidian vault root
             include_patterns: Glob patterns for files to include
             exclude_patterns: Glob patterns for files to exclude
@@ -247,25 +273,28 @@ class StateManager:
                 current_hash = self.compute_file_hash(file_path)
 
                 # Get existing state
-                state = self.get_file_state(relative_path)
+                state = self.get_file_state(vault_name, relative_path)
 
                 # File is new or changed if no state or hash differs
                 if state is None:
-                    logger.debug(f"New file: {relative_path}")
+                    logger.debug(f"New file: {vault_name}:{relative_path}")
                     changed.append(file_path)
                 elif state.content_hash != current_hash:
-                    logger.debug(f"Changed file: {relative_path}")
+                    logger.debug(f"Changed file: {vault_name}:{relative_path}")
                     changed.append(file_path)
 
-        logger.info(f"Found {len(changed)} changed files")
+        logger.info(f"Found {len(changed)} changed files in vault '{vault_name}'")
         return changed
 
-    def find_deleted_files(self, vault_path: Path) -> list[tuple[str, str]]:
+    def find_deleted_files(
+        self, vault_name: str, vault_path: Path
+    ) -> list[tuple[str, str]]:
         """Find files that have been deleted from vault but still exist in state.
 
         Returns list of (relative_path, remarkable_uuid) tuples for deleted files.
 
         Args:
+            vault_name: Name of the vault
             vault_path: Path to Obsidian vault root
 
         Returns:
@@ -274,7 +303,8 @@ class StateManager:
         deleted: list[tuple[str, str]] = []
 
         cursor = self.conn.execute(
-            "SELECT obsidian_path, remarkable_uuid FROM sync_state"
+            "SELECT obsidian_path, remarkable_uuid FROM sync_state WHERE vault_name = ?",
+            (vault_name,),
         )
         for row in cursor.fetchall():
             relative_path = row[0]
@@ -282,10 +312,10 @@ class StateManager:
             absolute_path = vault_path / relative_path
 
             if not absolute_path.exists():
-                logger.debug(f"Deleted file: {relative_path} (UUID: {uuid})")
+                logger.debug(f"Deleted file: {vault_name}:{relative_path} (UUID: {uuid})")
                 deleted.append((relative_path, uuid))
 
-        logger.info(f"Found {len(deleted)} deleted files")
+        logger.info(f"Found {len(deleted)} deleted files in vault '{vault_name}'")
         return deleted
 
     def _is_excluded(
@@ -308,47 +338,67 @@ class StateManager:
         return False
 
     def log_sync_action(
-        self, path: str, action: str, details: str = ""
+        self, vault_name: str, path: str, action: str, details: str = ""
     ) -> None:
         """Record sync action in history.
 
         Args:
+            vault_name: Name of the vault
             path: File path (relative to vault)
             action: Action type ('created', 'updated', 'deleted', 'error')
             details: Additional information about the action
         """
         with self.conn:
             self.conn.execute(
-                "INSERT INTO sync_history (obsidian_path, action, timestamp, details) VALUES (?, ?, ?, ?)",
-                (path, action, int(time.time()), details),
+                "INSERT INTO sync_history (vault_name, obsidian_path, action, timestamp, details) VALUES (?, ?, ?, ?, ?)",
+                (vault_name, path, action, int(time.time()), details),
             )
-        logger.debug(f"Logged action: {action} for {path}")
+        logger.debug(f"Logged action: {action} for {vault_name}:{path}")
 
-    def get_recent_history(self, limit: int = 10) -> list[tuple[str, str, int, str]]:
+    def get_recent_history(
+        self, limit: int = 10, vault_name: Optional[str] = None
+    ) -> list[tuple[str, str, str, int, str]]:
         """Get recent sync history entries.
 
         Args:
             limit: Maximum number of entries to return
+            vault_name: Optional vault name to filter by
 
         Returns:
-            List of tuples: (obsidian_path, action, timestamp, details)
+            List of tuples: (vault_name, obsidian_path, action, timestamp, details)
         """
-        cursor = self.conn.execute(
-            "SELECT obsidian_path, action, timestamp, details FROM sync_history "
-            "ORDER BY timestamp DESC, id DESC LIMIT ?",
-            (limit,),
-        )
+        if vault_name:
+            cursor = self.conn.execute(
+                "SELECT vault_name, obsidian_path, action, timestamp, details FROM sync_history "
+                "WHERE vault_name = ? ORDER BY timestamp DESC, id DESC LIMIT ?",
+                (vault_name, limit),
+            )
+        else:
+            cursor = self.conn.execute(
+                "SELECT vault_name, obsidian_path, action, timestamp, details FROM sync_history "
+                "ORDER BY timestamp DESC, id DESC LIMIT ?",
+                (limit,),
+            )
         return cursor.fetchall()
 
-    def get_stats(self) -> dict[str, int]:
+    def get_stats(self, vault_name: Optional[str] = None) -> dict[str, int]:
         """Get sync statistics.
+
+        Args:
+            vault_name: Optional vault name to filter by
 
         Returns:
             Dictionary with counts by status: {'synced': 10, 'pending': 2, 'error': 1}
         """
-        cursor = self.conn.execute(
-            "SELECT status, COUNT(*) FROM sync_state GROUP BY status"
-        )
+        if vault_name:
+            cursor = self.conn.execute(
+                "SELECT status, COUNT(*) FROM sync_state WHERE vault_name = ? GROUP BY status",
+                (vault_name,),
+            )
+        else:
+            cursor = self.conn.execute(
+                "SELECT status, COUNT(*) FROM sync_state GROUP BY status"
+            )
         return {row[0]: row[1] for row in cursor.fetchall()}
 
     def reset(self) -> None:
