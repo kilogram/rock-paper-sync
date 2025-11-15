@@ -38,10 +38,14 @@ class RmCloudSync:
                 "Device not registered. Run: rock-paper-sync register <code>"
             )
 
-        # Create Sync v3 client
+        # Get user token from device token
+        logger.debug("Getting user token from device token")
+        user_token = self.client.get_user_token()
+
+        # Create Sync v3 client with user token
         self.sync_client = SyncV3Client(
             base_url=base_url,
-            device_token=self.client.credentials.device_token,
+            device_token=user_token,  # Actually a user token, not device token
         )
 
         logger.info(f"rm_cloud Sync v3 initialized")
