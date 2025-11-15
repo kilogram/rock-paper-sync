@@ -17,7 +17,6 @@ import rmscene
 
 from .config import LayoutConfig
 from .parser import BlockType, ContentBlock, FormatStyle, MarkdownDocument, TextFormat
-from .rm_filesystem import RemarkableFilesystem
 
 logger = logging.getLogger("rock_paper_sync.generator")
 
@@ -339,36 +338,3 @@ class RemarkableGenerator:
 
         return rm_bytes
 
-    def write_document_files(
-        self, doc: RemarkableDocument, output_dir: Path
-    ) -> None:
-        """Write all document files to output directory.
-
-        Uses RemarkableFilesystem abstraction to handle file structure,
-        page cleanup, and atomic operations.
-
-        Args:
-            doc: RemarkableDocument to write
-            output_dir: Base output directory
-
-        Raises:
-            OSError: If file writing fails
-        """
-        # Use filesystem abstraction to manage file structure
-        filesystem = RemarkableFilesystem(output_dir)
-
-        # Generate binary content for all pages
-        pages = [
-            (page.uuid, self.generate_rm_file(page))
-            for page in doc.pages
-        ]
-
-        # Write document using filesystem abstraction
-        # This handles: metadata, content, local files, page cleanup, etc.
-        filesystem.write_document(
-            doc_uuid=doc.uuid,
-            visible_name=doc.visible_name,
-            parent_uuid=doc.parent_uuid,
-            modified_time=doc.modified_time,
-            pages=pages,
-        )

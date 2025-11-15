@@ -277,31 +277,31 @@ base_url = "http://localhost:3000"  # Change to https://webapp-prod.cloud.remark
 
 @main.command()
 @click.option(
-    "--url",
-    "-u",
-    default="http://localhost:3000",
-    help="rm_cloud base URL",
-)
-@click.option(
     "--device-id",
     "-d",
     default="rock-paper-sync-001",
     help="Unique device identifier",
 )
 @click.argument("code")
-def register(url: str, device_id: str, code: str) -> None:
-    """Register as a device with rm_cloud.
+@click.pass_context
+def register(ctx: click.Context, device_id: str, code: str) -> None:
+    """Register as a device with reMarkable cloud.
 
     CODE is the one-time registration code from rm_cloud web UI.
 
     Steps to get a code:
-    1. Open rm_cloud web UI (usually http://localhost:3000)
+    1. Open rm_cloud web UI (configured in your config.toml)
     2. Go to Settings > Connect a device
     3. Copy the one-time code
     4. Run: rock-paper-sync register <code>
 
     This command only needs to be run once. Credentials are saved locally.
+    Uses cloud.base_url from your config file.
     """
+    # Load config to get cloud URL
+    config: AppConfig = ctx.obj["config"]
+    url = config.cloud.base_url
+
     client = RmCloudClient(base_url=url)
 
     if client.is_registered():
@@ -320,20 +320,20 @@ def register(url: str, device_id: str, code: str) -> None:
 
 
 @main.command()
-@click.option(
-    "--url",
-    "-u",
-    default="http://localhost:3000",
-    help="rm_cloud base URL",
-)
-def trigger_sync(url: str) -> None:
+@click.pass_context
+def trigger_sync(ctx: click.Context) -> None:
     """Manually trigger sync notification to xochitl.
 
     Sends a sync-complete notification to all connected devices,
     telling xochitl to reload and display any new/updated documents.
 
     Requires device registration (run 'register' command first).
+    Uses cloud.base_url from your config file.
     """
+    # Load config to get cloud URL
+    config: AppConfig = ctx.obj["config"]
+    url = config.cloud.base_url
+
     client = RmCloudClient(base_url=url)
 
     if not client.is_registered():
