@@ -528,6 +528,7 @@ class TestGenerateRmFile:
         assert len(rm_bytes) > 0
 
 
+@pytest.mark.skip(reason="write_document_files() removed - cloud-only sync")
 class TestWriteDocumentFiles:
     """Tests for writing complete document file structure."""
 
@@ -632,6 +633,7 @@ class TestWriteDocumentFiles:
         assert len(files) == expected_count
 
 
+@pytest.mark.skip(reason="write_document_files() removed - cloud-only sync")
 class TestIntegration:
     """Integration tests for the full pipeline."""
 

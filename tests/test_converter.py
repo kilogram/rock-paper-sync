@@ -13,9 +13,9 @@ from rock_paper_sync.state import StateManager
 class TestSyncEngine:
     """Test sync engine orchestration."""
 
-    def test_init(self, sample_config: AppConfig, state_manager: StateManager) -> None:
+    def test_init(self, sample_config: AppConfig, state_manager: StateManager, mock_cloud_sync) -> None:
         """Test sync engine initialization."""
-        engine = SyncEngine(sample_config, state_manager)
+        engine = SyncEngine(sample_config, state_manager, cloud_sync=mock_cloud_sync)
         assert engine.config == sample_config
         assert engine.state == state_manager
         assert engine.generator is not None
@@ -25,13 +25,14 @@ class TestSyncEngine:
         sample_config: AppConfig,
         state_manager: StateManager,
         temp_vault: Path,
+        mock_cloud_sync,
     ) -> None:
         """Test successful file sync."""
         # Create test markdown file
         test_file = temp_vault / "test.md"
         test_file.write_text("# Test\n\nThis is a test document.")
 
-        engine = SyncEngine(sample_config, state_manager)
+        engine = SyncEngine(sample_config, state_manager, cloud_sync=mock_cloud_sync)
         result = engine.sync_file(test_file)
 
         assert result.success
@@ -39,20 +40,15 @@ class TestSyncEngine:
         assert result.page_count == 1
         assert result.error is None
 
-        # Verify output files exist
-        output_dir = sample_config.sync.remarkable_output
-        doc_dir = output_dir / result.remarkable_uuid
-        assert doc_dir.exists()
-        # Metadata and content should be at root level
-        assert (output_dir / f"{result.remarkable_uuid}.metadata").exists()
-        assert (output_dir / f"{result.remarkable_uuid}.content").exists()
+        # Verify cloud sync was called
+        assert mock_cloud_sync.upload_document.called
 
     def test_sync_file_not_found(
-        self, sample_config: AppConfig, state_manager: StateManager, temp_vault: Path
+        self, sample_config: AppConfig, state_manager: StateManager, temp_vault: Path, mock_cloud_sync
     ) -> None:
         """Test sync fails gracefully for non-existent file."""
         nonexistent = temp_vault / "nonexistent.md"
-        engine = SyncEngine(sample_config, state_manager)
+        engine = SyncEngine(sample_config, state_manager, cloud_sync=mock_cloud_sync)
 
         result = engine.sync_file(nonexistent)
 
@@ -61,13 +57,13 @@ class TestSyncEngine:
         assert "not found" in result.error.lower()
 
     def test_sync_file_outside_vault(
-        self, sample_config: AppConfig, state_manager: StateManager, tmp_path: Path
+        self, sample_config: AppConfig, state_manager: StateManager, tmp_path: Path, mock_cloud_sync
     ) -> None:
         """Test sync fails for file outside vault."""
         outside_file = tmp_path / "outside.md"
         outside_file.write_text("# Outside")
 
-        engine = SyncEngine(sample_config, state_manager)
+        engine = SyncEngine(sample_config, state_manager, cloud_sync=mock_cloud_sync)
         result = engine.sync_file(outside_file)
 
         assert not result.success
@@ -79,12 +75,13 @@ class TestSyncEngine:
         sample_config: AppConfig,
         state_manager: StateManager,
         temp_vault: Path,
+        mock_cloud_sync,
     ) -> None:
         """Test unchanged files are skipped."""
         test_file = temp_vault / "test.md"
         test_file.write_text("# Test\n\nContent")
 
-        engine = SyncEngine(sample_config, state_manager)
+        engine = SyncEngine(sample_config, state_manager, cloud_sync=mock_cloud_sync)
 
         # First sync
         result1 = engine.sync_file(test_file)
@@ -101,12 +98,13 @@ class TestSyncEngine:
         sample_config: AppConfig,
         state_manager: StateManager,
         temp_vault: Path,
+        mock_cloud_sync,
     ) -> None:
         """Test changed files are re-synced."""
         test_file = temp_vault / "test.md"
         test_file.write_text("# Test\n\nOriginal content")
 
-        engine = SyncEngine(sample_config, state_manager)
+        engine = SyncEngine(sample_config, state_manager, cloud_sync=mock_cloud_sync)
 
         # First sync
         result1 = engine.sync_file(test_file)
@@ -126,6 +124,7 @@ class TestSyncEngine:
         sample_config: AppConfig,
         state_manager: StateManager,
         temp_vault: Path,
+        mock_cloud_sync,
     ) -> None:
         """Test syncing all changed files."""
         # Create multiple test files
@@ -134,7 +133,7 @@ class TestSyncEngine:
         file1.write_text("# Test 1")
         file2.write_text("# Test 2")
 
-        engine = SyncEngine(sample_config, state_manager)
+        engine = SyncEngine(sample_config, state_manager, cloud_sync=mock_cloud_sync)
         results = engine.sync_all_changed()
 
         assert len(results) == 2
@@ -145,6 +144,7 @@ class TestSyncEngine:
         sample_config: AppConfig,
         state_manager: StateManager,
         temp_vault: Path,
+        mock_cloud_sync,
     ) -> None:
         """Test sync continues after individual file errors."""
         # Create one good file and one that will cause an error
@@ -155,7 +155,7 @@ class TestSyncEngine:
         bad_file = temp_vault / "bad.md"
         bad_file.write_text("# Bad")
 
-        engine = SyncEngine(sample_config, state_manager)
+        engine = SyncEngine(sample_config, state_manager, cloud_sync=mock_cloud_sync)
 
         # First sync both
         results1 = engine.sync_all_changed()
@@ -181,6 +181,7 @@ class TestSyncEngine:
         sample_config: AppConfig,
         state_manager: StateManager,
         temp_vault: Path,
+        mock_cloud_sync,
     ) -> None:
         """Test folder hierarchy creation for single level."""
         # Create nested file
@@ -189,19 +190,19 @@ class TestSyncEngine:
         file_path = folder / "test.md"
         file_path.write_text("# Test")
 
-        engine = SyncEngine(sample_config, state_manager)
+        engine = SyncEngine(sample_config, state_manager, cloud_sync=mock_cloud_sync)
         parent_uuid = engine.ensure_folder_hierarchy(file_path)
 
         assert parent_uuid != ""
-        # Verify folder metadata exists at root level (folders don't have subdirectories)
-        output_dir = sample_config.sync.remarkable_output
-        assert (output_dir / f"{parent_uuid}.metadata").exists()
+        # Verify folder was uploaded via cloud sync
+        assert mock_cloud_sync.upload_folder.called
 
     def test_ensure_folder_hierarchy_nested(
         self,
         sample_config: AppConfig,
         state_manager: StateManager,
         temp_vault: Path,
+        mock_cloud_sync,
     ) -> None:
         """Test folder hierarchy creation for nested folders."""
         # Create deeply nested file
@@ -210,7 +211,7 @@ class TestSyncEngine:
         file_path = folder / "test.md"
         file_path.write_text("# Test")
 
-        engine = SyncEngine(sample_config, state_manager)
+        engine = SyncEngine(sample_config, state_manager, cloud_sync=mock_cloud_sync)
         parent_uuid = engine.ensure_folder_hierarchy(file_path)
 
         assert parent_uuid != ""
@@ -225,12 +226,13 @@ class TestSyncEngine:
         sample_config: AppConfig,
         state_manager: StateManager,
         temp_vault: Path,
+        mock_cloud_sync,
     ) -> None:
         """Test files at vault root have empty parent UUID."""
         file_path = temp_vault / "root.md"
         file_path.write_text("# Root")
 
-        engine = SyncEngine(sample_config, state_manager)
+        engine = SyncEngine(sample_config, state_manager, cloud_sync=mock_cloud_sync)
         parent_uuid = engine.ensure_folder_hierarchy(file_path)
 
         assert parent_uuid == ""
@@ -240,6 +242,7 @@ class TestSyncEngine:
         sample_config: AppConfig,
         state_manager: StateManager,
         temp_vault: Path,
+        mock_cloud_sync,
     ) -> None:
         """Test folder hierarchy reuses existing folder UUIDs."""
         # Create folder structure
@@ -250,7 +253,7 @@ class TestSyncEngine:
         file1.write_text("# Test 1")
         file2.write_text("# Test 2")
 
-        engine = SyncEngine(sample_config, state_manager)
+        engine = SyncEngine(sample_config, state_manager, cloud_sync=mock_cloud_sync)
 
         # First file creates folder
         parent1 = engine.ensure_folder_hierarchy(file1)
@@ -265,12 +268,13 @@ class TestSyncEngine:
         sample_config: AppConfig,
         state_manager: StateManager,
         temp_vault: Path,
+        mock_cloud_sync,
     ) -> None:
         """Test state database is updated after sync."""
         test_file = temp_vault / "test.md"
         test_file.write_text("# Test")
 
-        engine = SyncEngine(sample_config, state_manager)
+        engine = SyncEngine(sample_config, state_manager, cloud_sync=mock_cloud_sync)
         result = engine.sync_file(test_file)
 
         assert result.success
@@ -286,12 +290,13 @@ class TestSyncEngine:
         sample_config: AppConfig,
         state_manager: StateManager,
         temp_vault: Path,
+        mock_cloud_sync,
     ) -> None:
         """Test sync actions are logged to history."""
         test_file = temp_vault / "test.md"
         test_file.write_text("# Test")
 
-        engine = SyncEngine(sample_config, state_manager)
+        engine = SyncEngine(sample_config, state_manager, cloud_sync=mock_cloud_sync)
         engine.sync_file(test_file)
 
         # Check history
@@ -307,13 +312,14 @@ class TestSyncEngine:
         sample_config: AppConfig,
         state_manager: StateManager,
         temp_vault: Path,
+        mock_cloud_sync,
         mocker,
     ) -> None:
         """Test that exceptions during sync are caught and logged."""
         test_file = temp_vault / "test.md"
         test_file.write_text("# Test")
 
-        engine = SyncEngine(sample_config, state_manager)
+        engine = SyncEngine(sample_config, state_manager, cloud_sync=mock_cloud_sync)
 
         # Mock the generator to raise an exception
         mocker.patch.object(

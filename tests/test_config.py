@@ -56,7 +56,9 @@ class TestLoadConfig:
 
         # Check paths were expanded
         assert config.sync.obsidian_vault == temp_vault
-        assert config.sync.remarkable_output == temp_output
+
+        # Check cloud config
+        assert config.cloud.base_url == "http://localhost:3000"
 
         # Check default values
         assert config.sync.include_patterns == ["**/*.md"]
@@ -95,8 +97,10 @@ class TestLoadConfig:
         config_path.write_text(f"""
 [paths]
 obsidian_vault = "{temp_vault}"
-remarkable_output = "{temp_output}"
 state_database = "{tmp_path / 'state.db'}"
+
+[cloud]
+base_url = "http://localhost:3000"
 
 [layout]
 lines_per_page = 45
@@ -117,8 +121,10 @@ file = "{tmp_path / 'sync.log'}"
         config_path.write_text(f"""
 [paths]
 obsidian_vault = "{temp_vault}"
-remarkable_output = "{temp_output}"
 state_database = "{tmp_path / 'state.db'}"
+
+[cloud]
+base_url = "http://localhost:3000"
 
 [sync]
 include_patterns = ["**/*.md"]
@@ -137,8 +143,10 @@ file = "{tmp_path / 'sync.log'}"
         config_path.write_text(f"""
 [paths]
 obsidian_vault = "{temp_vault}"
-remarkable_output = "{temp_output}"
 state_database = "{tmp_path / 'state.db'}"
+
+[cloud]
+base_url = "http://localhost:3000"
 
 [sync]
 include_patterns = ["**/*.md"]
@@ -173,12 +181,12 @@ class TestValidateConfig:
         config = AppConfig(
             sync=SyncConfig(
                 obsidian_vault=nonexistent_vault,
-                remarkable_output=config.sync.remarkable_output,
                 state_database=config.sync.state_database,
                 include_patterns=config.sync.include_patterns,
                 exclude_patterns=config.sync.exclude_patterns,
                 debounce_seconds=config.sync.debounce_seconds,
             ),
+            cloud=config.cloud,
             layout=config.layout,
             log_level=config.log_level,
             log_file=config.log_file,
@@ -197,12 +205,12 @@ class TestValidateConfig:
         config = AppConfig(
             sync=SyncConfig(
                 obsidian_vault=file_path,
-                remarkable_output=config.sync.remarkable_output,
                 state_database=config.sync.state_database,
                 include_patterns=config.sync.include_patterns,
                 exclude_patterns=config.sync.exclude_patterns,
                 debounce_seconds=config.sync.debounce_seconds,
             ),
+            cloud=config.cloud,
             layout=config.layout,
             log_level=config.log_level,
             log_file=config.log_file,
@@ -211,6 +219,7 @@ class TestValidateConfig:
         with pytest.raises(ConfigError, match="not a directory"):
             validate_config(config)
 
+    @pytest.mark.skip(reason="remarkable_output field removed - cloud-only sync")
     def test_validate_nonexistent_output(self, valid_config_toml: Path, tmp_path: Path) -> None:
         """Test that nonexistent output directory fails validation."""
         config = load_config(valid_config_toml)
@@ -242,12 +251,12 @@ class TestValidateConfig:
         config = AppConfig(
             sync=SyncConfig(
                 obsidian_vault=config.sync.obsidian_vault,
-                remarkable_output=config.sync.remarkable_output,
                 state_database=new_db_path,
                 include_patterns=config.sync.include_patterns,
                 exclude_patterns=config.sync.exclude_patterns,
                 debounce_seconds=config.sync.debounce_seconds,
             ),
+            cloud=config.cloud,
             layout=config.layout,
             log_level=config.log_level,
             log_file=config.log_file,
@@ -266,6 +275,7 @@ class TestValidateConfig:
 
         config = AppConfig(
             sync=config.sync,
+            cloud=config.cloud,
             layout=config.layout,
             log_level=config.log_level,
             log_file=new_log_path,
@@ -282,12 +292,12 @@ class TestValidateConfig:
         config = AppConfig(
             sync=SyncConfig(
                 obsidian_vault=config.sync.obsidian_vault,
-                remarkable_output=config.sync.remarkable_output,
                 state_database=config.sync.state_database,
                 include_patterns=config.sync.include_patterns,
                 exclude_patterns=config.sync.exclude_patterns,
                 debounce_seconds=-1,
             ),
+            cloud=config.cloud,
             layout=config.layout,
             log_level=config.log_level,
             log_file=config.log_file,
@@ -301,6 +311,7 @@ class TestValidateConfig:
         config = load_config(valid_config_toml)
         config = AppConfig(
             sync=config.sync,
+            cloud=config.cloud,
             layout=LayoutConfig(
                 lines_per_page=0,
                 margin_top=config.layout.margin_top,
@@ -320,6 +331,7 @@ class TestValidateConfig:
         config = load_config(valid_config_toml)
         config = AppConfig(
             sync=config.sync,
+            cloud=config.cloud,
             layout=LayoutConfig(
                 lines_per_page=config.layout.lines_per_page,
                 margin_top=-10,
@@ -339,6 +351,7 @@ class TestValidateConfig:
         config = load_config(valid_config_toml)
         config = AppConfig(
             sync=config.sync,
+            cloud=config.cloud,
             layout=config.layout,
             log_level="invalid_level",
             log_file=config.log_file,
@@ -353,12 +366,12 @@ class TestValidateConfig:
         config = AppConfig(
             sync=SyncConfig(
                 obsidian_vault=config.sync.obsidian_vault,
-                remarkable_output=config.sync.remarkable_output,
                 state_database=config.sync.state_database,
                 include_patterns=[],
                 exclude_patterns=config.sync.exclude_patterns,
                 debounce_seconds=config.sync.debounce_seconds,
             ),
+            cloud=config.cloud,
             layout=config.layout,
             log_level=config.log_level,
             log_file=config.log_file,
@@ -367,6 +380,7 @@ class TestValidateConfig:
         with pytest.raises(ConfigError, match="include_patterns cannot be empty"):
             validate_config(config)
 
+    @pytest.mark.skip(reason="remarkable_output field removed - cloud-only sync")
     def test_missing_remarkable_output(self, config_samples_dir: Path) -> None:
         """Test that missing remarkable_output field raises ConfigError."""
         config_path = config_samples_dir / "missing_output_path.toml"
@@ -409,6 +423,7 @@ class TestValidateConfig:
         config = load_config(valid_config_toml)
         config = AppConfig(
             sync=config.sync,
+            cloud=config.cloud,
             layout=LayoutConfig(
                 lines_per_page=config.layout.lines_per_page,
                 margin_top=config.layout.margin_top,
@@ -428,6 +443,7 @@ class TestValidateConfig:
         config = load_config(valid_config_toml)
         config = AppConfig(
             sync=config.sync,
+            cloud=config.cloud,
             layout=LayoutConfig(
                 lines_per_page=config.layout.lines_per_page,
                 margin_top=config.layout.margin_top,
@@ -447,6 +463,7 @@ class TestValidateConfig:
         config = load_config(valid_config_toml)
         config = AppConfig(
             sync=config.sync,
+            cloud=config.cloud,
             layout=LayoutConfig(
                 lines_per_page=config.layout.lines_per_page,
                 margin_top=config.layout.margin_top,
@@ -461,6 +478,7 @@ class TestValidateConfig:
         with pytest.raises(ConfigError, match="margin_right must be non-negative"):
             validate_config(config)
 
+    @pytest.mark.skip(reason="remarkable_output field removed - cloud-only sync")
     def test_remarkable_output_not_directory(self, valid_config_toml: Path, tmp_path: Path) -> None:
         """Test that output path being a file (not directory) fails validation."""
         config = load_config(valid_config_toml)
@@ -485,6 +503,7 @@ class TestValidateConfig:
         with pytest.raises(ConfigError, match="is not a directory"):
             validate_config(config)
 
+    @pytest.mark.skip(reason="remarkable_output field removed - cloud-only sync")
     def test_remarkable_output_not_writable(self, valid_config_toml: Path, mocker) -> None:
         """Test that non-writable output directory fails validation."""
         config = load_config(valid_config_toml)
@@ -509,12 +528,12 @@ class TestValidateConfig:
         config = AppConfig(
             sync=SyncConfig(
                 obsidian_vault=config.sync.obsidian_vault,
-                remarkable_output=config.sync.remarkable_output,
                 state_database=bad_db,
                 include_patterns=config.sync.include_patterns,
                 exclude_patterns=config.sync.exclude_patterns,
                 debounce_seconds=config.sync.debounce_seconds,
             ),
+            cloud=config.cloud,
             layout=config.layout,
             log_level=config.log_level,
             log_file=config.log_file,
@@ -538,12 +557,12 @@ class TestValidateConfig:
         config = AppConfig(
             sync=SyncConfig(
                 obsidian_vault=config.sync.obsidian_vault,
-                remarkable_output=config.sync.remarkable_output,
                 state_database=db_path,
                 include_patterns=config.sync.include_patterns,
                 exclude_patterns=config.sync.exclude_patterns,
                 debounce_seconds=config.sync.debounce_seconds,
             ),
+            cloud=config.cloud,
             layout=config.layout,
             log_level=config.log_level,
             log_file=config.log_file,
@@ -568,6 +587,7 @@ class TestValidateConfig:
         bad_log = tmp_path / "nonexistent_parent" / "sync.log"
         config = AppConfig(
             sync=config.sync,
+            cloud=config.cloud,
             layout=config.layout,
             log_level=config.log_level,
             log_file=bad_log,
@@ -590,6 +610,7 @@ class TestValidateConfig:
 
         config = AppConfig(
             sync=config.sync,
+            cloud=config.cloud,
             layout=config.layout,
             log_level=config.log_level,
             log_file=log_path,

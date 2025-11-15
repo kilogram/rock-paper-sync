@@ -205,7 +205,7 @@ class TestStatusCommand:
         assert "Synced:" in result.output
 
     def test_status_after_sync(
-        self, runner: CliRunner, config_file: Path, temp_vault: Path
+        self, runner: CliRunner, config_file: Path, temp_vault: Path, mock_cloud_sync
     ) -> None:
         """Test status after syncing files."""
         # Create and sync files
@@ -420,7 +420,7 @@ class TestSyncCommandErrors:
     """Test error handling in sync command."""
 
     def test_sync_with_file_error(
-        self, runner: CliRunner, config_file: Path, temp_vault: Path, mocker
+        self, runner: CliRunner, config_file: Path, temp_vault: Path, mocker, mock_cloud_sync
     ) -> None:
         """Test sync handles file errors gracefully (line 103)."""
         # Create a markdown file

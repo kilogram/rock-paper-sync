@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from rock_paper_sync.config import AppConfig, LayoutConfig, SyncConfig
+from rock_paper_sync.config import AppConfig, CloudConfig, LayoutConfig, SyncConfig
 from rock_paper_sync.parser import BlockType, FormatStyle, parse_markdown_file
 from rock_paper_sync.state import StateManager, SyncRecord
 
@@ -21,20 +21,19 @@ def integration_env(tmp_path: Path):
     vault = tmp_path / "vault"
     vault.mkdir()
 
-    output = tmp_path / "output"
-    output.mkdir()
-
     db = tmp_path / "state.db"
     log_file = tmp_path / "test.log"
 
     config = AppConfig(
         sync=SyncConfig(
             obsidian_vault=vault,
-            remarkable_output=output,
             state_database=db,
             include_patterns=["**/*.md"],
             exclude_patterns=[".obsidian/**", "templates/**"],
             debounce_seconds=1,
+        ),
+        cloud=CloudConfig(
+            base_url="http://localhost:3000"
         ),
         layout=LayoutConfig(
             lines_per_page=45,
@@ -51,7 +50,6 @@ def integration_env(tmp_path: Path):
 
     yield {
         "vault": vault,
-        "output": output,
         "config": config,
         "state": state,
         "db": db,
@@ -730,6 +728,7 @@ class TestPerformance:
         assert len(doc.content) >= 400  # At least the paragraphs
 
 
+@pytest.mark.skip(reason="Filesystem-based tests - cloud-only sync now")
 class TestDocumentUpdateFlow:
     """Integration tests for document update workflows."""
 

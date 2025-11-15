@@ -2,6 +2,9 @@
 
 These tests verify that markdown → reMarkable → read back with rmscene
 preserves the essential content and structure.
+
+NOTE: These tests are skipped because write_document_files() was removed
+in favor of cloud-only sync. Roundtrip testing now happens through cloud API.
 """
 
 import io
@@ -20,6 +23,9 @@ from rock_paper_sync.parser import (
     TextFormat,
     parse_markdown_file,
 )
+
+# Skip all tests in this file - filesystem write functionality removed
+pytestmark = pytest.mark.skip(reason="write_document_files() removed - cloud-only sync")
 
 
 class TestRoundtripBasic:
