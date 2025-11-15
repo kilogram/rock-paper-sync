@@ -14,19 +14,21 @@ Generated documents appear on your reMarkable device as native notebooks with ty
 
 ## Features
 
-- **One-way sync**: Obsidian → reMarkable (Phase 1)
+- **Multi-vault support**: Sync multiple Obsidian vaults simultaneously
+- **Optional folder organization**: Each vault can have its own folder on reMarkable
+- **One-way sync**: Obsidian → reMarkable
 - **Incremental sync**: Only processes changed files
 - **Folder preservation**: Mirrors Obsidian directory structure
 - **Watch mode**: Automatically syncs on file changes
-- **State tracking**: SQLite database tracks sync status
+- **State tracking**: SQLite database tracks sync status per vault
 - **Configurable**: TOML configuration for paths, patterns, layout
 
 ## Requirements
 
 - Python 3.10+
 - reMarkable Paper Pro (firmware 3.0+)
-- Syncthing (or similar) for file transfer to device
-- Obsidian vault with markdown files
+- rm_cloud server or reMarkable cloud connection
+- One or more Obsidian vaults with markdown files
 
 ## Installation
 
@@ -50,34 +52,96 @@ pip install -e ".[dev]"
 mkdir -p ~/.config/rock-paper-sync
 ```
 
-2. Copy and edit example config:
+2. Initialize configuration:
 ```bash
-cp example_config.toml ~/.config/rock-paper-sync/config.toml
+rock-paper-sync init ~/.config/rock-paper-sync/config.toml
 ```
 
-3. Edit paths in config file:
+3. Edit the generated config file to add your vaults:
 ```toml
 [paths]
-obsidian_vault = "/path/to/your/obsidian/vault"
-remarkable_output = "/path/to/syncthing/remarkable/folder"
 state_database = "~/.local/share/rock-paper-sync/state.db"
+
+# Define your Obsidian vaults
+[[vaults]]
+name = "personal"
+path = "~/obsidian-vault-personal"
+remarkable_folder = "Personal Notes"  # Optional - creates folder on reMarkable
+include_patterns = ["**/*.md"]
+exclude_patterns = [".obsidian/**", "templates/**"]
+
+[[vaults]]
+name = "work"
+path = "~/obsidian-vault-work"
+remarkable_folder = "Work"  # Optional - creates folder on reMarkable
+include_patterns = ["**/*.md"]
+exclude_patterns = [".obsidian/**", "archive/**"]
+
+# Example: Vault without folder (files go to root)
+# NOTE: Only one vault can omit remarkable_folder when multiple vaults are configured
+# [[vaults]]
+# name = "quick-notes"
+# path = "~/obsidian-quick"
+# include_patterns = ["**/*.md"]
+# exclude_patterns = []
+
+[sync]
+debounce_seconds = 5
+
+[cloud]
+base_url = "http://localhost:3000"  # or https://webapp-prod.cloud.remarkable.com
+
+[logging]
+level = "info"
+file = "~/.local/share/rock-paper-sync/sync.log"
 ```
+
+4. Register your device with rm_cloud:
+```bash
+rock-paper-sync register <one-time-code>
+```
+
+Get the one-time code from rm_cloud web UI or the reMarkable mobile app.
 
 ## Usage
 
-### Sync All Changed Files
+### Sync All Vaults
 
 ```bash
 rock-paper-sync sync
 ```
 
+### Sync Specific Vault
+
+```bash
+rock-paper-sync sync --vault personal
+```
+
 ### Watch for Changes (Continuous Sync)
 
+Watch all vaults:
 ```bash
 rock-paper-sync watch
 ```
 
+Watch specific vault:
+```bash
+rock-paper-sync watch --vault work
+```
+
 ### Check Sync Status
+
+Status for all vaults:
+```bash
+rock-paper-sync status
+```
+
+Status for specific vault:
+```bash
+rock-paper-sync status --vault personal
+```
+
+### View Sync Status
 
 ```bash
 rock-paper-sync status

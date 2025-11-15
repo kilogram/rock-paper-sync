@@ -254,13 +254,23 @@ This keeps main context focused on orchestration while sub-agents dive deep.
 - [x] Live device sync validation
 - [x] `.local` file generation for xochitl
 
+### ✅ Milestone 2: Multi-Vault Support (COMPLETE)
+
+- [x] Support multiple Obsidian vaults in configuration
+- [x] Optional vault-specific folders on reMarkable
+- [x] Vault-aware state database (schema v2)
+- [x] Per-vault sync and statistics
+- [x] CLI support for vault filtering (--vault flag)
+- [x] Validation: at most one vault without folder when multiple configured
+- [x] Comprehensive multi-vault tests (195 core tests passing)
+
 ### 🚧 Future Enhancements
 
-- [ ] Maintain folder hierarchy through metadata
-- [ ] Watch directory for changes and auto-convert
+- [ ] Watch directory for changes and auto-convert (partially done)
 - [ ] Bidirectional sync (reMarkable → Obsidian)
 - [ ] Annotation preservation
 - [ ] Image support
+- [ ] Vault-to-vault file moves
 
 ## Getting Started
 
