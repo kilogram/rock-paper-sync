@@ -321,3 +321,111 @@ class TestMainGroup:
         )
 
         assert result.exit_code == 0
+
+    def test_config_load_error(self, runner: CliRunner, tmp_path: Path) -> None:
+        """Test error handling when config fails to load (lines 58-60)."""
+        # Create invalid config file
+        config_path = tmp_path / "bad_config.toml"
+        config_path.write_text("invalid toml content [[[")
+
+        result = runner.invoke(cli.main, ["--config", str(config_path), "sync"])
+
+        assert result.exit_code == 1
+        assert "Error loading config" in result.output
+
+    def test_config_validation_error(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        """Test error handling when config validation fails."""
+        # Create config with missing required directories
+        config_path = tmp_path / "config.toml"
+        config_content = f"""
+[paths]
+obsidian_vault = "/nonexistent/vault"
+remarkable_output = "/nonexistent/output"
+state_database = "{tmp_path / 'state.db'}"
+
+[sync]
+include_patterns = ["**/*.md"]
+exclude_patterns = []
+debounce_seconds = 1
+
+[layout]
+lines_per_page = 45
+margin_top = 50
+margin_bottom = 50
+margin_left = 50
+margin_right = 50
+
+[logging]
+level = "info"
+file = "{tmp_path / 'test.log'}"
+"""
+        config_path.write_text(config_content)
+
+        result = runner.invoke(cli.main, ["--config", str(config_path), "sync"])
+
+        assert result.exit_code == 1
+        assert "Error loading config" in result.output
+
+
+class TestInitCommandEdgeCases:
+    """Test edge cases for init command."""
+
+    def test_init_with_default_path_keyword(self, runner: CliRunner, mocker) -> None:
+        """Test that init handles None output correctly (line 231)."""
+        # Mock expanduser to redirect to tmp location
+        from pathlib import Path
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fake_home = Path(tmpdir)
+            fake_config_dir = fake_home / ".config" / "rm-obsidian-sync"
+            fake_config_dir.mkdir(parents=True)
+            fake_config_path = fake_config_dir / "config.toml"
+
+            # Mock Path.expanduser to return our tmp path
+            mocker.patch.object(
+                Path,
+                'expanduser',
+                return_value=fake_config_path
+            )
+
+            # Invoke init without output argument - uses default path
+            result = runner.invoke(cli.main, ["init"])
+
+            # Should succeed
+            assert result.exit_code == 0
+            assert "Created config file" in result.output
+
+
+class TestSyncCommandErrors:
+    """Test error handling in sync command."""
+
+    def test_sync_with_file_error(
+        self, runner: CliRunner, config_file: Path, temp_vault: Path, mocker
+    ) -> None:
+        """Test sync handles file errors gracefully (line 103)."""
+        # Create a markdown file
+        (temp_vault / "test.md").write_text("# Test")
+
+        # Mock the SyncEngine to return an error result
+        from rm_obsidian_sync.converter import SyncResult
+
+        mock_result = SyncResult(
+            path=temp_vault / "test.md",
+            success=False,
+            error="Simulated error",
+            page_count=0,
+        )
+
+        mocker.patch(
+            "rm_obsidian_sync.converter.SyncEngine.sync_all_changed",
+            return_value=[mock_result],
+        )
+
+        result = runner.invoke(cli.main, ["--config", str(config_file), "sync"])
+
+        assert result.exit_code == 0  # CLI should complete even with errors
+        assert "✗" in result.output or "error" in result.output.lower()
+        assert "Simulated error" in result.output

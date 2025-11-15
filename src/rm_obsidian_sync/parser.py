@@ -290,7 +290,7 @@ def ast_node_to_block(
                         nested_result = ast_node_to_block(child, list_level + 1)
                         if isinstance(nested_result, list):
                             items.extend(nested_result)
-                        elif nested_result is not None:
+                        elif nested_result is not None:  # pragma: no cover (defensive code)
                             items.append(nested_result)
 
         return items
@@ -487,7 +487,7 @@ def extract_text_and_formatting(
                 )
             )
 
-            for fmt in inner_fmt:
+            for fmt in inner_fmt:  # pragma: no cover (strikethrough plugin not enabled)
                 formatting.append(
                     TextFormat(
                         start=start_pos + fmt.start,

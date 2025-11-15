@@ -303,6 +303,21 @@ class TestEstimateBlockLines:
             para
         )
 
+    def test_code_block_line_count(self, generator: RemarkableGenerator) -> None:
+        """Code blocks should count newlines plus spacing."""
+        code_text = "def hello():\n    print('world')\n    return True"
+        block = ContentBlock(
+            type=BlockType.CODE_BLOCK,
+            level=0,
+            text=code_text,
+            formatting=[],
+        )
+
+        lines = generator.estimate_block_lines(block)
+        # Should be number of newlines + 2 for spacing
+        expected_lines = code_text.count("\n") + 2
+        assert lines == expected_lines
+
 
 class TestBlocksToTextItems:
     """Tests for converting blocks to positioned text items."""

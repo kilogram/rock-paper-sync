@@ -1,0 +1,20 @@
+[paths]
+obsidian_vault = "~/obsidian-vault"
+remarkable_output = "~/remarkable-sync"
+state_database = "~/.local/share/rm-obsidian-sync/state.db"
+
+[sync]
+include_patterns = ["**/*.md"]
+exclude_patterns = []
+debounce_seconds = 5
+
+[layout]
+lines_per_page = 45
+margin_top = 50
+margin_bottom = 50
+margin_left = 50
+margin_right = 50
+
+[logging]
+level = "info"
+# Missing file

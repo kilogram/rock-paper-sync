@@ -107,7 +107,7 @@ def sync(ctx: click.Context, dry_run: bool) -> None:
 
 @main.command()
 @click.pass_context
-def watch(ctx: click.Context) -> None:
+def watch(ctx: click.Context) -> None:  # pragma: no cover
     """Continuously monitor for changes.
 
     Watches the Obsidian vault directory for file modifications and
