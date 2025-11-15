@@ -15,6 +15,17 @@ import requests
 
 logger = logging.getLogger(__name__)
 
+
+class GenerationConflictError(Exception):
+    """Raised when root generation conflict is detected (optimistic concurrency control)."""
+
+    def __init__(self, expected: int, actual: int):
+        self.expected = expected
+        self.actual = actual
+        super().__init__(
+            f"Generation conflict: expected {expected}, server has {actual}"
+        )
+
 SCHEMA_VERSION = "3"
 DOC_TYPE = "80000000"
 FILE_TYPE = "0"
@@ -280,7 +291,7 @@ class SyncV3Client:
         self, root_hash: str, generation: int, broadcast: bool = True
     ) -> int:
         """
-        Update the root hash tree.
+        Update the root hash tree with optimistic concurrency control.
 
         Args:
             root_hash: Hash of the root index
@@ -291,7 +302,8 @@ class SyncV3Client:
             New generation number
 
         Raises:
-            requests.HTTPError: If update fails
+            GenerationConflictError: If another client updated root concurrently
+            requests.HTTPError: If update fails for other reasons
         """
         url = f"{self.base_url}/sync/v3/root"
 
@@ -303,6 +315,16 @@ class SyncV3Client:
 
         logger.info(f"Updating root to {root_hash} (gen {generation}, broadcast={broadcast})")
         response = requests.put(url, headers=self.headers, json=payload)
+
+        # Check for generation conflict (optimistic concurrency control)
+        if response.status_code == 409:
+            # Conflict - someone else updated the root
+            current_hash, current_gen = self.get_current_generation()
+            logger.warning(
+                f"Generation conflict: expected {generation}, server has {current_gen}"
+            )
+            raise GenerationConflictError(expected=generation, actual=current_gen)
+
         response.raise_for_status()
 
         result = response.json()
@@ -310,25 +332,28 @@ class SyncV3Client:
         logger.info(f"Root updated successfully (new gen: {new_generation})")
         return new_generation
 
-    def upload_document(
-        self,
-        doc_uuid: str,
-        files: dict[str, bytes],
-        broadcast: bool = True,
-    ) -> None:
+    def upload_document_files(
+        self, doc_uuid: str, files: dict[str, bytes]
+    ) -> tuple[str, list[BlobEntry]]:
         """
-        Upload a complete document using Sync v3 protocol.
+        Upload document files as blobs and return hash-of-hashes (protocol-only operation).
+
+        This is a low-level method that only handles blob uploads without touching
+        the root index. Use this when you want to manage root updates separately.
 
         Args:
             doc_uuid: Document UUID
             files: Dict mapping filename -> content bytes
-                   e.g., {"{uuid}.metadata": b"...", "{uuid}.content": b"...", ...}
-            broadcast: Whether to trigger sync notification to xochitl
+
+        Returns:
+            Tuple of (hash_of_hashes, file_entries)
+                - hash_of_hashes: The hashOfHashesV3 for this document
+                - file_entries: List of BlobEntry objects for the uploaded files
 
         Raises:
             requests.HTTPError: If upload fails
         """
-        logger.info(f"Uploading document {doc_uuid} via Sync v3")
+        logger.info(f"Uploading document files for {doc_uuid}")
 
         # Step 1: Upload all individual files as blobs
         file_entries = []
@@ -350,104 +375,182 @@ class SyncV3Client:
         doc_index_hash, doc_index_content = self.upload_index(file_entries)
         logger.debug(f"  Document index hash: {doc_index_hash}")
 
-        # Step 2.5: Calculate hashOfHashesV3 for the document
+        # Step 3: Calculate hashOfHashesV3 for the document
         # The device expects the hash in the root to be SHA256 of concatenated binary file hashes
-        file_hashes_binary = b''.join(
-            bytes.fromhex(entry.hash) for entry in sorted(file_entries, key=lambda e: e.entry_name)
+        file_hashes_binary = b"".join(
+            bytes.fromhex(entry.hash)
+            for entry in sorted(file_entries, key=lambda e: e.entry_name)
         )
         hash_of_hashes = self._sha256(file_hashes_binary)
         logger.debug(f"  Hash-of-hashes (hashOfHashesV3): {hash_of_hashes}")
 
-        # Step 2.6: Upload the document index AGAIN under the hashOfHashesV3
+        # Step 4: Upload the document index AGAIN under the hashOfHashesV3
         # The device will try to download the index using this hash
         if hash_of_hashes != doc_index_hash:
             self.upload_blob(hash_of_hashes, doc_index_content)
             logger.debug(f"  Uploaded document index under hashOfHashesV3")
 
-        # Step 3: Get current root documents and merge our document
-        current_root_hash, current_generation = self.get_current_generation()
-        root_entries = self.get_root_documents()
+        return hash_of_hashes, file_entries
 
-        # Step 4: Update or add our document to the root
-        # Use hashOfHashesV3 instead of index hash for device compatibility
-        doc_entry = BlobEntry(
-            hash=hash_of_hashes,
-            type=DOC_TYPE,
-            entry_name=doc_uuid,
-            subfiles=len(file_entries),
-            size=0,
-        )
+    def merge_document_into_root(
+        self, doc_uuid: str, hash_of_hashes: str, num_files: int, broadcast: bool = True, max_retries: int = 3
+    ) -> int:
+        """
+        Merge a document into the root index with retry logic.
 
-        # Find and replace if document already exists, otherwise append
-        found = False
-        for i, entry in enumerate(root_entries):
-            if entry.entry_name == doc_uuid:
-                root_entries[i] = doc_entry
-                found = True
-                logger.debug(f"  Updating existing document in root")
-                break
+        Args:
+            doc_uuid: Document UUID
+            hash_of_hashes: The hashOfHashesV3 for this document
+            num_files: Number of files in the document
+            broadcast: Whether to trigger sync notification
+            max_retries: Maximum number of retry attempts on conflicts
 
-        if not found:
-            root_entries.append(doc_entry)
-            logger.debug(f"  Adding new document to root")
+        Returns:
+            New generation number
 
-        # Step 5: Create new root index and upload it
-        root_index_hash, _ = self.upload_index(root_entries)
-        logger.debug(f"  Root index hash: {root_index_hash}")
+        Raises:
+            requests.HTTPError: If update fails
+            GenerationConflictError: If max retries exceeded
+        """
+        for attempt in range(max_retries):
+            try:
+                # Get current root
+                current_root_hash, current_generation = self.get_current_generation()
+                root_entries = self.get_root_documents()
 
-        # Step 6: Update root (triggers broadcast if enabled)
-        new_generation = self.update_root(
-            root_index_hash, current_generation, broadcast
-        )
+                # Create document entry using hashOfHashesV3
+                doc_entry = BlobEntry(
+                    hash=hash_of_hashes,
+                    type=DOC_TYPE,
+                    entry_name=doc_uuid,
+                    subfiles=num_files,
+                    size=0,
+                )
 
-        logger.info(
-            f"Document {doc_uuid} uploaded successfully (gen {new_generation})"
+                # Update or add document to root
+                found = False
+                for i, entry in enumerate(root_entries):
+                    if entry.entry_name == doc_uuid:
+                        root_entries[i] = doc_entry
+                        found = True
+                        logger.debug(f"  Updating existing document in root")
+                        break
+
+                if not found:
+                    root_entries.append(doc_entry)
+                    logger.debug(f"  Adding new document to root")
+
+                # Create new root index
+                root_index_hash, _ = self.upload_index(root_entries)
+                logger.debug(f"  Root index hash: {root_index_hash}")
+
+                # Update root (may raise GenerationConflictError)
+                new_generation = self.update_root(
+                    root_index_hash, current_generation, broadcast
+                )
+
+                logger.info(
+                    f"Document {doc_uuid} merged into root (gen {new_generation})"
+                )
+                return new_generation
+
+            except GenerationConflictError as e:
+                if attempt < max_retries - 1:
+                    logger.warning(
+                        f"Conflict on attempt {attempt + 1}/{max_retries}, retrying..."
+                    )
+                    continue
+                else:
+                    logger.error(f"Max retries exceeded after {max_retries} attempts")
+                    raise
+
+        raise RuntimeError("Unreachable code")
+
+    def upload_document(
+        self, doc_uuid: str, files: dict[str, bytes], broadcast: bool = True
+    ) -> None:
+        """
+        Upload a complete document using Sync v3 protocol (high-level convenience method).
+
+        This combines file upload and root merging with automatic retry on conflicts.
+
+        Args:
+            doc_uuid: Document UUID
+            files: Dict mapping filename -> content bytes
+                   e.g., {"{uuid}.metadata": b"...", "{uuid}.content": b"...", ...}
+            broadcast: Whether to trigger sync notification to xochitl
+
+        Raises:
+            requests.HTTPError: If upload fails
+            GenerationConflictError: If max retries exceeded
+        """
+        logger.info(f"Uploading document {doc_uuid} via Sync v3")
+
+        # Upload files and get hash-of-hashes
+        hash_of_hashes, file_entries = self.upload_document_files(doc_uuid, files)
+
+        # Merge into root with retry logic
+        self.merge_document_into_root(
+            doc_uuid, hash_of_hashes, len(file_entries), broadcast
         )
 
     def delete_document(
-        self,
-        doc_uuid: str,
-        broadcast: bool = True,
+        self, doc_uuid: str, broadcast: bool = True, max_retries: int = 3
     ) -> None:
         """
-        Delete a document using Sync v3 protocol.
+        Delete a document using Sync v3 protocol with retry logic.
 
         Args:
             doc_uuid: Document UUID to delete
             broadcast: Whether to trigger sync notification to xochitl
+            max_retries: Maximum number of retry attempts on conflicts
 
         Raises:
             requests.HTTPError: If delete fails
+            GenerationConflictError: If max retries exceeded
         """
         logger.info(f"Deleting document {doc_uuid} via Sync v3")
 
-        # Step 1: Get current root documents
-        current_root_hash, current_generation = self.get_current_generation()
-        root_entries = self.get_root_documents()
+        for attempt in range(max_retries):
+            try:
+                # Get current root documents
+                current_root_hash, current_generation = self.get_current_generation()
+                root_entries = self.get_root_documents()
 
-        # Step 2: Remove the document from root
-        doc_found = False
-        new_entries = []
-        for entry in root_entries:
-            if entry.entry_name == doc_uuid:
-                doc_found = True
-                logger.debug(f"  Removing document from root: {doc_uuid}")
-            else:
-                new_entries.append(entry)
+                # Remove the document from root
+                doc_found = False
+                new_entries = []
+                for entry in root_entries:
+                    if entry.entry_name == doc_uuid:
+                        doc_found = True
+                        logger.debug(f"  Removing document from root: {doc_uuid}")
+                    else:
+                        new_entries.append(entry)
 
-        if not doc_found:
-            logger.warning(f"Document {doc_uuid} not found in root")
-            return
+                if not doc_found:
+                    logger.warning(f"Document {doc_uuid} not found in root")
+                    return
 
-        # Step 3: Create new root index and upload it
-        root_index_hash, _ = self.upload_index(new_entries)
-        logger.debug(f"  New root index hash: {root_index_hash}")
+                # Create new root index and upload it
+                root_index_hash, _ = self.upload_index(new_entries)
+                logger.debug(f"  New root index hash: {root_index_hash}")
 
-        # Step 4: Update root (triggers broadcast if enabled)
-        new_generation = self.update_root(
-            root_index_hash, current_generation, broadcast
-        )
+                # Update root (may raise GenerationConflictError)
+                new_generation = self.update_root(
+                    root_index_hash, current_generation, broadcast
+                )
 
-        logger.info(
-            f"Document {doc_uuid} deleted successfully (gen {new_generation})"
-        )
+                logger.info(
+                    f"Document {doc_uuid} deleted successfully (gen {new_generation})"
+                )
+                return
+
+            except GenerationConflictError as e:
+                if attempt < max_retries - 1:
+                    logger.warning(
+                        f"Conflict on attempt {attempt + 1}/{max_retries}, retrying..."
+                    )
+                    continue
+                else:
+                    logger.error(f"Max retries exceeded after {max_retries} attempts")
+                    raise

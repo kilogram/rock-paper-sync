@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 from click.testing import CliRunner
@@ -16,19 +17,35 @@ def runner() -> CliRunner:
 
 
 @pytest.fixture
-def config_file(tmp_path: Path, temp_vault: Path, temp_output: Path) -> Path:
+def mock_cloud_sync():
+    """Mock cloud sync to avoid needing real device registration in tests."""
+    mock_sync = MagicMock()
+    mock_sync.upload_document = MagicMock()
+    mock_sync.upload_folder = MagicMock()
+    mock_sync.get_existing_page_uuids = MagicMock(return_value=[])
+    mock_sync.delete_document = MagicMock()
+
+    with patch('rock_paper_sync.converter.RmCloudSync', return_value=mock_sync):
+        with patch('rock_paper_sync.converter.RmCloudClient'):
+            yield mock_sync
+
+
+@pytest.fixture
+def config_file(tmp_path: Path, temp_vault: Path) -> Path:
     """Create a valid config file for testing."""
     config_path = tmp_path / "config.toml"
     config_content = f"""
 [paths]
 obsidian_vault = "{temp_vault}"
-remarkable_output = "{temp_output}"
 state_database = "{tmp_path / 'state.db'}"
 
 [sync]
 include_patterns = ["**/*.md"]
 exclude_patterns = [".obsidian/**"]
 debounce_seconds = 1
+
+[cloud]
+base_url = "http://localhost:3000"
 
 [layout]
 lines_per_page = 45
@@ -121,7 +138,7 @@ class TestSyncCommand:
         assert "Config file not found" in result.output
 
     def test_sync_with_files(
-        self, runner: CliRunner, config_file: Path, temp_vault: Path
+        self, runner: CliRunner, config_file: Path, temp_vault: Path, mock_cloud_sync
     ) -> None:
         """Test sync command with files in vault."""
         # Create test files
@@ -136,7 +153,7 @@ class TestSyncCommand:
         assert "Synced 2/2" in result.output or "Synced 2 / 2" in result.output.replace(" ", "")
 
     def test_sync_dry_run(
-        self, runner: CliRunner, config_file: Path, temp_vault: Path
+        self, runner: CliRunner, config_file: Path, temp_vault: Path, mock_cloud_sync
     ) -> None:
         """Test sync --dry-run doesn't write files."""
         (temp_vault / "test.md").write_text("# Test")
@@ -149,7 +166,7 @@ class TestSyncCommand:
         assert "Dry run mode" in result.output
 
     def test_sync_verbose(
-        self, runner: CliRunner, config_file: Path, temp_vault: Path
+        self, runner: CliRunner, config_file: Path, temp_vault: Path, mock_cloud_sync
     ) -> None:
         """Test sync with verbose flag."""
         (temp_vault / "test.md").write_text("# Test")
@@ -161,7 +178,7 @@ class TestSyncCommand:
         assert result.exit_code == 0
 
     def test_sync_empty_vault(
-        self, runner: CliRunner, config_file: Path
+        self, runner: CliRunner, config_file: Path, mock_cloud_sync
     ) -> None:
         """Test sync with empty vault."""
         result = runner.invoke(

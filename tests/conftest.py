@@ -4,6 +4,7 @@ Shared pytest fixtures for rock-paper-sync tests.
 import pytest
 from pathlib import Path
 import tempfile
+from unittest.mock import MagicMock
 
 
 @pytest.fixture
@@ -47,19 +48,21 @@ def temp_state_db(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def sample_config(temp_vault: Path, temp_output: Path, temp_state_db: Path):
+def sample_config(temp_vault: Path, temp_state_db: Path):
     """Create sample AppConfig for testing"""
     # Import here to avoid circular imports during test collection
-    from rock_paper_sync.config import AppConfig, SyncConfig, LayoutConfig
-    
+    from rock_paper_sync.config import AppConfig, SyncConfig, LayoutConfig, CloudConfig
+
     return AppConfig(
         sync=SyncConfig(
             obsidian_vault=temp_vault,
-            remarkable_output=temp_output,
             state_database=temp_state_db,
             include_patterns=["**/*.md"],
             exclude_patterns=[".obsidian/**"],
             debounce_seconds=1
+        ),
+        cloud=CloudConfig(
+            base_url="http://localhost:3000"
         ),
         layout=LayoutConfig(
             lines_per_page=45,
@@ -147,19 +150,21 @@ def temp_db(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def valid_config_toml(tmp_path: Path, temp_vault: Path, temp_output: Path) -> Path:
+def valid_config_toml(tmp_path: Path, temp_vault: Path) -> Path:
     """Create a valid TOML config file for testing."""
     config_path = tmp_path / "config.toml"
     config_content = f"""
 [paths]
 obsidian_vault = "{temp_vault}"
-remarkable_output = "{temp_output}"
 state_database = "{tmp_path / 'state.db'}"
 
 [sync]
 include_patterns = ["**/*.md"]
 exclude_patterns = [".obsidian/**", "templates/**"]
 debounce_seconds = 5
+
+[cloud]
+base_url = "http://localhost:3000"
 
 [layout]
 lines_per_page = 45
@@ -180,3 +185,15 @@ file = "{tmp_path / 'sync.log'}"
 def config_samples_dir() -> Path:
     """Path to config sample fixtures."""
     return Path(__file__).parent / "fixtures" / "config_samples"
+
+
+@pytest.fixture
+def mock_cloud_sync():
+    """Create a mock cloud sync client for testing without real cloud connection."""
+    mock_sync = MagicMock()
+    mock_sync.upload_document = MagicMock()
+    mock_sync.upload_folder = MagicMock()
+    mock_sync.get_existing_page_uuids = MagicMock(return_value=[])
+    mock_sync.delete_document = MagicMock()
+    mock_sync.is_sync_enabled = MagicMock(return_value=True)
+    return mock_sync

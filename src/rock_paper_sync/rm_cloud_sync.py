@@ -255,6 +255,60 @@ class RmCloudSync:
         """
         return self.sync_client.get_document_page_uuids(doc_uuid)
 
+    def upload_folder(
+        self, folder_uuid: str, folder_name: str, parent_uuid: str = ""
+    ) -> None:
+        """
+        Upload a folder (CollectionType) using Sync v3 protocol.
+
+        Folders are documents with type="CollectionType" and no pages.
+
+        Args:
+            folder_uuid: Folder UUID
+            folder_name: Display name for the folder
+            parent_uuid: Parent folder UUID (empty for root)
+
+        Raises:
+            Exception: If upload fails
+        """
+        logger.info(f"Uploading folder via Sync v3: {folder_name} ({folder_uuid})")
+
+        # Build files dict for folder
+        files = {}
+
+        # Create folder metadata (type: CollectionType)
+        now_ms = int(time.time() * 1000)
+        metadata = {
+            "visibleName": folder_name,
+            "type": "CollectionType",  # This makes it a folder
+            "parent": parent_uuid,
+            "lastModified": str(now_ms),
+            "lastOpened": "0",
+            "lastOpenedPage": 0,
+            "version": 1,
+            "pinned": False,
+            "synced": True,
+            "modified": False,
+            "deleted": False,
+            "metadatamodified": False,
+        }
+        files[f"{folder_uuid}.metadata"] = json.dumps(metadata).encode("utf-8")
+
+        # Folders have empty content
+        files[f"{folder_uuid}.content"] = b"{}"
+
+        # Add .local file (required by xochitl)
+        files[f"{folder_uuid}.local"] = b"{}"
+
+        # Upload via Sync v3
+        self.sync_client.upload_document(
+            doc_uuid=folder_uuid,
+            files=files,
+            broadcast=False,  # Don't notify for folder creation
+        )
+
+        logger.info(f"Folder uploaded successfully: {folder_uuid}")
+
     def delete_document(self, doc_uuid: str) -> None:
         """
         Delete a document from rm_cloud.

@@ -56,29 +56,47 @@ class SyncEngine:
     - State database updates
     """
 
-    def __init__(self, config: AppConfig, state: StateManager) -> None:
+    def __init__(
+        self,
+        config: AppConfig,
+        state: StateManager,
+        cloud_sync: Optional[RmCloudSync] = None,
+        generator: Optional[RemarkableGenerator] = None,
+    ) -> None:
         """Initialize sync engine.
 
         Args:
             config: Application configuration
             state: State manager for tracking sync status
+            cloud_sync: Cloud sync client (will be created if not provided)
+            generator: Document generator (will be created if not provided)
+
+        Raises:
+            ValueError: If cloud sync initialization fails
         """
         self.config = config
         self.state = state
-        self.generator = RemarkableGenerator(config.layout)
+        self.generator = generator or RemarkableGenerator(config.layout)
 
-        # Initialize cloud sync (required)
-        try:
-            client = RmCloudClient(base_url=config.cloud.base_url)
-            self.cloud_sync = RmCloudSync(
-                base_url=config.cloud.base_url,
-                client=client,
-            )
-            logger.info("Cloud sync initialized (Sync v3 API)")
-        except ValueError as e:
-            logger.error(f"Cloud sync initialization failed: {e}")
-            logger.error("Device must be registered. Run: rock-paper-sync register <code>")
-            raise
+        # Initialize cloud sync (injected or created)
+        if cloud_sync is not None:
+            self.cloud_sync = cloud_sync
+            logger.debug("Using injected cloud sync client")
+        else:
+            # Create default cloud sync
+            try:
+                client = RmCloudClient(base_url=config.cloud.base_url)
+                self.cloud_sync = RmCloudSync(
+                    base_url=config.cloud.base_url,
+                    client=client,
+                )
+                logger.info("Cloud sync initialized (Sync v3 API)")
+            except ValueError as e:
+                logger.error(f"Cloud sync initialization failed: {e}")
+                logger.error(
+                    "Device must be registered. Run: rock-paper-sync register <code>"
+                )
+                raise
 
         logger.debug("Sync engine initialized")
 
@@ -307,24 +325,16 @@ class SyncEngine:
         return parent_uuid
 
     def _create_rm_folder(self, name: str, uuid: str, parent_uuid: str) -> None:
-        """Create reMarkable folder (CollectionType) metadata file.
-
-        Uses RemarkableFilesystem abstraction to handle file structure.
+        """Create reMarkable folder (CollectionType) via cloud API.
 
         Args:
             name: Folder display name
             uuid: UUID for this folder
             parent_uuid: UUID of parent folder (empty string for root)
         """
-        output_dir = self.config.sync.remarkable_output
-        filesystem = RemarkableFilesystem(output_dir)
-
-        # Use filesystem abstraction to create folder
-        # This handles: metadata, local files at root level, etc.
-        timestamp = int(time.time() * 1000)
-        filesystem.write_folder(
+        # Upload folder via cloud sync
+        self.cloud_sync.upload_folder(
             folder_uuid=uuid,
-            visible_name=name,
+            folder_name=name,
             parent_uuid=parent_uuid,
-            modified_time=timestamp,
         )
