@@ -260,6 +260,34 @@ class StateManager:
         logger.info(f"Found {len(changed)} changed files")
         return changed
 
+    def find_deleted_files(self, vault_path: Path) -> list[tuple[str, str]]:
+        """Find files that have been deleted from vault but still exist in state.
+
+        Returns list of (relative_path, remarkable_uuid) tuples for deleted files.
+
+        Args:
+            vault_path: Path to Obsidian vault root
+
+        Returns:
+            List of (relative_path, uuid) tuples for files that no longer exist
+        """
+        deleted: list[tuple[str, str]] = []
+
+        cursor = self.conn.execute(
+            "SELECT obsidian_path, remarkable_uuid FROM sync_state"
+        )
+        for row in cursor.fetchall():
+            relative_path = row[0]
+            uuid = row[1]
+            absolute_path = vault_path / relative_path
+
+            if not absolute_path.exists():
+                logger.debug(f"Deleted file: {relative_path} (UUID: {uuid})")
+                deleted.append((relative_path, uuid))
+
+        logger.info(f"Found {len(deleted)} deleted files")
+        return deleted
+
     def _is_excluded(
         self, file_path: Path, vault_path: Path, exclude_patterns: list[str]
     ) -> bool:

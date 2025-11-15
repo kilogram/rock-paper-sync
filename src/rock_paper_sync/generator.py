@@ -108,7 +108,11 @@ class RemarkableGenerator:
         logger.info("RemarkableGenerator initialized with rmscene integration")
 
     def generate_document(
-        self, md_doc: MarkdownDocument, parent_uuid: str = "", doc_uuid: str | None = None
+        self,
+        md_doc: MarkdownDocument,
+        parent_uuid: str = "",
+        doc_uuid: str | None = None,
+        existing_page_uuids: list[str] | None = None,
     ) -> RemarkableDocument:
         """Convert markdown document to reMarkable format.
 
@@ -116,6 +120,7 @@ class RemarkableGenerator:
             md_doc: Parsed markdown document
             parent_uuid: UUID of parent folder (empty for root)
             doc_uuid: Existing document UUID to reuse (for updates), or None for new documents
+            existing_page_uuids: Existing page UUIDs to reuse (avoids CRDT conflicts on updates)
 
         Returns:
             RemarkableDocument ready to be written to disk
@@ -123,18 +128,28 @@ class RemarkableGenerator:
         Note:
             When doc_uuid is provided (update case), the existing document will be
             overwritten, including any annotations the user made on the device.
+            If existing_page_uuids is provided, those page UUIDs will be reused to avoid
+            CRDT merge conflicts.
         """
         # Reuse existing UUID for updates, or generate new one for new documents
         doc_uuid = doc_uuid or str(uuid_module.uuid4())
         timestamp = int(time.time() * 1000)
+        existing_page_uuids = existing_page_uuids or []
 
         # Paginate content blocks
         page_blocks = self.paginate_content(md_doc.content)
 
         # Generate pages with positioned text items
         pages: list[RemarkablePage] = []
-        for blocks in page_blocks:
-            page_uuid = str(uuid_module.uuid4())
+        for i, blocks in enumerate(page_blocks):
+            # Reuse existing page UUID if available, otherwise generate new one
+            if i < len(existing_page_uuids):
+                page_uuid = existing_page_uuids[i]
+                logger.debug(f"Reusing existing page UUID: {page_uuid}")
+            else:
+                page_uuid = str(uuid_module.uuid4())
+                logger.debug(f"Generated new page UUID: {page_uuid}")
+
             text_items = self.blocks_to_text_items(blocks)
             pages.append(RemarkablePage(uuid=page_uuid, text_items=text_items))
 

@@ -214,6 +214,68 @@ class SyncV3Client:
         root_content = self.download_blob(root_hash)
         return self.parse_index(root_content)
 
+    def get_document_page_uuids(self, doc_uuid: str) -> list[str]:
+        """
+        Get list of page UUIDs for an existing document.
+
+        Args:
+            doc_uuid: Document UUID
+
+        Returns:
+            List of page UUIDs in order. Empty list if document doesn't exist.
+
+        Raises:
+            requests.HTTPError: If request fails
+        """
+        import json
+
+        # Find document in root
+        root_docs = self.get_root_documents()
+        doc_entry = None
+        for entry in root_docs:
+            if entry.entry_name == doc_uuid:
+                doc_entry = entry
+                break
+
+        if not doc_entry:
+            logger.debug(f"Document {doc_uuid} not found in root")
+            return []
+
+        # Download document index
+        doc_index_content = self.download_blob(doc_entry.hash)
+        doc_files = self.parse_index(doc_index_content)
+
+        # Find .content file
+        content_entry = None
+        for entry in doc_files:
+            if entry.entry_name.endswith('.content'):
+                content_entry = entry
+                break
+
+        if not content_entry:
+            logger.warning(f"No .content file found for document {doc_uuid}")
+            return []
+
+        # Download and parse .content file
+        content_data = self.download_blob(content_entry.hash)
+        content_json = json.loads(content_data)
+
+        # Extract page UUIDs from cPages structure (formatVersion 2)
+        if 'cPages' in content_json and 'pages' in content_json['cPages']:
+            # Sort by idx value to maintain order
+            pages = content_json['cPages']['pages']
+            sorted_pages = sorted(pages, key=lambda p: p.get('idx', {}).get('value', ''))
+            return [page['id'] for page in sorted_pages]
+
+        # Fallback for formatVersion 1 (pages array)
+        elif 'pages' in content_json:
+            pages = content_json['pages']
+            if isinstance(pages, list) and len(pages) > 0 and isinstance(pages[0], str):
+                return pages
+
+        logger.warning(f"Could not extract page UUIDs from .content for {doc_uuid}")
+        return []
+
     def update_root(
         self, root_hash: str, generation: int, broadcast: bool = True
     ) -> int:
@@ -285,16 +347,31 @@ class SyncV3Client:
             logger.debug(f"  Uploaded {filename} ({len(content)} bytes)")
 
         # Step 2: Create document index and upload it
-        doc_index_hash, _ = self.upload_index(file_entries)
+        doc_index_hash, doc_index_content = self.upload_index(file_entries)
         logger.debug(f"  Document index hash: {doc_index_hash}")
+
+        # Step 2.5: Calculate hashOfHashesV3 for the document
+        # The device expects the hash in the root to be SHA256 of concatenated binary file hashes
+        file_hashes_binary = b''.join(
+            bytes.fromhex(entry.hash) for entry in sorted(file_entries, key=lambda e: e.entry_name)
+        )
+        hash_of_hashes = self._sha256(file_hashes_binary)
+        logger.debug(f"  Hash-of-hashes (hashOfHashesV3): {hash_of_hashes}")
+
+        # Step 2.6: Upload the document index AGAIN under the hashOfHashesV3
+        # The device will try to download the index using this hash
+        if hash_of_hashes != doc_index_hash:
+            self.upload_blob(hash_of_hashes, doc_index_content)
+            logger.debug(f"  Uploaded document index under hashOfHashesV3")
 
         # Step 3: Get current root documents and merge our document
         current_root_hash, current_generation = self.get_current_generation()
         root_entries = self.get_root_documents()
 
         # Step 4: Update or add our document to the root
+        # Use hashOfHashesV3 instead of index hash for device compatibility
         doc_entry = BlobEntry(
-            hash=doc_index_hash,
+            hash=hash_of_hashes,
             type=DOC_TYPE,
             entry_name=doc_uuid,
             subfiles=len(file_entries),
@@ -325,4 +402,52 @@ class SyncV3Client:
 
         logger.info(
             f"Document {doc_uuid} uploaded successfully (gen {new_generation})"
+        )
+
+    def delete_document(
+        self,
+        doc_uuid: str,
+        broadcast: bool = True,
+    ) -> None:
+        """
+        Delete a document using Sync v3 protocol.
+
+        Args:
+            doc_uuid: Document UUID to delete
+            broadcast: Whether to trigger sync notification to xochitl
+
+        Raises:
+            requests.HTTPError: If delete fails
+        """
+        logger.info(f"Deleting document {doc_uuid} via Sync v3")
+
+        # Step 1: Get current root documents
+        current_root_hash, current_generation = self.get_current_generation()
+        root_entries = self.get_root_documents()
+
+        # Step 2: Remove the document from root
+        doc_found = False
+        new_entries = []
+        for entry in root_entries:
+            if entry.entry_name == doc_uuid:
+                doc_found = True
+                logger.debug(f"  Removing document from root: {doc_uuid}")
+            else:
+                new_entries.append(entry)
+
+        if not doc_found:
+            logger.warning(f"Document {doc_uuid} not found in root")
+            return
+
+        # Step 3: Create new root index and upload it
+        root_index_hash, _ = self.upload_index(new_entries)
+        logger.debug(f"  New root index hash: {root_index_hash}")
+
+        # Step 4: Update root (triggers broadcast if enabled)
+        new_generation = self.update_root(
+            root_index_hash, current_generation, broadcast
+        )
+
+        logger.info(
+            f"Document {doc_uuid} deleted successfully (gen {new_generation})"
         )

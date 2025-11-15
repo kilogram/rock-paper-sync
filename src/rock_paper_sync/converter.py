@@ -141,11 +141,20 @@ class SyncEngine:
 
             # Generate reMarkable document (reuse UUID if updating existing file)
             existing_uuid = current_state.remarkable_uuid if current_state else None
+            existing_page_uuids = []
+
             if existing_uuid:
                 logger.info(f"Updating existing document {existing_uuid} for {markdown_path}")
+                # Fetch existing page UUIDs to avoid CRDT conflicts
+                existing_page_uuids = self.cloud_sync.get_existing_page_uuids(existing_uuid)
+                if existing_page_uuids:
+                    logger.debug(f"Found {len(existing_page_uuids)} existing pages to reuse")
             else:
                 logger.info(f"Generating new reMarkable document for {markdown_path}")
-            rm_doc = self.generator.generate_document(md_doc, parent_uuid, existing_uuid)
+
+            rm_doc = self.generator.generate_document(
+                md_doc, parent_uuid, existing_uuid, existing_page_uuids
+            )
 
             # Generate binary .rm files for each page
             pages_with_data = [
@@ -191,15 +200,48 @@ class SyncEngine:
             self.state.log_sync_action(str(markdown_path), "error", str(e))
             return SyncResult(path=markdown_path, success=False, error=str(e))
 
+    def delete_file(self, relative_path: str, uuid: str) -> bool:
+        """Delete a file from the cloud and state database.
+
+        Args:
+            relative_path: Relative path in vault
+            uuid: reMarkable UUID to delete
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            logger.info(f"Deleting {relative_path} (UUID: {uuid})")
+            self.cloud_sync.delete_document(uuid)
+            self.state.delete_file_state(relative_path)
+            self.state.log_sync_action(relative_path, "deleted", f"Removed from cloud")
+            logger.info(f"Successfully deleted {relative_path}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete {relative_path}: {e}", exc_info=True)
+            self.state.log_sync_action(relative_path, "error", f"Delete failed: {e}")
+            return False
+
     def sync_all_changed(self) -> list[SyncResult]:
         """Sync all files that have changed since last sync.
 
         Uses state database to identify files with different content hashes.
         Errors in individual files don't stop the overall sync.
 
+        Also handles file deletions.
+
         Returns:
             List of SyncResults for all processed files
         """
+        # Handle deletions first
+        deleted_files = self.state.find_deleted_files(self.config.sync.obsidian_vault)
+
+        if deleted_files:
+            logger.info(f"Processing {len(deleted_files)} deleted file(s)")
+            for relative_path, uuid in deleted_files:
+                self.delete_file(relative_path, uuid)
+
+        # Then handle changed/new files
         changed_files = self.state.find_changed_files(
             self.config.sync.obsidian_vault,
             self.config.sync.include_patterns,
