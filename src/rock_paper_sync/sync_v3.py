@@ -239,7 +239,7 @@ class SyncV3Client:
             "broadcast": broadcast,
         }
 
-        logger.info(f"Updating root to {root_hash} (gen {generation})")
+        logger.info(f"Updating root to {root_hash} (gen {generation}, broadcast={broadcast})")
         response = requests.put(url, headers=self.headers, json=payload)
         response.raise_for_status()
 
