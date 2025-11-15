@@ -301,6 +301,40 @@ class TestSyncEngine:
         assert obsidian_path == "test.md"
         assert action == "synced"
 
+    def test_sync_file_exception_handling(
+        self,
+        sample_config: AppConfig,
+        state_manager: StateManager,
+        temp_vault: Path,
+        mocker,
+    ) -> None:
+        """Test that exceptions during sync are caught and logged."""
+        test_file = temp_vault / "test.md"
+        test_file.write_text("# Test")
+
+        engine = SyncEngine(sample_config, state_manager)
+
+        # Mock the generator to raise an exception
+        mocker.patch.object(
+            engine.generator,
+            "generate_document",
+            side_effect=RuntimeError("Test error during generation"),
+        )
+
+        result = engine.sync_file(test_file)
+
+        # Should return failure result
+        assert not result.success
+        assert "Test error during generation" in result.error
+
+        # Error should be logged to history
+        history = state_manager.get_recent_history(limit=5)
+        assert len(history) > 0
+        obsidian_path, action, timestamp, details = history[0]
+        assert str(test_file) in obsidian_path or "test.md" in obsidian_path
+        assert action == "error"
+        assert "Test error during generation" in details
+
 
 class TestSyncResult:
     """Test SyncResult dataclass."""

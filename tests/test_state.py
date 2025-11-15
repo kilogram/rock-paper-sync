@@ -73,6 +73,18 @@ class TestStateManagerInit:
         assert retrieved.remarkable_uuid == "uuid-1"
         manager2.close()
 
+    def test_init_database_connection_error(self, tmp_path: Path, mocker) -> None:
+        """Test that initialization fails gracefully when database connection fails."""
+        import sqlite3
+        from rm_obsidian_sync.state import StateError
+
+        # Mock sqlite3.connect to raise an exception
+        mocker.patch("sqlite3.connect", side_effect=sqlite3.OperationalError("Test error"))
+
+        db_path = tmp_path / "state.db"
+        with pytest.raises(StateError, match="Failed to initialize state database"):
+            StateManager(db_path)
+
 
 class TestFileState:
     """Tests for file state CRUD operations."""
@@ -475,6 +487,27 @@ class TestFindChangedFiles:
 
         manager.close()
 
+    def test_find_changed_skips_directories(self, temp_vault: Path, temp_db: Path) -> None:
+        """Test that directories are skipped even if they match patterns."""
+        manager = StateManager(temp_db)
+
+        # Create directory and file with similar names
+        (temp_vault / "test.md").write_text("File content")
+        (temp_vault / "folder.md").mkdir()  # Directory with .md extension
+        (temp_vault / "folder.md" / "nested.md").write_text("Nested content")
+
+        # Find files - should not include the directory itself
+        changed = manager.find_changed_files(temp_vault, ["**/*.md"], [])
+
+        paths = {f.name for f in changed}
+        # Should find the files but not the directory "folder.md"
+        assert "test.md" in paths
+        assert "nested.md" in paths
+        # The directory "folder.md" should not be in the results
+        assert all(f.is_file() for f in changed)
+
+        manager.close()
+
 
 class TestSyncHistory:
     """Tests for sync history logging."""
@@ -496,6 +529,8 @@ class TestSyncHistory:
 
     def test_log_multiple_actions(self, temp_db: Path) -> None:
         """Test logging multiple actions."""
+        import time
+
         manager = StateManager(temp_db)
 
         actions = [
@@ -506,6 +541,7 @@ class TestSyncHistory:
 
         for path, action, details in actions:
             manager.log_sync_action(path, action, details)
+            time.sleep(0.01)  # Small delay to ensure different timestamps
 
         history = manager.get_recent_history(limit=10)
         assert len(history) == 3
@@ -519,11 +555,14 @@ class TestSyncHistory:
 
     def test_get_recent_history_limit(self, temp_db: Path) -> None:
         """Test that history respects limit parameter."""
+        import time
+
         manager = StateManager(temp_db)
 
         # Log many actions
         for i in range(20):
             manager.log_sync_action(f"file{i}.md", "created", "")
+            time.sleep(0.001)  # Small delay to ensure different timestamps
 
         # Request only 5 most recent
         history = manager.get_recent_history(limit=5)

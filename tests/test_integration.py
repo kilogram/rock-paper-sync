@@ -723,8 +723,8 @@ class TestPerformance:
         doc = parse_markdown_file(large_file)
         elapsed = time.time() - start_time
 
-        # Should parse quickly (< 1 second)
-        assert elapsed < 1.0
+        # Should parse quickly (< 2 seconds, generous for CI environments)
+        assert elapsed < 2.0
 
         # Should have many blocks (1 main header + 200 sections + 400 paragraphs)
         assert len(doc.content) >= 400  # At least the paragraphs

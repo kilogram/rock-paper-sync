@@ -307,7 +307,7 @@ class StateManager:
         """
         cursor = self.conn.execute(
             "SELECT obsidian_path, action, timestamp, details FROM sync_history "
-            "ORDER BY timestamp DESC LIMIT ?",
+            "ORDER BY timestamp DESC, id DESC LIMIT ?",
             (limit,),
         )
         return cursor.fetchall()

@@ -366,3 +366,242 @@ class TestValidateConfig:
 
         with pytest.raises(ConfigError, match="include_patterns cannot be empty"):
             validate_config(config)
+
+    def test_missing_remarkable_output(self, config_samples_dir: Path) -> None:
+        """Test that missing remarkable_output field raises ConfigError."""
+        config_path = config_samples_dir / "missing_output_path.toml"
+        with pytest.raises(ConfigError, match="Missing required field: paths.remarkable_output"):
+            load_config(config_path)
+
+    def test_missing_state_database(self, config_samples_dir: Path) -> None:
+        """Test that missing state_database field raises ConfigError."""
+        config_path = config_samples_dir / "missing_state_db.toml"
+        with pytest.raises(ConfigError, match="Missing required field: paths.state_database"):
+            load_config(config_path)
+
+    def test_missing_log_file(self, config_samples_dir: Path) -> None:
+        """Test that missing log file field raises ConfigError."""
+        config_path = config_samples_dir / "missing_log_file.toml"
+        with pytest.raises(ConfigError, match="Missing required field: logging.file"):
+            load_config(config_path)
+
+    def test_invalid_config_structure(self, tmp_path: Path) -> None:
+        """Test that invalid config structure raises ConfigError."""
+        config_path = tmp_path / "invalid_structure.toml"
+        # Create TOML with invalid structure (e.g., paths is a string not a table)
+        config_path.write_text('paths = "invalid"')
+
+        with pytest.raises(ConfigError, match="Invalid configuration structure"):
+            load_config(config_path)
+
+    def test_vault_permission_error(self, valid_config_toml: Path, tmp_path: Path, mocker) -> None:
+        """Test that unreadable vault directory fails validation."""
+        config = load_config(valid_config_toml)
+
+        # Mock os.access to return False for read permission
+        mocker.patch("os.access", return_value=False)
+
+        with pytest.raises(ConfigError, match="not readable"):
+            validate_config(config)
+
+    def test_validate_negative_margin_bottom(self, valid_config_toml: Path) -> None:
+        """Test that negative margin_bottom fails validation."""
+        config = load_config(valid_config_toml)
+        config = AppConfig(
+            sync=config.sync,
+            layout=LayoutConfig(
+                lines_per_page=config.layout.lines_per_page,
+                margin_top=config.layout.margin_top,
+                margin_bottom=-5,
+                margin_left=config.layout.margin_left,
+                margin_right=config.layout.margin_right,
+            ),
+            log_level=config.log_level,
+            log_file=config.log_file,
+        )
+
+        with pytest.raises(ConfigError, match="margin_bottom must be non-negative"):
+            validate_config(config)
+
+    def test_validate_negative_margin_left(self, valid_config_toml: Path) -> None:
+        """Test that negative margin_left fails validation."""
+        config = load_config(valid_config_toml)
+        config = AppConfig(
+            sync=config.sync,
+            layout=LayoutConfig(
+                lines_per_page=config.layout.lines_per_page,
+                margin_top=config.layout.margin_top,
+                margin_bottom=config.layout.margin_bottom,
+                margin_left=-5,
+                margin_right=config.layout.margin_right,
+            ),
+            log_level=config.log_level,
+            log_file=config.log_file,
+        )
+
+        with pytest.raises(ConfigError, match="margin_left must be non-negative"):
+            validate_config(config)
+
+    def test_validate_negative_margin_right(self, valid_config_toml: Path) -> None:
+        """Test that negative margin_right fails validation."""
+        config = load_config(valid_config_toml)
+        config = AppConfig(
+            sync=config.sync,
+            layout=LayoutConfig(
+                lines_per_page=config.layout.lines_per_page,
+                margin_top=config.layout.margin_top,
+                margin_bottom=config.layout.margin_bottom,
+                margin_left=config.layout.margin_left,
+                margin_right=-5,
+            ),
+            log_level=config.log_level,
+            log_file=config.log_file,
+        )
+
+        with pytest.raises(ConfigError, match="margin_right must be non-negative"):
+            validate_config(config)
+
+    def test_remarkable_output_not_directory(self, valid_config_toml: Path, tmp_path: Path) -> None:
+        """Test that output path being a file (not directory) fails validation."""
+        config = load_config(valid_config_toml)
+        # Create a file instead of a directory
+        file_path = tmp_path / "output_file.txt"
+        file_path.write_text("not a directory")
+
+        config = AppConfig(
+            sync=SyncConfig(
+                obsidian_vault=config.sync.obsidian_vault,
+                remarkable_output=file_path,
+                state_database=config.sync.state_database,
+                include_patterns=config.sync.include_patterns,
+                exclude_patterns=config.sync.exclude_patterns,
+                debounce_seconds=config.sync.debounce_seconds,
+            ),
+            layout=config.layout,
+            log_level=config.log_level,
+            log_file=config.log_file,
+        )
+
+        with pytest.raises(ConfigError, match="is not a directory"):
+            validate_config(config)
+
+    def test_remarkable_output_not_writable(self, valid_config_toml: Path, mocker) -> None:
+        """Test that non-writable output directory fails validation."""
+        config = load_config(valid_config_toml)
+
+        # Mock os.access to return False for write permission only for output dir
+        def mock_access(path, mode):
+            if str(path) == str(config.sync.remarkable_output) and mode == os.W_OK:
+                return False
+            return True
+
+        mocker.patch("os.access", side_effect=mock_access)
+
+        with pytest.raises(ConfigError, match="not writable"):
+            validate_config(config)
+
+    def test_state_database_dir_creation_failure(self, valid_config_toml: Path, tmp_path: Path, mocker) -> None:
+        """Test that state database directory creation failure is handled."""
+        config = load_config(valid_config_toml)
+
+        # Set state_database to a path with a non-creatable parent
+        bad_db = tmp_path / "nonexistent_parent" / "state.db"
+        config = AppConfig(
+            sync=SyncConfig(
+                obsidian_vault=config.sync.obsidian_vault,
+                remarkable_output=config.sync.remarkable_output,
+                state_database=bad_db,
+                include_patterns=config.sync.include_patterns,
+                exclude_patterns=config.sync.exclude_patterns,
+                debounce_seconds=config.sync.debounce_seconds,
+            ),
+            layout=config.layout,
+            log_level=config.log_level,
+            log_file=config.log_file,
+        )
+
+        # Mock mkdir to raise an exception
+        mocker.patch.object(Path, "mkdir", side_effect=PermissionError("Mock permission error"))
+
+        with pytest.raises(ConfigError, match="Cannot create state database directory"):
+            validate_config(config)
+
+    def test_state_database_dir_not_writable(self, valid_config_toml: Path, tmp_path: Path, mocker) -> None:
+        """Test that non-writable state database directory fails validation."""
+        config = load_config(valid_config_toml)
+
+        # Create a valid database path
+        db_dir = tmp_path / "state_dir"
+        db_dir.mkdir()
+        db_path = db_dir / "state.db"
+
+        config = AppConfig(
+            sync=SyncConfig(
+                obsidian_vault=config.sync.obsidian_vault,
+                remarkable_output=config.sync.remarkable_output,
+                state_database=db_path,
+                include_patterns=config.sync.include_patterns,
+                exclude_patterns=config.sync.exclude_patterns,
+                debounce_seconds=config.sync.debounce_seconds,
+            ),
+            layout=config.layout,
+            log_level=config.log_level,
+            log_file=config.log_file,
+        )
+
+        # Mock os.access to return False for write permission only for state db dir
+        def mock_access(path, mode):
+            if str(path) == str(db_dir) and mode == os.W_OK:
+                return False
+            return True
+
+        mocker.patch("os.access", side_effect=mock_access)
+
+        with pytest.raises(ConfigError, match="State database directory is not writable"):
+            validate_config(config)
+
+    def test_log_file_dir_creation_failure(self, valid_config_toml: Path, tmp_path: Path, mocker) -> None:
+        """Test that log file directory creation failure is handled."""
+        config = load_config(valid_config_toml)
+
+        # Set log_file to a path with a non-creatable parent
+        bad_log = tmp_path / "nonexistent_parent" / "sync.log"
+        config = AppConfig(
+            sync=config.sync,
+            layout=config.layout,
+            log_level=config.log_level,
+            log_file=bad_log,
+        )
+
+        # Mock mkdir to raise an exception
+        mocker.patch.object(Path, "mkdir", side_effect=OSError("Mock OS error"))
+
+        with pytest.raises(ConfigError, match="Cannot create log file directory"):
+            validate_config(config)
+
+    def test_log_file_dir_not_writable(self, valid_config_toml: Path, tmp_path: Path, mocker) -> None:
+        """Test that non-writable log file directory fails validation."""
+        config = load_config(valid_config_toml)
+
+        # Create a valid log path
+        log_dir = tmp_path / "log_dir"
+        log_dir.mkdir()
+        log_path = log_dir / "sync.log"
+
+        config = AppConfig(
+            sync=config.sync,
+            layout=config.layout,
+            log_level=config.log_level,
+            log_file=log_path,
+        )
+
+        # Mock os.access to return False for write permission only for log dir
+        def mock_access(path, mode):
+            if str(path) == str(log_dir) and mode == os.W_OK:
+                return False
+            return True
+
+        mocker.patch("os.access", side_effect=mock_access)
+
+        with pytest.raises(ConfigError, match="Log file directory is not writable"):
+            validate_config(config)
