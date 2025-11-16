@@ -5,6 +5,7 @@ import logging
 import time
 from typing import Optional
 
+from .audit import get_audit_logger
 from .rm_cloud_client import RmCloudClient
 from .sync_v3 import SyncV3Client
 
@@ -258,6 +259,9 @@ class RmCloudSync:
         for page_uuid, rm_data in pages:
             files[f"{doc_uuid}/{page_uuid}.rm"] = rm_data
 
+        # Calculate total size for audit logging
+        total_size = sum(len(data) for data in files.values())
+
         # Upload via Sync v3
         self.sync_client.upload_document(
             doc_uuid=doc_uuid,
@@ -266,6 +270,15 @@ class RmCloudSync:
         )
 
         logger.info(f"Document uploaded successfully: {doc_uuid}")
+
+        # AUDIT: Log cloud upload operation
+        audit = get_audit_logger()
+        audit.log_cloud_upload(
+            doc_uuid=doc_uuid,
+            file_count=len(files),
+            total_size=total_size,
+            broadcast=True,
+        )
 
     def is_sync_enabled(self) -> bool:
         """Check if sync is enabled (device registered)."""
@@ -350,3 +363,10 @@ class RmCloudSync:
         logger.info(f"Deleting document from cloud: {doc_uuid}")
         self.sync_client.delete_document(doc_uuid, broadcast=True)
         logger.info(f"Document deleted successfully: {doc_uuid}")
+
+        # AUDIT: Log cloud delete operation
+        audit = get_audit_logger()
+        audit.log_cloud_delete(
+            doc_uuid=doc_uuid,
+            broadcast=True,
+        )

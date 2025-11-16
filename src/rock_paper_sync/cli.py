@@ -17,6 +17,7 @@ from pathlib import Path
 
 import click
 
+from .audit import get_audit_logger, initialize_audit_logger
 from .config import AppConfig, load_config, validate_config
 from .converter import SyncEngine
 from .logging_setup import setup_logging
@@ -64,6 +65,19 @@ def main(ctx: click.Context, config: str, verbose: bool) -> None:
         # Override log level if verbose flag is set
         log_level = "debug" if verbose else app_config.log_level
         setup_logging(log_level, app_config.log_file)
+
+        # Initialize audit logger with dedicated audit file
+        audit_file = app_config.log_file.parent / "audit.jsonl"
+        initialize_audit_logger(audit_file=audit_file)
+
+        # AUDIT: Log configuration load
+        audit = get_audit_logger()
+        vault_names = [v.name for v in app_config.sync.vaults]
+        audit.log_config_load(
+            config_path=config_path,
+            vault_count=len(app_config.sync.vaults),
+            vault_names=vault_names,
+        )
 
         ctx.obj["config"] = app_config
 

@@ -53,6 +53,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from .audit import get_audit_logger
 from .config import AppConfig, VaultConfig
 from .generator import RemarkableGenerator
 from .parser import parse_markdown_file
@@ -209,6 +210,16 @@ class SyncEngine:
 
             # Get relative path for state tracking
             relative_path = str(markdown_path.relative_to(vault.path))
+            file_size = markdown_path.stat().st_size
+
+            # AUDIT: Log sync start with file metadata
+            audit = get_audit_logger()
+            audit.log_sync_start(
+                vault_name=vault.name,
+                file_path=relative_path,
+                file_hash=md_doc.content_hash,
+                file_size=file_size,
+            )
 
             # Check if needs sync (compare hash)
             current_state = self.state.get_file_state(vault.name, relative_path)
@@ -272,6 +283,16 @@ class SyncEngine:
                 vault.name, relative_path, "synced", f"Generated {len(rm_doc.pages)} page(s)"
             )
 
+            # AUDIT: Log successful sync with complete details
+            audit.log_sync_success(
+                vault_name=vault.name,
+                file_path=relative_path,
+                remarkable_uuid=rm_doc.uuid,
+                page_count=len(rm_doc.pages),
+                file_hash=md_doc.content_hash,
+                previous_uuid=existing_uuid,
+            )
+
             logger.info(
                 f"Successfully synced {vault.name}:{markdown_path} -> {rm_doc.uuid} "
                 f"({len(rm_doc.pages)} page(s))"
@@ -286,7 +307,17 @@ class SyncEngine:
 
         except Exception as e:
             logger.error(f"Failed to sync {vault.name}:{markdown_path}: {e}", exc_info=True)
-            self.state.log_sync_action(vault.name, str(markdown_path), "error", str(e))
+
+            # AUDIT: Log sync failure with error details
+            relative_path_str = str(markdown_path.relative_to(vault.path)) if markdown_path.is_relative_to(vault.path) else str(markdown_path)
+            audit = get_audit_logger()
+            audit.log_sync_failure(
+                vault_name=vault.name,
+                file_path=relative_path_str,
+                error=str(e),
+            )
+
+            self.state.log_sync_action(vault.name, relative_path_str, "error", str(e))
             return SyncResult(
                 vault_name=vault.name, path=markdown_path, success=False, error=str(e)
             )
@@ -540,6 +571,15 @@ class SyncEngine:
         logger.info(
             f"Vault '{vault_name}' unsynced: {files_removed} files removed from state, "
             f"{files_deleted} deleted from cloud"
+        )
+
+        # AUDIT: Log unsync operation with complete details
+        audit = get_audit_logger()
+        audit.log_unsync(
+            vault_name=vault_name,
+            files_removed=files_removed,
+            files_deleted_from_cloud=files_deleted,
+            delete_from_cloud=delete_from_cloud,
         )
 
         return files_removed, files_deleted
