@@ -211,6 +211,8 @@ level = "debug"
 - `docs/MULTI_VAULT.md` - Multi-vault user guide
 - `docs/SYNC_PROTOCOL.md` - Technical protocol reference
 - `docs/RMSCENE_FINDINGS.md` - rmscene library notes
+- `docs/ANNOTATION_POSITION_ADJUSTMENT.md` - ML-ready X,Y annotation adjustment architecture
+- `docs/ANNOTATION_ARCHITECTURE_REVIEW.md` - Coordinate space analysis and fixes
 
 ## Getting Help
 

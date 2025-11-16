@@ -12,6 +12,7 @@ import time
 import uuid as uuid_module
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Optional
 from uuid import uuid4
 
 import rmscene
@@ -28,6 +29,15 @@ from rmscene.scene_stream import (
 )
 from rmscene.tagged_block_common import LwwValue
 
+from .annotations import (
+    Annotation,
+    HeuristicTextAnchor,
+    TextBlock,
+    WordWrapLayoutEngine,
+    associate_annotations_with_content,
+    calculate_position_mapping,
+    read_annotations,
+)
 from .config import LayoutConfig
 from .parser import BlockType, ContentBlock, FormatStyle, MarkdownDocument, TextFormat
 
@@ -60,10 +70,18 @@ class RemarkablePage:
     Attributes:
         uuid: Unique page identifier
         text_items: List of positioned text items on this page
+        text_blocks: List of text blocks with position info (for annotation mapping)
+        annotations: List of annotations to preserve on this page
+        annotation_blocks: Raw rmscene blocks for preserved annotations
+        original_rm_path: Path to original .rm file (for annotation preservation)
     """
 
     uuid: str
     text_items: list[TextItem] = field(default_factory=list)
+    text_blocks: list[TextBlock] = field(default_factory=list)
+    annotations: list[Annotation] = field(default_factory=list)
+    annotation_blocks: list = field(default_factory=list)
+    original_rm_path: Optional[Path] = None
 
 
 @dataclass
@@ -159,7 +177,18 @@ class RemarkableGenerator:
         self.line_height = self.LINE_HEIGHT
         self.char_width = self.CHAR_WIDTH
 
-        logger.info("RemarkableGenerator initialized with rmscene integration")
+        # Initialize annotation adjustment strategies (Phase 1)
+        self.text_anchor_strategy = HeuristicTextAnchor(
+            context_window=50,
+            fuzzy_threshold=0.8
+        )
+        self.layout_engine = WordWrapLayoutEngine(
+            text_width=self.TEXT_WIDTH,
+            avg_char_width=self.CHAR_WIDTH,
+            line_height=self.LINE_HEIGHT
+        )
+
+        logger.info("RemarkableGenerator initialized with rmscene integration and Phase 1 annotation anchoring")
 
     def generate_document(
         self,
@@ -167,6 +196,7 @@ class RemarkableGenerator:
         parent_uuid: str = "",
         doc_uuid: str | None = None,
         existing_page_uuids: list[str] | None = None,
+        existing_rm_files: list[Path | None] | None = None,
     ) -> RemarkableDocument:
         """Convert markdown document to reMarkable format.
 
@@ -175,15 +205,17 @@ class RemarkableGenerator:
             parent_uuid: UUID of parent folder (empty for root)
             doc_uuid: Existing document UUID to reuse (for updates), or None for new documents
             existing_page_uuids: Existing page UUIDs to reuse (avoids CRDT conflicts on updates)
+            existing_rm_files: List of paths to existing .rm files for annotation preservation.
+                              List should match existing_page_uuids in length and order.
+                              None entries indicate no existing file for that page.
 
         Returns:
             RemarkableDocument ready to be written to disk
 
         Note:
-            When doc_uuid is provided (update case), the existing document will be
-            overwritten, including any annotations the user made on the device.
-            If existing_page_uuids is provided, those page UUIDs will be reused to avoid
-            CRDT merge conflicts.
+            When existing_rm_files is provided, annotations (strokes and highlights) from
+            those files will be extracted and preserved in the new document, repositioned
+            to match the updated content based on text proximity.
         """
         # Reuse existing UUID for updates, or generate new one for new documents
         doc_uuid = doc_uuid or str(uuid_module.uuid4())
@@ -204,8 +236,16 @@ class RemarkableGenerator:
                 page_uuid = str(uuid_module.uuid4())
                 logger.debug(f"Generated new page UUID: {page_uuid}")
 
-            text_items = self.blocks_to_text_items(blocks)
-            pages.append(RemarkablePage(uuid=page_uuid, text_items=text_items))
+            text_items, text_blocks = self.blocks_to_text_items(blocks)
+            pages.append(
+                RemarkablePage(
+                    uuid=page_uuid, text_items=text_items, text_blocks=text_blocks
+                )
+            )
+
+        # Preserve annotations from existing .rm files if provided
+        if existing_rm_files:
+            self._preserve_annotations(pages, existing_rm_files)
 
         logger.debug(
             f"Generated document {doc_uuid} with {len(pages)} page(s) "
@@ -219,6 +259,507 @@ class RemarkableGenerator:
             pages=pages,
             modified_time=timestamp,
         )
+
+    def _preserve_annotations(
+        self, pages: list[RemarkablePage], existing_rm_files: list[Path | None]
+    ) -> None:
+        """Preserve annotations from existing .rm files with position adjustment.
+
+        This method:
+        1. Reads annotation blocks from existing .rm files (as rmscene objects)
+        2. Extracts old text blocks to understand original layout
+        3. Matches old text blocks to new text blocks based on content
+        4. Adjusts annotation Y-coordinates in place based on text repositioning
+        5. Stores modified annotation blocks for writing
+
+        This avoids conversion bugs by modifying rmscene blocks directly.
+
+        Args:
+            pages: List of newly generated pages with new text layout
+            existing_rm_files: List of paths to existing .rm files (or None)
+        """
+        from .annotations import calculate_position_mapping
+
+        # Extract FULL DOCUMENT text from all old .rm files for content anchoring
+        old_full_text_parts = []
+        for rm_file_path in existing_rm_files:
+            if rm_file_path and Path(rm_file_path).exists():
+                _, _, page_text = self._extract_text_blocks_from_rm(rm_file_path)
+                old_full_text_parts.append(page_text)
+        old_full_text = '\n\n'.join(old_full_text_parts)  # Join pages with double newline
+
+        # Compute FULL DOCUMENT text from all new pages
+        new_full_text_parts = []
+        for page in pages:
+            page_text = '\n'.join(block.content for block in page.text_blocks)
+            new_full_text_parts.append(page_text)
+        new_full_text = '\n\n'.join(new_full_text_parts)  # Join pages with double newline
+
+        logger.debug(f"Full document text: old={len(old_full_text)} chars, new={len(new_full_text)} chars")
+
+        for i, (page, rm_file_path) in enumerate(zip(pages, existing_rm_files)):
+            if rm_file_path is None or not Path(rm_file_path).exists():
+                logger.debug(f"Page {i}: No existing .rm file to preserve annotations from")
+                continue
+
+            try:
+                # Read all blocks from existing file using rmscene
+                with open(rm_file_path, 'rb') as f:
+                    existing_blocks = list(rmscene.read_blocks(f))
+
+                # Extract annotation blocks (Lines and Glyphs)
+                annotation_blocks = [
+                    block for block in existing_blocks
+                    if 'Line' in type(block).__name__ or 'Glyph' in type(block).__name__
+                ]
+
+                if not annotation_blocks:
+                    logger.debug(f"Page {i}: No annotation blocks found in {rm_file_path}")
+                    continue
+
+                # Extract old text blocks for spatial positioning (per-page)
+                old_text_blocks, old_text_origin_y, _ = self._extract_text_blocks_from_rm(rm_file_path)
+                new_text_blocks = page.text_blocks
+                new_text_origin_y = self.TEXT_POS_Y  # New documents use TEXT_POS_Y constant
+
+                # Use FULL DOCUMENT text for content anchoring (not per-page)
+                old_text = old_full_text
+                new_text = new_full_text
+
+                if not old_text_blocks or not new_text_blocks:
+                    # No text to match - keep annotations at original positions
+                    logger.warning(
+                        f"Page {i}: Cannot calculate position mapping (old={len(old_text_blocks)}, new={len(new_text_blocks)})"
+                    )
+                    page.annotation_blocks = annotation_blocks
+                    continue
+
+                logger.debug(
+                    f"Page {i}: Text origins - old={old_text_origin_y:.1f}, new={new_text_origin_y:.1f}"
+                )
+
+                # Calculate mapping between old and new text positions
+                position_map = calculate_position_mapping(old_text_blocks, new_text_blocks)
+
+                # Adjust annotation blocks based on text repositioning
+                # Phase 1: Uses content anchoring for Glyph blocks, spatial for Line blocks
+                adjusted_blocks = []
+                for block in annotation_blocks:
+                    adjusted_block = self._adjust_annotation_block_position(
+                        block, old_text, new_text, old_text_blocks, new_text_blocks,
+                        position_map, old_text_origin_y, new_text_origin_y
+                    )
+                    adjusted_blocks.append(adjusted_block)
+
+                # Store the adjusted rmscene blocks AND original file path
+                page.annotation_blocks = adjusted_blocks
+                page.original_rm_path = rm_file_path
+
+                logger.info(
+                    f"Page {i}: Preserved and adjusted {len(adjusted_blocks)} annotation blocks from {rm_file_path}"
+                )
+
+            except Exception as e:
+                logger.warning(
+                    f"Page {i}: Failed to preserve annotations from {rm_file_path}: {e}"
+                )
+
+    def _extract_text_blocks_from_rm(
+        self, rm_file_path: Path
+    ) -> tuple[list[TextBlock], float, str]:
+        """Extract text blocks, positions, and full text from an existing .rm file.
+
+        Parses the .rm file to extract the RootTextBlock and creates TextBlock
+        objects with Y-coordinates for each line of text. Also returns the text
+        origin Y coordinate for coordinate space transformations and the full
+        text content for annotation content anchoring (Phase 1).
+
+        Args:
+            rm_file_path: Path to existing .rm file
+
+        Returns:
+            Tuple of (text_blocks, text_origin_y, full_text) where:
+            - text_blocks: List of TextBlock objects with position information
+            - text_origin_y: Y-coordinate of the text origin (RootTextBlock.pos_y)
+            - full_text: Full text content as a single string
+        """
+        try:
+            with open(rm_file_path, 'rb') as f:
+                blocks = list(rmscene.read_blocks(f))
+
+            text_blocks = []
+            text_origin_y = self.TEXT_POS_Y  # Default to constant
+            full_text = ""
+
+            # Find RootTextBlock to get text content and position
+            for block in blocks:
+                if 'RootText' in type(block).__name__:
+                    text_data = block.value
+                    text_origin_y = text_data.pos_y  # Capture the actual text origin
+
+                    # Extract actual text from CrdtSequence
+                    # The text is in the 'value' field of each CrdtSequenceItem
+                    text_parts = []
+                    for item in text_data.items.sequence_items():
+                        if hasattr(item, 'value') and isinstance(item.value, str):
+                            text_parts.append(item.value)
+
+                    # Full text for content anchoring (join without splitting first)
+                    full_text = ''.join(text_parts)
+
+                    # Split into lines for TextBlock creation
+                    lines = full_text.split('\n')
+
+                    # Create TextBlock for each line with estimated Y positions
+                    y_pos = text_data.pos_y
+                    for line in lines:
+                        if line.strip():  # Skip empty lines
+                            text_blocks.append(
+                                TextBlock(
+                                    content=line,
+                                    y_start=y_pos,
+                                    y_end=y_pos + self.line_height,
+                                    block_type="paragraph"
+                                )
+                            )
+                            y_pos += self.line_height
+
+            return text_blocks, text_origin_y, full_text
+
+        except Exception as e:
+            logger.warning(f"Failed to extract text blocks from {rm_file_path}: {e}")
+            return [], self.TEXT_POS_Y, ""
+
+    def _adjust_annotation_block_position(
+        self,
+        block,
+        old_text: str,
+        new_text: str,
+        old_text_blocks: list[TextBlock],
+        new_text_blocks: list[TextBlock],
+        position_map: dict[int, int],
+        old_text_origin_y: float,
+        new_text_origin_y: float
+    ):
+        """Adjust rmscene annotation block coordinates based on text repositioning.
+
+        Phase 1: Uses content anchoring for Glyph blocks (highlights) to adjust both
+        X and Y coordinates. Uses spatial approach for Line blocks (strokes) for Y only.
+
+        All calculations are done in ABSOLUTE page coordinates to handle both
+        text-relative and absolute annotation coordinate spaces correctly.
+
+        Args:
+            block: rmscene annotation block (SceneLineItemBlock or SceneGlyphItemBlock)
+            old_text: Full text from the old document
+            new_text: Full text from the new document
+            old_text_blocks: Text blocks from the old document version (in absolute coords)
+            new_text_blocks: Text blocks from the new document version (in absolute coords)
+            position_map: Mapping from old text block indices to new indices
+            old_text_origin_y: The RootTextBlock.pos_y from the old document
+            new_text_origin_y: The RootTextBlock.pos_y for the new document
+
+        Returns:
+            Modified block with adjusted coordinates
+        """
+        # Check if this is a Glyph (highlight) - use content anchoring
+        if 'Glyph' in type(block).__name__:
+            return self._adjust_glyph_with_content_anchoring(
+                block, old_text, new_text,
+                (self.TEXT_POS_X, old_text_origin_y),
+                (self.TEXT_POS_X, new_text_origin_y)
+            )
+
+        # For Lines (strokes), use spatial Y-only approach
+        # Get the annotation's center Y position in ABSOLUTE coordinates
+        center_y_absolute = self._get_annotation_center_y_absolute(block, old_text_origin_y)
+
+        if center_y_absolute is None:
+            logger.debug("Cannot determine annotation center Y, keeping original position")
+            return block
+
+        # Find the nearest old text block to this annotation (both in absolute coords)
+        nearest_old_idx = None
+        min_distance = float('inf')
+
+        for idx, text_block in enumerate(old_text_blocks):
+            # Calculate distance from annotation center to text block center
+            block_center_y = (text_block.y_start + text_block.y_end) / 2
+            distance = abs(center_y_absolute - block_center_y)
+
+            if distance < min_distance:
+                min_distance = distance
+                nearest_old_idx = idx
+
+        if nearest_old_idx is None:
+            logger.debug("Cannot find nearest old text block, keeping original position")
+            return block
+
+        # Look up the corresponding new text block
+        new_idx = position_map.get(nearest_old_idx)
+
+        if new_idx is None or new_idx >= len(new_text_blocks):
+            logger.debug(
+                f"No mapping for old block {nearest_old_idx} or invalid new index, keeping original position"
+            )
+            return block
+
+        # Calculate Y offset between old and new text block positions (absolute coords)
+        old_block_y = (old_text_blocks[nearest_old_idx].y_start + old_text_blocks[nearest_old_idx].y_end) / 2
+        new_block_y = (new_text_blocks[new_idx].y_start + new_text_blocks[new_idx].y_end) / 2
+        y_offset = new_block_y - old_block_y
+
+        if abs(y_offset) < 0.1:  # No significant movement
+            logger.debug(
+                f"Annotation at y={center_y_absolute:.1f} requires no adjustment (offset={y_offset:.1f})"
+            )
+            return block
+
+        # Apply the Y offset to the annotation block
+        self._apply_y_offset_to_block(block, y_offset)
+
+        logger.debug(
+            f"Adjusted annotation at y={center_y_absolute:.1f} by offset={y_offset:.1f} "
+            f"(old block {nearest_old_idx} → new block {new_idx})"
+        )
+
+        return block
+
+    def _apply_y_offset_to_block(self, block, y_offset: float) -> None:
+        """Apply Y offset to all coordinates in an rmscene annotation block.
+
+        Modifies the block in place.
+
+        Args:
+            block: rmscene annotation block
+            y_offset: Y offset to apply (positive = move down)
+        """
+        try:
+            if not hasattr(block, 'item') or not hasattr(block.item, 'value'):
+                return
+
+            value = block.item.value
+
+            # For Line blocks (strokes)
+            if 'Line' in type(value).__name__:
+                if hasattr(value, 'points') and value.points:
+                    for point in value.points:
+                        if hasattr(point, 'y'):
+                            point.y += y_offset
+
+            # For Glyph blocks (highlights)
+            if 'Glyph' in type(value).__name__:
+                if hasattr(value, 'rectangles') and value.rectangles:
+                    for rect in value.rectangles:
+                        if hasattr(rect, 'y'):
+                            rect.y += y_offset
+
+        except Exception as e:
+            logger.warning(f"Failed to apply Y offset to annotation block: {e}")
+
+    def _adjust_glyph_with_content_anchoring(
+        self,
+        glyph_block,
+        old_text: str,
+        new_text: str,
+        old_origin: tuple[float, float],
+        new_origin: tuple[float, float]
+    ):
+        """Adjust Glyph (highlight) using content anchoring (Phase 1).
+
+        This method anchors highlights to their text content, so they move both
+        horizontally and vertically as text reflows.
+
+        Args:
+            glyph_block: SceneGlyphItemBlock
+            old_text: Full text of old document
+            new_text: Full text of new document
+            old_origin: (x, y) origin of old text block
+            new_origin: (x, y) origin of new text block
+
+        Returns:
+            Modified glyph_block with adjusted rectangles
+        """
+        # Extract highlighted text
+        if not hasattr(glyph_block.item, 'value'):
+            logger.warning("Glyph block has no value, keeping original position")
+            return glyph_block
+
+        glyph_value = glyph_block.item.value
+        if not hasattr(glyph_value, 'text') or not glyph_value.text:
+            logger.warning("Glyph has no text content, keeping original position")
+            return glyph_block
+
+        highlight_text = glyph_value.text
+
+        # Get old position (average of rectangles)
+        if hasattr(glyph_value, 'rectangles') and glyph_value.rectangles:
+            old_x = sum(r.x for r in glyph_value.rectangles) / len(glyph_value.rectangles)
+            old_y = sum(r.y for r in glyph_value.rectangles) / len(glyph_value.rectangles)
+        else:
+            logger.warning("Glyph has no rectangles, keeping original position")
+            return glyph_block
+
+        # Find anchor in old document
+        anchor = self.text_anchor_strategy.find_anchor(
+            highlight_text, old_text, (old_x, old_y)
+        )
+
+        logger.debug(
+            f"Highlight '{highlight_text[:30]}...': old_pos=({old_x:.1f}, {old_y:.1f}), "
+            f"old_offset={anchor.char_offset}, confidence={anchor.confidence:.2f}"
+        )
+
+        if anchor.confidence < 0.5:
+            logger.warning(
+                f"Low confidence anchor ({anchor.confidence:.2f}) for '{highlight_text[:30]}...', "
+                f"keeping original position"
+            )
+            # Keep original position for low-confidence matches
+            return glyph_block
+
+        # Resolve anchor in new document
+        new_offset = self.text_anchor_strategy.resolve_anchor(anchor, new_text)
+
+        if new_offset is None:
+            logger.warning(f"Could not find '{highlight_text[:30]}...' in new document, keeping original position")
+            return glyph_block
+
+        logger.debug(f"  Resolved to new_offset={new_offset} (delta={new_offset - (anchor.char_offset or 0)})")
+
+        # Calculate new position using layout engine
+        try:
+            new_x, new_y = self.layout_engine.offset_to_position(
+                new_offset, new_text, new_origin, self.TEXT_WIDTH
+            )
+            logger.debug(f"  Layout engine: new_pos=({new_x:.1f}, {new_y:.1f}), origin={new_origin}")
+        except Exception as e:
+            logger.warning(f"Failed to calculate new position for highlight: {e}")
+            return glyph_block
+
+        # Calculate offset from old position
+        x_offset = new_x - old_x
+        y_offset = new_y - old_y
+
+        logger.debug(f"  Calculated offset: ({x_offset:.1f}, {y_offset:.1f})")
+
+        # Adjust all rectangles
+        for rect in glyph_value.rectangles:
+            rect.x += x_offset
+            rect.y += y_offset
+
+        logger.debug(
+            f"Adjusted highlight '{highlight_text[:30]}...' by offset=({x_offset:.1f}, {y_offset:.1f}), "
+            f"confidence={anchor.confidence:.2f}"
+        )
+
+        return glyph_block
+
+    def _get_annotation_center_y(self, block) -> float | None:
+        """Extract the center Y coordinate from an rmscene annotation block.
+
+        Args:
+            block: rmscene annotation block
+
+        Returns:
+            Center Y coordinate or None if cannot be determined
+        """
+        try:
+            if not hasattr(block, 'item') or not hasattr(block.item, 'value'):
+                return None
+
+            value = block.item.value
+
+            # For Line blocks (strokes)
+            if 'Line' in type(value).__name__:
+                if hasattr(value, 'points') and value.points:
+                    ys = [p.y for p in value.points if hasattr(p, 'y')]
+                    if ys:
+                        return sum(ys) / len(ys)
+
+            # For Glyph blocks (highlights)
+            if 'Glyph' in type(value).__name__:
+                if hasattr(value, 'rectangles') and value.rectangles:
+                    ys = [r.y + r.h / 2 for r in value.rectangles if hasattr(r, 'y')]
+                    if ys:
+                        return sum(ys) / len(ys)
+
+            return None
+
+        except Exception:
+            return None
+
+    def _get_annotation_center_y_absolute(
+        self, block, text_origin_y: float
+    ) -> float | None:
+        """Extract center Y coordinate in ABSOLUTE page coordinates.
+
+        Detects the coordinate space from the annotation's parent_id and
+        transforms text-relative coordinates to absolute coordinates.
+
+        Coordinate spaces in reMarkable v6 files:
+        - Absolute: Items parented to root layer (CrdtId(0, 11))
+        - Text-relative: Items parented to text layers (e.g., CrdtId(2, 1316))
+          These use coordinates relative to RootTextBlock.pos_y
+
+        Args:
+            block: rmscene annotation block
+            text_origin_y: The RootTextBlock.pos_y value for coordinate transformation
+
+        Returns:
+            Center Y coordinate in absolute page coordinates, or None if cannot determine
+        """
+        try:
+            if not hasattr(block, 'item') or not hasattr(block.item, 'value'):
+                return None
+
+            value = block.item.value
+
+            # Determine coordinate space from parent_id
+            is_text_relative = False
+            if hasattr(block, 'parent_id'):
+                parent_id = block.parent_id
+                # Root layer (0, 11) uses absolute coordinates
+                # Other layers use text-relative coordinates
+                is_text_relative = (parent_id != CrdtId(0, 11))
+
+            # Extract Y coordinate in its native space
+            native_y = None
+
+            # For Line blocks (strokes)
+            if 'Line' in type(value).__name__:
+                if hasattr(value, 'points') and value.points:
+                    ys = [p.y for p in value.points if hasattr(p, 'y')]
+                    if ys:
+                        native_y = sum(ys) / len(ys)
+
+            # For Glyph blocks (highlights)
+            if 'Glyph' in type(value).__name__:
+                if hasattr(value, 'rectangles') and value.rectangles:
+                    ys = [r.y + r.h / 2 for r in value.rectangles if hasattr(r, 'y')]
+                    if ys:
+                        native_y = sum(ys) / len(ys)
+
+            if native_y is None:
+                return None
+
+            # Transform to absolute coordinates if needed
+            if is_text_relative:
+                absolute_y = text_origin_y + native_y
+                logger.debug(
+                    f"Transformed text-relative y={native_y:.1f} to absolute y={absolute_y:.1f} "
+                    f"(text_origin_y={text_origin_y:.1f})"
+                )
+                return absolute_y
+            else:
+                logger.debug(
+                    f"Annotation already in absolute coordinates: y={native_y:.1f}"
+                )
+                return native_y
+
+        except Exception as e:
+            logger.warning(f"Failed to get annotation center Y: {e}")
+            return None
 
     def paginate_content(
         self, blocks: list[ContentBlock]
@@ -373,20 +914,29 @@ class RemarkableGenerator:
 
         return result
 
-    def blocks_to_text_items(self, blocks: list[ContentBlock]) -> list[TextItem]:
+    def blocks_to_text_items(
+        self, blocks: list[ContentBlock]
+    ) -> tuple[list[TextItem], list[TextBlock]]:
         """Convert content blocks to positioned text items.
 
         Each block is positioned on the page based on the running Y position
         and the configured margins.
 
+        Note: Uses TEXT_POS_Y constant (94.0) for Y positioning to match
+        the coordinate system used by RootTextBlock in rmscene. This ensures
+        consistency between text generation and extraction for annotation
+        preservation.
+
         Args:
             blocks: Content blocks for a single page
 
         Returns:
-            List of positioned text items
+            Tuple of (text_items, text_blocks) where text_blocks include Y-coordinates
+            for annotation mapping
         """
         items: list[TextItem] = []
-        y_position = float(self.layout.margin_top)
+        text_blocks: list[TextBlock] = []
+        y_position = float(self.TEXT_POS_Y)  # Use rmscene constant, not margin_top
 
         for block in blocks:
             if block.type == BlockType.HORIZONTAL_RULE:
@@ -409,6 +959,7 @@ class RemarkableGenerator:
                 text = f"• {text}"
 
             # Create text item
+            y_start = y_position
             items.append(
                 TextItem(
                     text=text,
@@ -422,15 +973,26 @@ class RemarkableGenerator:
             # Update Y position for next block
             lines = self.estimate_block_lines(block)
             y_position += lines * self.line_height
+            y_end = y_position
 
-        return items
+            # Create text block for annotation mapping
+            text_blocks.append(
+                TextBlock(
+                    content=text,
+                    y_start=y_start,
+                    y_end=y_end,
+                    block_type=block.type.name.lower(),
+                )
+            )
+
+        return items, text_blocks
 
     def generate_rm_file(self, page: RemarkablePage) -> bytes:
         """Generate binary .rm file content with custom text width.
 
-        This creates a reMarkable v6 format file with text content optimized
-        for 1.0x display on the Paper Pro by using a custom text width instead
-        of the default from simple_text_document().
+        If the page has annotation_blocks AND original_rm_path, this does a
+        round-trip modification preserving the original scene tree structure.
+        Otherwise, creates a new document from scratch.
 
         Args:
             page: RemarkablePage with positioned text items
@@ -444,6 +1006,133 @@ class RemarkableGenerator:
             default 936px width from simple_text_document).
             Inline formatting (bold/italic) is preserved in the text but
             not visually rendered due to rmscene/reMarkable limitations.
+        """
+        # If we have annotations and original file, do round-trip modification
+        if (hasattr(page, 'annotation_blocks') and page.annotation_blocks and
+            hasattr(page, 'original_rm_path') and page.original_rm_path):
+            return self._generate_rm_file_roundtrip(page)
+
+        # Otherwise create from scratch (no annotations to preserve)
+        return self._generate_rm_file_from_scratch(page)
+
+    def _generate_rm_file_roundtrip(self, page: RemarkablePage) -> bytes:
+        """Modify existing .rm file preserving scene tree structure.
+
+        This preserves the original scene tree structure (TreeNodes, SceneGroups,
+        SceneInfo, etc.) which is critical for annotations to display correctly.
+        Only modifies the text content and annotation positions.
+
+        Args:
+            page: RemarkablePage with annotation_blocks and original_rm_path
+
+        Returns:
+            Binary .rm file content with preserved structure
+        """
+        # Read all blocks from original file
+        with open(page.original_rm_path, 'rb') as f:
+            blocks = list(rmscene.read_blocks(f))
+
+        # Prepare new text content
+        combined_text = "\n".join(item.text for item in page.text_items)
+        if not combined_text.strip():
+            combined_text = " "
+
+        # Build index of original annotation blocks by block_id for matching
+        original_annotation_ids = set()
+        for block in blocks:
+            block_type = type(block).__name__
+            if block_type in ['SceneLineItemBlock', 'SceneGlyphItemBlock']:
+                if hasattr(block, 'item') and hasattr(block.item, 'item_id'):
+                    original_annotation_ids.add(block.item.item_id)
+
+        # Build index of adjusted annotations by item_id
+        adjusted_by_id = {}
+        for adj_block in page.annotation_blocks:
+            if hasattr(adj_block, 'item') and hasattr(adj_block.item, 'item_id'):
+                adjusted_by_id[adj_block.item.item_id] = adj_block
+
+        # Modify blocks in place
+        modified_blocks = []
+        annotation_count = 0
+
+        for block in blocks:
+            block_type = type(block).__name__
+
+            # Replace text content in RootTextBlock
+            if block_type == 'RootTextBlock':
+                # Create new RootTextBlock with updated text but same structure
+                modified_block = RootTextBlock(
+                    block_id=block.block_id,
+                    value=si.Text(
+                        items=CrdtSequence([
+                            CrdtSequenceItem(
+                                item_id=CrdtId(1, 16),
+                                left_id=CrdtId(0, 0),
+                                right_id=CrdtId(0, 0),
+                                deleted_length=0,
+                                value=combined_text,
+                            )
+                        ]),
+                        styles={
+                            CrdtId(0, 0): LwwValue(
+                                timestamp=CrdtId(1, 15), value=si.ParagraphStyle.PLAIN
+                            ),
+                        },
+                        pos_x=block.value.pos_x,
+                        pos_y=block.value.pos_y,
+                        width=block.value.width,
+                    ),
+                )
+                modified_blocks.append(modified_block)
+                logger.debug(f"Replaced text content in RootTextBlock ({len(combined_text)} chars)")
+
+            # Replace annotation blocks with adjusted versions
+            elif block_type in ['SceneLineItemBlock', 'SceneGlyphItemBlock']:
+                # Try to find adjusted version by item_id
+                if hasattr(block, 'item') and hasattr(block.item, 'item_id'):
+                    item_id = block.item.item_id
+                    if item_id in adjusted_by_id:
+                        modified_blocks.append(adjusted_by_id[item_id])
+                        annotation_count += 1
+                    else:
+                        # No adjusted version, keep original
+                        modified_blocks.append(block)
+                        annotation_count += 1
+                else:
+                    # Can't match, keep original
+                    modified_blocks.append(block)
+                    annotation_count += 1
+
+            # Update PageInfoBlock with new text stats
+            elif block_type == 'PageInfoBlock':
+                modified_block = PageInfoBlock(
+                    loads_count=block.loads_count,
+                    merges_count=block.merges_count,
+                    text_chars_count=len(combined_text) + 1,
+                    text_lines_count=combined_text.count("\n") + 1,
+                )
+                modified_blocks.append(modified_block)
+
+            # Keep all other blocks (scene tree, groups, etc.) unchanged
+            else:
+                modified_blocks.append(block)
+
+        # Serialize to binary
+        buffer = io.BytesIO()
+        rmscene.write_blocks(buffer, modified_blocks)
+        rm_bytes = buffer.getvalue()
+
+        logger.info(
+            f"Generated .rm file via round-trip: {len(rm_bytes)} bytes, "
+            f"{len(modified_blocks)} blocks ({annotation_count} annotations, preserved scene tree)"
+        )
+
+        return rm_bytes
+
+    def _generate_rm_file_from_scratch(self, page: RemarkablePage) -> bytes:
+        """Create new .rm file from scratch (original generate_rm_file logic).
+
+        Used when there are no annotations to preserve.
         """
         # Combine all text items into a single text block
         combined_text = "\n".join(item.text for item in page.text_items)
@@ -515,6 +1204,11 @@ class RemarkableGenerator:
                 ),
             ),
         ]
+
+        # Add preserved annotations (strokes and highlights) as rmscene blocks
+        if hasattr(page, 'annotation_blocks') and page.annotation_blocks:
+            blocks.extend(page.annotation_blocks)
+            logger.debug(f"Added {len(page.annotation_blocks)} preserved annotation blocks to .rm file")
 
         # Serialize to binary format
         buffer = io.BytesIO()

@@ -35,7 +35,6 @@ Formatting is stored as TextFormat objects with start/end character offsets,
 allowing precise rendering while preserving plain text for search/indexing.
 """
 
-import hashlib
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -43,8 +42,24 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Optional
 
+import re
+
 import mistune
 import yaml
+
+from .hashing import compute_semantic_hash
+
+# Regex patterns for stripping annotation markers (avoids circular import)
+_MARKER_START_PATTERN = re.compile(r"^<!-- ANNOTATED: .+? -->$", re.MULTILINE)
+_MARKER_END_PATTERN = re.compile(r"^<!-- /ANNOTATED -->$", re.MULTILINE)
+
+
+def _strip_annotation_markers(content: str) -> str:
+    """Strip annotation markers from content for stable hashing."""
+    content = _MARKER_START_PATTERN.sub("", content)
+    content = _MARKER_END_PATTERN.sub("", content)
+    content = re.sub(r"\n{3,}", "\n\n", content)
+    return content.strip()
 
 logger = logging.getLogger("rock_paper_sync.parser")
 
@@ -116,7 +131,7 @@ class MarkdownDocument:
         content: List of content blocks
         frontmatter: YAML frontmatter data
         last_modified: File modification timestamp
-        content_hash: SHA-256 hash of raw content
+        content_hash: SHA-256 semantic hash (ignores whitespace, frontmatter, markers)
     """
 
     path: Path
@@ -148,6 +163,9 @@ def parse_markdown_file(file_path: Path) -> MarkdownDocument:
     # Extract frontmatter and body
     frontmatter, body = extract_frontmatter(raw_content)
 
+    # Strip annotation markers before parsing (ensures stable content hash)
+    body = _strip_annotation_markers(body)
+
     # Parse content blocks
     blocks = parse_content(body)
 
@@ -157,8 +175,8 @@ def parse_markdown_file(file_path: Path) -> MarkdownDocument:
         # Use filename without extension as fallback
         title = file_path.stem
 
-    # Compute content hash
-    content_hash = hashlib.sha256(raw_content.encode("utf-8")).hexdigest()
+    # Compute semantic content hash (ignores whitespace, frontmatter, markers)
+    content_hash = compute_semantic_hash(blocks)
 
     # Get file modification time
     last_modified = datetime.fromtimestamp(file_path.stat().st_mtime)

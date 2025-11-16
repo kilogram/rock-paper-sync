@@ -131,8 +131,14 @@ def sync(ctx: click.Context, dry_run: bool, vault: str | None) -> None:
 
     results = engine.sync_all_changed(vault_name=vault)
 
-    success_count = sum(1 for r in results if r.success)
-    click.echo(f"\nSynced {success_count}/{len(results)} file(s)")
+    uploaded_count = sum(1 for r in results if r.success and not r.skipped)
+    skipped_count = sum(1 for r in results if r.success and r.skipped)
+    failed_count = sum(1 for r in results if not r.success)
+
+    if skipped_count > 0:
+        click.echo(f"\nSynced {uploaded_count}/{len(results)} file(s), {skipped_count} unchanged")
+    else:
+        click.echo(f"\nSynced {uploaded_count}/{len(results)} file(s)")
 
     # Show results grouped by vault
     current_vault = None
@@ -142,7 +148,10 @@ def sync(ctx: click.Context, dry_run: bool, vault: str | None) -> None:
             click.echo(f"\n[{current_vault}]")
 
         if result.success:
-            click.echo(f"  ✓ {result.path.name} ({result.page_count} page(s))")
+            if result.skipped:
+                click.echo(f"  - {result.path.name} (unchanged)")
+            else:
+                click.echo(f"  ✓ {result.path.name} ({result.page_count} page(s))")
         else:
             click.echo(f"  ✗ {result.path.name}: {result.error}", err=True)
 
@@ -157,11 +166,14 @@ def sync(ctx: click.Context, dry_run: bool, vault: str | None) -> None:
     is_flag=True,
     help="Also delete files from reMarkable cloud",
 )
-@click.confirmation_option(
-    prompt="This will remove sync state for the specified vault(s). Continue?"
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    help="Skip confirmation prompt (for scripts)",
 )
 @click.pass_context
-def unsync(ctx: click.Context, vault: str | None, delete_from_cloud: bool) -> None:
+def unsync(ctx: click.Context, vault: str | None, delete_from_cloud: bool, yes: bool) -> None:
     """Stop syncing vault(s) and optionally delete from cloud.
 
     Removes sync state from the database so files are no longer tracked.
@@ -188,6 +200,11 @@ def unsync(ctx: click.Context, vault: str | None, delete_from_cloud: bool) -> No
             click.echo(f"Error: Vault '{vault}' not found in configuration", err=True)
             click.echo(f"Available vaults: {', '.join(vault_names)}", err=True)
             return
+
+    # Confirm unless --yes flag is set
+    if not yes and not click.confirm("This will remove sync state for the specified vault(s). Continue?"):
+        click.echo("Aborted.")
+        return
 
     state = StateManager(config.sync.state_database)
     engine = SyncEngine(config, state)

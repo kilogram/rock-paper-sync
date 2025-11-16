@@ -333,13 +333,14 @@ class TestBlocksToTextItems:
             )
         ]
 
-        items = generator.blocks_to_text_items(blocks)
+        items, text_blocks = generator.blocks_to_text_items(blocks)
 
         assert len(items) == 1
         item = items[0]
         assert item.text == "Test paragraph"
         assert item.x == generator.layout.margin_left
-        assert item.y == generator.layout.margin_top
+        # Y position uses TEXT_POS_Y constant (94.0) for rmscene compatibility
+        assert item.y == generator.TEXT_POS_Y
         assert item.width > 0
 
     def test_multiple_blocks(self, generator: RemarkableGenerator) -> None:
@@ -359,7 +360,7 @@ class TestBlocksToTextItems:
             ),
         ]
 
-        items = generator.blocks_to_text_items(blocks)
+        items, text_blocks = generator.blocks_to_text_items(blocks)
 
         assert len(items) == 2
         assert items[1].y > items[0].y
@@ -377,7 +378,7 @@ class TestBlocksToTextItems:
             )
         ]
 
-        items = generator.blocks_to_text_items(blocks)
+        items, text_blocks = generator.blocks_to_text_items(blocks)
 
         assert len(items) == 1
         item = items[0]
@@ -405,7 +406,7 @@ class TestBlocksToTextItems:
             ),
         ]
 
-        items = generator.blocks_to_text_items(blocks)
+        items, text_blocks = generator.blocks_to_text_items(blocks)
 
         assert items[1].x > items[0].x
 
@@ -422,7 +423,7 @@ class TestBlocksToTextItems:
             )
         ]
 
-        items = generator.blocks_to_text_items(blocks)
+        items, text_blocks = generator.blocks_to_text_items(blocks)
 
         # No text item, just spacing
         assert len(items) == 0
@@ -441,7 +442,7 @@ class TestBlocksToTextItems:
             )
         ]
 
-        items = generator.blocks_to_text_items(blocks)
+        items, text_blocks = generator.blocks_to_text_items(blocks)
 
         assert len(items) == 1
         assert items[0].formatting == formatting
