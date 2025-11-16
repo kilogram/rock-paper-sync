@@ -63,7 +63,7 @@ class TestLoadConfig:
         # Check default values
         assert config.sync.include_patterns == ["**/*.md"]
         assert config.sync.debounce_seconds == 5
-        assert config.layout.lines_per_page == 45
+        assert config.layout.lines_per_page == 28
         assert config.log_level == "info"
 
     def test_load_missing_file(self, tmp_path: Path) -> None:

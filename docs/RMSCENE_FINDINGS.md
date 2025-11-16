@@ -35,43 +35,57 @@ The rmscene library provides Python bindings for reading and writing reMarkable'
 
 ## Implementation Approach
 
-### What We Used
+### What We Use (Current)
 
-For Phase 1, we used the **`simple_text_document()`** helper function as our foundation:
+We now use **custom scene tree construction** with optimized text width for proper display on the Paper Pro:
 
 ```python
 def generate_rm_file(self, page: RemarkablePage) -> bytes:
     # Combine all text items into a single text block
     combined_text = "\n".join(item.text for item in page.text_items)
 
-    # Generate blocks using rmscene
-    blocks = list(rmscene.simple_text_document(combined_text))
-
-    # Serialize to binary format
-    buffer = io.BytesIO()
-    rmscene.write_blocks(buffer, blocks)
-    return buffer.getvalue()
+    # Generate blocks manually with custom text width (750px)
+    blocks = [
+        AuthorIdsBlock(...),
+        MigrationInfoBlock(...),
+        PageInfoBlock(...),
+        SceneTreeBlock(...),
+        RootTextBlock(
+            value=si.Text(
+                items=CrdtSequence([...]),
+                styles={...},
+                pos_x=-375.0,  # Centered
+                pos_y=234.0,
+                width=750.0,   # Optimized for 1.0x display
+            ),
+        ),
+        # ... additional blocks
+    ]
 ```
 
 **Why this approach?**
-- ✅ Simple and reliable
+- ✅ Displays at 1.0x zoom on Paper Pro (vs 0.8x with default 936px width)
+- ✅ No user configuration needed for margins/layout
 - ✅ Generates valid v6 files that reMarkable devices can read
 - ✅ Works with rmscene's experimental write API
 - ✅ Preserves text content accurately
 
-### What We Didn't Use (Yet)
+**Note**: Previously used `simple_text_document()` which defaulted to 936px width,
+causing the device to zoom out to 0.8x to fit content. Custom scene tree construction
+allows precise control over text width.
+
+### What We Haven't Used (Yet)
 
 Advanced positioning and formatting capabilities are available but not fully utilized:
 
-1. **Custom Text positioning** - The `Text` scene item supports:
-   - `pos_x`, `pos_y` - Position on page (pixels from top-left)
-   - `width` - Text box width
+1. **Multiple Text items per page** - Currently we combine all text into one block. We could create separate `Text` items for better layout control and precise positioning of individual elements.
 
-   However, `simple_text_document()` doesn't expose these. To use custom positioning, we'd need to manually construct the scene tree.
+2. **Inline formatting** (bold, italic) - See limitations below.
 
-2. **Multiple Text items per page** - Currently we combine all text into one block. We could create separate `Text` items for better layout control.
+**What We Now Use:**
 
-3. **Inline formatting** (bold, italic) - See limitations below.
+✅ **Custom text width** - We set `width=750.0` for optimal 1.0x display on Paper Pro
+✅ **Custom positioning** - We set `pos_x=-375.0` (centered) and `pos_y=234.0` for proper placement
 
 ## Key Findings
 
@@ -108,31 +122,31 @@ Advanced positioning and formatting capabilities are available but not fully uti
 
 #### 2. Custom Text Positioning
 
-**Limitation**: `simple_text_document()` doesn't support custom positioning.
+**Status**: ✅ **Now Implemented**
 
-**Our Approach**:
-- Calculate positions in `blocks_to_text_items()` (x, y, width)
-- Store in `TextItem` data structure
-- **Currently unused** - all text goes into one block at default position
+We manually construct the scene tree to set custom width and positioning:
 
-**Future Enhancement**:
 ```python
-# Manually create scene tree with positioned Text items
-from rmscene import scene_items, CrdtSequence
-
-text_item = scene_items.Text(
-    items=CrdtSequence(...),  # Text content as CRDT
-    styles={},                 # Paragraph styles
-    pos_x=50.0,                # Custom X position
-    pos_y=100.0,               # Custom Y position
-    width=1300.0               # Custom width
+RootTextBlock(
+    block_id=CrdtId(0, 0),
+    value=si.Text(
+        items=CrdtSequence([...]),
+        styles={...},
+        pos_x=-375.0,  # Centered on page
+        pos_y=234.0,   # Standard top position
+        width=750.0,   # Optimized for 1.0x display
+    ),
 )
 ```
 
-This would require:
-- Understanding `CrdtSequence` construction
-- Building complete scene tree manually
-- More complex block generation
+**Benefits**:
+- ✅ Control over text width for proper display zoom
+- ✅ Centered positioning on the page
+- ✅ Automatic - no user configuration needed
+
+**Future Enhancement**:
+- Create multiple Text items per page for precise element positioning
+- Use calculated positions from `blocks_to_text_items()` (currently stored but unused)
 
 #### 3. Write API is Experimental
 
@@ -193,24 +207,25 @@ We validate generated files by:
 
 ## Recommendations
 
-### For Phase 1 (Current)
+### Current Implementation ✅
 
-✅ Use `simple_text_document()` approach
-- Simple, reliable, well-tested
-- Sufficient for basic text conversion
-- Easy to maintain
+**Custom scene tree construction with optimized width**
+- ✅ Displays at 1.0x zoom on Paper Pro
+- ✅ Simple, reliable, well-tested
+- ✅ Automatic - no user configuration needed
+- ✅ Sufficient for basic text conversion with proper display
 
 ### For Phase 2 (Future)
 
-Consider manual scene tree construction for:
-- Custom text positioning (better layout control)
-- Multiple text items per page
+Consider enhanced scene tree construction for:
+- Multiple text items per page (precise element positioning)
+- Per-element width and positioning based on `blocks_to_text_items()` calculations
 - Paragraph-level formatting (BOLD, HEADING styles)
 - Better handling of complex documents
 
 Would require:
-- Deep dive into scene tree structure
-- CrdtSequence construction
+- Creating separate Text items for each block
+- Managing multiple CrdtSequence instances
 - Extensive testing on actual device
 
 ## Testing

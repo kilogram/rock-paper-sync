@@ -12,8 +12,21 @@ import time
 import uuid as uuid_module
 from dataclasses import dataclass, field
 from pathlib import Path
+from uuid import uuid4
 
 import rmscene
+from rmscene import scene_items as si
+from rmscene.crdt_sequence import CrdtId, CrdtSequence, CrdtSequenceItem
+from rmscene.scene_stream import (
+    AuthorIdsBlock,
+    MigrationInfoBlock,
+    PageInfoBlock,
+    RootTextBlock,
+    SceneGroupItemBlock,
+    SceneTreeBlock,
+    TreeNodeBlock,
+)
+from rmscene.tagged_block_common import LwwValue
 
 from .config import LayoutConfig
 from .parser import BlockType, ContentBlock, FormatStyle, MarkdownDocument, TextFormat
@@ -91,8 +104,9 @@ class RemarkableGenerator:
        - List item indentation and bullets
 
     2. **Page Breaking Rules**:
-       - Never exceed lines_per_page (default: 45 lines)
-       - Never split blocks mid-way (atomic block placement)
+       - Never exceed lines_per_page (default: 28 lines)
+       - By default: Never split blocks mid-way (atomic block placement)
+       - If allow_paragraph_splitting=True: Fill pages by splitting paragraphs
        - Headers near page bottom (< 10 lines remaining) start new page
        - Prevents orphan headers at bottom of pages
 
@@ -103,7 +117,8 @@ class RemarkableGenerator:
        - List items get 20px indent per nesting level
 
     4. **rmscene Integration**:
-       - Uses simple_text_document() for text generation
+       - Custom scene tree construction with optimized text width (750px)
+       - Ensures 1.0x display zoom on Paper Pro (vs 0.8x with default 936px)
        - Combines all text items with newlines (Phase 1 simplification)
        - Future: Multiple Text scene items for precise positioning
 
@@ -112,14 +127,25 @@ class RemarkableGenerator:
         page_width: Page width in pixels (1404 for reMarkable Paper Pro)
         page_height: Page height in pixels (1872 for reMarkable Paper Pro)
         line_height: Approximate pixels per line (35px)
-        char_width: Approximate pixels per character (10px)
+        char_width: Pixels per character (15px, measured from device)
     """
 
     # reMarkable Paper Pro dimensions
     PAGE_WIDTH = 1404
     PAGE_HEIGHT = 1872
     LINE_HEIGHT = 35  # Approximate pixels per line
-    CHAR_WIDTH = 10  # Approximate pixels per character
+    CHAR_WIDTH = 15  # Pixels per character (measured: 50-51 chars/line max)
+
+    # Text area dimensions for 1.0x display (optimized for Paper Pro)
+    TEXT_WIDTH = 750.0  # Width that displays at 1.0x zoom
+    TEXT_POS_X = -375.0  # Centered: -TEXT_WIDTH/2
+    TEXT_POS_Y = 94.0   # Top margin: ~2 lines worth (was 234.0 = 5 lines)
+
+    # Calculated default lines per page based on actual device measurements
+    # Visible lines on Paper Pro: 26 lines
+    # Conservative default with safety margin: 28 lines
+    # Total height: 94 (top) + 980 (content) + 94 (bottom) = 1168px
+    DEFAULT_LINES_PER_PAGE = 28
 
     def __init__(self, layout_config: LayoutConfig) -> None:
         """Initialize generator with layout settings.
@@ -234,10 +260,64 @@ class RemarkableGenerator:
 
             # Check if block fits on current page
             if current_lines + block_lines > self.layout.lines_per_page:
-                if current_page:
-                    pages.append(current_page)
-                current_page = [block]
-                current_lines = block_lines
+                # Block doesn't fit - either split it or start new page
+                if self.layout.allow_paragraph_splitting and block.type == BlockType.PARAGRAPH:
+                    # Split paragraph across pages
+                    lines_available = self.layout.lines_per_page - current_lines
+                    chars_per_line = max(1, int(self.TEXT_WIDTH / self.CHAR_WIDTH))
+
+                    # Estimate chars that fit on current page
+                    chars_for_current = lines_available * chars_per_line
+
+                    if chars_for_current > 0 and len(block.text) > chars_for_current:
+                        # Split the text (try to split at word boundary)
+                        split_point = chars_for_current
+                        # Try to find a space near the split point
+                        space_before = block.text.rfind(' ', 0, split_point)
+                        if space_before > chars_for_current * 0.8:  # Within 20% of target
+                            split_point = space_before
+
+                        # Create two blocks from the split
+                        current_text = block.text[:split_point].rstrip()
+                        remaining_text = block.text[split_point:].lstrip()
+
+                        if current_text:
+                            current_block = ContentBlock(
+                                type=block.type,
+                                level=block.level,
+                                text=current_text,
+                                formatting=block.formatting,  # Note: formatting may not be accurate across split
+                            )
+                            current_page.append(current_block)
+
+                        if current_page:
+                            pages.append(current_page)
+
+                        # Start new page with remaining text
+                        if remaining_text:
+                            next_block = ContentBlock(
+                                type=block.type,
+                                level=block.level,
+                                text=remaining_text,
+                                formatting=[],  # Formatting lost across split for now
+                            )
+                            current_page = [next_block]
+                            current_lines = self.estimate_block_lines(next_block)
+                        else:
+                            current_page = []
+                            current_lines = 0
+                    else:
+                        # Not enough room to split meaningfully, start new page
+                        if current_page:
+                            pages.append(current_page)
+                        current_page = [block]
+                        current_lines = block_lines
+                else:
+                    # Atomic block placement (default behavior)
+                    if current_page:
+                        pages.append(current_page)
+                    current_page = [block]
+                    current_lines = block_lines
             else:
                 current_page.append(block)
                 current_lines += block_lines
@@ -246,10 +326,13 @@ class RemarkableGenerator:
         if current_page:
             pages.append(current_page)
 
-        logger.debug(
+        logger.info(
             f"Paginated {len(blocks)} blocks into {len(pages)} page(s), "
             f"target lines per page: {self.layout.lines_per_page}"
         )
+        for i, page_blocks in enumerate(pages, 1):
+            total_lines = sum(self.estimate_block_lines(block) for block in page_blocks)
+            logger.info(f"  Page {i}: {len(page_blocks)} blocks, {total_lines} estimated lines")
 
         return pages if pages else [[]]
 
@@ -265,29 +348,30 @@ class RemarkableGenerator:
         if block.type == BlockType.HORIZONTAL_RULE:
             return 2
 
-        # Calculate based on text length and available width
-        available_width = (
-            self.page_width - self.layout.margin_left - self.layout.margin_right
-        )
-        chars_per_line = max(1, int(available_width / self.char_width))
+        # Calculate based on text length and actual text width
+        # Use TEXT_WIDTH instead of page margins for accurate pagination
+        chars_per_line = max(1, int(self.TEXT_WIDTH / self.char_width))
 
         # Account for list item bullet
         text = block.text
         if block.type == BlockType.LIST_ITEM:
             text = f"• {text}"
 
+        # Calculate wrapped lines (+1 accounts for partial last line)
         text_lines = max(1, len(text) // chars_per_line + 1)
 
-        # Add extra spacing based on block type
+        # No extra spacing for paragraphs (spacing handled by blank lines in markdown)
         if block.type == BlockType.HEADER:
-            return text_lines + 2  # Extra space after header
+            result = text_lines + 1  # Extra space after header for readability
         elif block.type == BlockType.PARAGRAPH:
-            return text_lines + 1  # Space after paragraph
+            result = text_lines  # No extra spacing
         elif block.type == BlockType.CODE_BLOCK:
             # Code blocks: count actual newlines
-            return text.count("\n") + 2
+            result = text.count("\n") + 2
         else:
-            return text_lines + 1
+            result = text_lines
+
+        return result
 
     def blocks_to_text_items(self, blocks: list[ContentBlock]) -> list[TextItem]:
         """Convert content blocks to positioned text items.
@@ -342,9 +426,11 @@ class RemarkableGenerator:
         return items
 
     def generate_rm_file(self, page: RemarkablePage) -> bytes:
-        """Generate binary .rm file content using rmscene.
+        """Generate binary .rm file content with custom text width.
 
-        This creates a reMarkable v6 format file with text content.
+        This creates a reMarkable v6 format file with text content optimized
+        for 1.0x display on the Paper Pro by using a custom text width instead
+        of the default from simple_text_document().
 
         Args:
             page: RemarkablePage with positioned text items
@@ -353,20 +439,82 @@ class RemarkableGenerator:
             Binary .rm file content
 
         Note:
-            Currently uses rmscene's simple_text_document as a base.
+            Uses custom scene tree construction to set text width to 750px,
+            which displays at 1.0x zoom on the Paper Pro (vs 0.8x with the
+            default 936px width from simple_text_document).
             Inline formatting (bold/italic) is preserved in the text but
             not visually rendered due to rmscene/reMarkable limitations.
         """
         # Combine all text items into a single text block
-        # Note: This is a simplified approach for Phase 1
-        # Future versions could create multiple Text scene items for positioning
         combined_text = "\n".join(item.text for item in page.text_items)
 
         if not combined_text.strip():
             combined_text = " "  # At least one space for empty pages
 
-        # Generate blocks using rmscene
-        blocks = list(rmscene.simple_text_document(combined_text))
+        # Generate blocks manually with custom text width
+        author_uuid = uuid4()
+
+        blocks = [
+            AuthorIdsBlock(author_uuids={1: author_uuid}),
+            MigrationInfoBlock(migration_id=CrdtId(1, 1), is_device=True),
+            PageInfoBlock(
+                loads_count=1,
+                merges_count=0,
+                text_chars_count=len(combined_text) + 1,
+                text_lines_count=combined_text.count("\n") + 1,
+            ),
+            SceneTreeBlock(
+                tree_id=CrdtId(0, 11),
+                node_id=CrdtId(0, 0),
+                is_update=True,
+                parent_id=CrdtId(0, 1),
+            ),
+            RootTextBlock(
+                block_id=CrdtId(0, 0),
+                value=si.Text(
+                    items=CrdtSequence(
+                        [
+                            CrdtSequenceItem(
+                                item_id=CrdtId(1, 16),
+                                left_id=CrdtId(0, 0),
+                                right_id=CrdtId(0, 0),
+                                deleted_length=0,
+                                value=combined_text,
+                            )
+                        ]
+                    ),
+                    styles={
+                        CrdtId(0, 0): LwwValue(
+                            timestamp=CrdtId(1, 15), value=si.ParagraphStyle.PLAIN
+                        ),
+                    },
+                    pos_x=self.TEXT_POS_X,
+                    pos_y=self.TEXT_POS_Y,
+                    width=self.TEXT_WIDTH,
+                ),
+            ),
+            TreeNodeBlock(
+                si.Group(
+                    node_id=CrdtId(0, 1),
+                )
+            ),
+            TreeNodeBlock(
+                si.Group(
+                    node_id=CrdtId(0, 11),
+                    label=LwwValue(timestamp=CrdtId(0, 12), value="Layer 1"),
+                )
+            ),
+            SceneGroupItemBlock(
+                parent_id=CrdtId(0, 1),
+                item=CrdtSequenceItem(
+                    item_id=CrdtId(0, 13),
+                    left_id=CrdtId(0, 0),
+                    right_id=CrdtId(0, 0),
+                    deleted_length=0,
+                    value=CrdtId(0, 11),
+                ),
+            ),
+        ]
 
         # Serialize to binary format
         buffer = io.BytesIO()

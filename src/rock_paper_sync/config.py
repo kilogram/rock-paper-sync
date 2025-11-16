@@ -49,13 +49,24 @@ class SyncConfig:
 
 @dataclass(frozen=True)
 class LayoutConfig:
-    """Page layout configuration."""
+    """Page layout configuration.
+
+    Attributes:
+        lines_per_page: Maximum lines per page
+        margin_top: Top margin in pixels (used for text positioning)
+        margin_bottom: Bottom margin in pixels (used for text positioning)
+        margin_left: Left margin in pixels (used for text positioning)
+        margin_right: Right margin in pixels (used for text positioning)
+        allow_paragraph_splitting: Whether to allow paragraphs to split across pages
+                                   (True = better page utilization, False = atomic paragraphs, default: False)
+    """
 
     lines_per_page: int
     margin_top: int
     margin_bottom: int
     margin_left: int
     margin_right: int
+    allow_paragraph_splitting: bool = False
 
 
 @dataclass(frozen=True)
@@ -168,11 +179,12 @@ def load_config(config_path: Path) -> AppConfig:
         if not layout:
             raise ConfigError("Missing required [layout] section in config")
 
-        lines_per_page = layout.get("lines_per_page", 45)
+        lines_per_page = layout.get("lines_per_page", 28)
         margin_top = layout.get("margin_top", 50)
         margin_bottom = layout.get("margin_bottom", 50)
         margin_left = layout.get("margin_left", 50)
         margin_right = layout.get("margin_right", 50)
+        allow_paragraph_splitting = layout.get("allow_paragraph_splitting", False)
 
         # Extract logging section
         logging_config = config_dict.get("logging", {})
@@ -198,6 +210,7 @@ def load_config(config_path: Path) -> AppConfig:
             margin_bottom=margin_bottom,
             margin_left=margin_left,
             margin_right=margin_right,
+            allow_paragraph_splitting=allow_paragraph_splitting,
         )
 
         # Extract cloud section (required)

@@ -482,11 +482,12 @@ exclude_patterns = [".obsidian/**", "archive/**"]
 debounce_seconds = 5
 
 [layout]
-lines_per_page = 45
+lines_per_page = 28
 margin_top = 50
 margin_bottom = 50
 margin_left = 50
 margin_right = 50
+allow_paragraph_splitting = false  # true = allow paragraphs to split across pages for better utilization
 
 [logging]
 level = "info"

@@ -66,6 +66,24 @@
 
 ## Development Workflow
 
+### Important: Always Use `uv run`
+
+**All Python commands must be prefixed with `uv run`** to ensure correct dependency resolution:
+
+```bash
+# ✅ Correct
+uv run pytest
+uv run python -m rock_paper_sync.cli
+uv run python -c "import rmscene; print(rmscene.__version__)"
+
+# ❌ Wrong
+pytest
+python -m rock_paper_sync.cli
+python -c "import rmscene; print(rmscene.__version__)"
+```
+
+This ensures the virtual environment managed by `uv` is used with all dependencies available.
+
 ### Running Tests
 
 ```bash

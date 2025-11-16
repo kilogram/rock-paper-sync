@@ -267,7 +267,7 @@ class TestEstimateBlockLines:
         )
 
         lines = generator.estimate_block_lines(block)
-        assert lines >= 2  # At least text + spacing
+        assert lines >= 1  # At least the text line (no extra spacing)
 
     def test_long_paragraph(self, generator: RemarkableGenerator) -> None:
         """Long paragraph should take multiple lines."""
