@@ -1,0 +1,5 @@
+# Runtime workspace (created by bench.py)
+workspace/
+
+# Don't ignore fixtures
+!fixtures/

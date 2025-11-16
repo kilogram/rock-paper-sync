@@ -589,15 +589,21 @@ class TestContentHash:
         assert doc1.content_hash != doc2.content_hash
 
     def test_hash_is_sha256(self, tmp_path: Path):
-        """Content hash should be valid SHA-256."""
+        """Content hash should be valid SHA-256 (semantic hash)."""
+        from rock_paper_sync.hashing import compute_semantic_hash
+
         file = tmp_path / "test.md"
         content = "# Test content"
         file.write_text(content)
 
         doc = parse_markdown_file(file)
 
-        # Verify hash
-        expected_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        # Verify hash is valid SHA-256 (64 hex characters)
+        assert len(doc.content_hash) == 64
+        assert all(c in '0123456789abcdef' for c in doc.content_hash)
+
+        # Verify hash matches semantic hash of content
+        expected_hash = compute_semantic_hash(doc.content)
         assert doc.content_hash == expected_hash
 
 

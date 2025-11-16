@@ -31,12 +31,13 @@ class SyncRecord:
     last_sync_time: int
     page_count: int
     status: str  # 'synced', 'pending', 'error'
+    file_hash_with_markers: Optional[str] = None  # Hash of file including markers (schema v4)
 
 
 class StateManager:
     """Manages sync state using SQLite database."""
 
-    SCHEMA_VERSION = 2
+    SCHEMA_VERSION = 4
 
     def __init__(self, db_path: Path) -> None:
         """Initialize state manager with database at given path.
@@ -68,6 +69,7 @@ class StateManager:
                     obsidian_path TEXT NOT NULL,
                     remarkable_uuid TEXT NOT NULL,
                     content_hash TEXT NOT NULL,
+                    file_hash_with_markers TEXT,
                     last_sync_time INTEGER NOT NULL,
                     page_count INTEGER NOT NULL,
                     status TEXT NOT NULL DEFAULT 'synced',
@@ -92,13 +94,25 @@ class StateManager:
                     details TEXT
                 );
 
+                -- Paragraph annotation state (for annotation-aware editing)
+                CREATE TABLE IF NOT EXISTS paragraph_state (
+                    vault_name TEXT NOT NULL,
+                    obsidian_path TEXT NOT NULL,
+                    paragraph_index INTEGER NOT NULL,
+                    content_hash TEXT NOT NULL,
+                    has_annotations BOOLEAN NOT NULL DEFAULT 0,
+                    annotation_count INTEGER NOT NULL DEFAULT 0,
+                    last_checked INTEGER NOT NULL,
+                    PRIMARY KEY (vault_name, obsidian_path, paragraph_index)
+                );
+
                 -- Schema version for migrations
                 CREATE TABLE IF NOT EXISTS schema_version (
                     version INTEGER PRIMARY KEY
                 );
 
                 -- Insert schema version if not exists
-                INSERT OR IGNORE INTO schema_version (version) VALUES (2);
+                INSERT OR IGNORE INTO schema_version (version) VALUES (4);
                 """
             )
 
@@ -134,14 +148,15 @@ class StateManager:
             self.conn.execute(
                 """
                 INSERT OR REPLACE INTO sync_state
-                (vault_name, obsidian_path, remarkable_uuid, content_hash, last_sync_time, page_count, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                (vault_name, obsidian_path, remarkable_uuid, content_hash, file_hash_with_markers, last_sync_time, page_count, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.vault_name,
                     record.obsidian_path,
                     record.remarkable_uuid,
                     record.content_hash,
+                    record.file_hash_with_markers,
                     record.last_sync_time,
                     record.page_count,
                     record.status,
@@ -446,7 +461,127 @@ class StateManager:
             self.conn.execute("DELETE FROM sync_state")
             self.conn.execute("DELETE FROM folder_mapping")
             self.conn.execute("DELETE FROM sync_history")
+            self.conn.execute("DELETE FROM paragraph_state")
         logger.warning("All sync state has been reset")
+
+    def get_paragraph_state(
+        self, vault_name: str, obsidian_path: str, paragraph_index: int
+    ) -> Optional[dict]:
+        """Get annotation state for a specific paragraph.
+
+        Args:
+            vault_name: Name of the vault
+            obsidian_path: Relative path of file in Obsidian vault
+            paragraph_index: Index of paragraph in document
+
+        Returns:
+            Dictionary with paragraph state or None if not found
+            Keys: content_hash, has_annotations, annotation_count, last_checked
+        """
+        cursor = self.conn.execute(
+            """
+            SELECT content_hash, has_annotations, annotation_count, last_checked
+            FROM paragraph_state
+            WHERE vault_name = ? AND obsidian_path = ? AND paragraph_index = ?
+            """,
+            (vault_name, obsidian_path, paragraph_index),
+        )
+        row = cursor.fetchone()
+        if row:
+            return {
+                "content_hash": row[0],
+                "has_annotations": bool(row[1]),
+                "annotation_count": row[2],
+                "last_checked": row[3],
+            }
+        return None
+
+    def update_paragraph_state(
+        self,
+        vault_name: str,
+        obsidian_path: str,
+        paragraph_index: int,
+        content_hash: str,
+        has_annotations: bool,
+        annotation_count: int,
+    ) -> None:
+        """Update annotation state for a paragraph.
+
+        Args:
+            vault_name: Name of the vault
+            obsidian_path: Relative path of file in Obsidian vault
+            paragraph_index: Index of paragraph in document
+            content_hash: Hash of paragraph content
+            has_annotations: Whether paragraph has annotations
+            annotation_count: Number of annotations on paragraph
+        """
+        with self.conn:
+            self.conn.execute(
+                """
+                INSERT OR REPLACE INTO paragraph_state
+                (vault_name, obsidian_path, paragraph_index, content_hash,
+                 has_annotations, annotation_count, last_checked)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    vault_name,
+                    obsidian_path,
+                    paragraph_index,
+                    content_hash,
+                    1 if has_annotations else 0,
+                    annotation_count,
+                    int(time.time()),
+                ),
+            )
+        logger.debug(
+            f"Updated paragraph state: {vault_name}:{obsidian_path}[{paragraph_index}] "
+            f"({annotation_count} annotations)"
+        )
+
+    def get_all_paragraph_states(
+        self, vault_name: str, obsidian_path: str
+    ) -> dict[int, dict]:
+        """Get annotation state for all paragraphs in a document.
+
+        Args:
+            vault_name: Name of the vault
+            obsidian_path: Relative path of file in Obsidian vault
+
+        Returns:
+            Dictionary mapping paragraph_index to state dict
+        """
+        cursor = self.conn.execute(
+            """
+            SELECT paragraph_index, content_hash, has_annotations, annotation_count, last_checked
+            FROM paragraph_state
+            WHERE vault_name = ? AND obsidian_path = ?
+            ORDER BY paragraph_index
+            """,
+            (vault_name, obsidian_path),
+        )
+        return {
+            row[0]: {
+                "content_hash": row[1],
+                "has_annotations": bool(row[2]),
+                "annotation_count": row[3],
+                "last_checked": row[4],
+            }
+            for row in cursor.fetchall()
+        }
+
+    def delete_paragraph_states(self, vault_name: str, obsidian_path: str) -> None:
+        """Delete all paragraph states for a document.
+
+        Args:
+            vault_name: Name of the vault
+            obsidian_path: Relative path of file in Obsidian vault
+        """
+        with self.conn:
+            self.conn.execute(
+                "DELETE FROM paragraph_state WHERE vault_name = ? AND obsidian_path = ?",
+                (vault_name, obsidian_path),
+            )
+        logger.debug(f"Deleted paragraph states for {vault_name}:{obsidian_path}")
 
     def close(self) -> None:
         """Close database connection.

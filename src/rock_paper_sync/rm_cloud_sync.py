@@ -3,6 +3,7 @@
 import json
 import logging
 import time
+from pathlib import Path
 from typing import Optional
 
 from .audit import get_audit_logger
@@ -244,6 +245,9 @@ class RmCloudSync:
         # Extract page UUIDs
         page_uuids = [page_uuid for page_uuid, _ in pages]
 
+        # DEBUG: Log page order
+        logger.info(f"Page order being uploaded: {[uuid[:8] for uuid in page_uuids]}")
+
         # Add metadata file
         files[f"{doc_uuid}.metadata"] = self._create_metadata_file(
             doc_uuid, document_name, parent_uuid
@@ -251,6 +255,7 @@ class RmCloudSync:
 
         # Add content file (with CRDT formatVersion 2)
         files[f"{doc_uuid}.content"] = self._create_content_file(page_uuids)
+        logger.info(f"Created .content file with page order: {[uuid[:8] for uuid in page_uuids]}")
 
         # Add .local file (required by xochitl for document recognition)
         files[f"{doc_uuid}.local"] = b"{}"
@@ -295,6 +300,63 @@ class RmCloudSync:
             List of page UUIDs in order. Empty list if document doesn't exist.
         """
         return self.sync_client.get_document_page_uuids(doc_uuid)
+
+    def download_page_rm_files(
+        self, doc_uuid: str, page_uuids: list[str], output_dir: Path
+    ) -> list[Path | None]:
+        """Download .rm files for document pages to preserve annotations.
+
+        Args:
+            doc_uuid: Document UUID
+            page_uuids: List of page UUIDs to download
+            output_dir: Directory to save .rm files
+
+        Returns:
+            List of paths to downloaded .rm files (or None if download failed)
+        """
+        output_dir.mkdir(parents=True, exist_ok=True)
+        rm_file_paths = []
+
+        # Find document in root
+        root_docs = self.sync_client.get_root_documents()
+        doc_entry = None
+        for entry in root_docs:
+            if entry.entry_name == doc_uuid:
+                doc_entry = entry
+                break
+
+        if not doc_entry:
+            logger.warning(f"Document {doc_uuid} not found in root")
+            return [None] * len(page_uuids)
+
+        # Download document index to get file hashes
+        doc_index_content = self.sync_client.download_blob(doc_entry.hash)
+        doc_files = self.sync_client.parse_index(doc_index_content)
+
+        # Build map of filename -> hash
+        file_map = {entry.entry_name: entry.hash for entry in doc_files}
+
+        for page_uuid in page_uuids:
+            output_path = output_dir / f"{page_uuid}.rm"
+            rm_filename = f"{doc_uuid}/{page_uuid}.rm"
+
+            try:
+                # Find .rm file in document index
+                if rm_filename in file_map:
+                    blob_hash = file_map[rm_filename]
+                    blob_data = self.sync_client.download_blob(blob_hash)
+                    output_path.write_bytes(blob_data)
+                    rm_file_paths.append(output_path)
+                    logger.debug(f"Downloaded {output_path} ({len(blob_data)} bytes)")
+                else:
+                    logger.warning(f"Could not find .rm file for page {page_uuid}")
+                    rm_file_paths.append(None)
+
+            except Exception as e:
+                logger.warning(f"Failed to download .rm file for page {page_uuid}: {e}")
+                rm_file_paths.append(None)
+
+        return rm_file_paths
 
     def upload_folder(
         self, folder_uuid: str, folder_name: str, parent_uuid: str = ""

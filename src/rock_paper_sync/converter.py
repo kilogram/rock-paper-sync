@@ -53,10 +53,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from .annotation_mapper import AnnotationInfo, map_annotations_to_paragraphs
+from .annotation_markers_v2 import (
+    add_annotation_markers_aligned,
+    strip_annotation_markers,
+    has_annotation_markers,
+)
 from .audit import get_audit_logger
 from .config import AppConfig, VaultConfig
 from .generator import RemarkableGenerator
-from .parser import parse_markdown_file
+from .hashing import compute_file_hash
+from .parser import parse_markdown_file, BlockType, MarkdownDocument
 from .rm_cloud_client import RmCloudClient
 from .rm_cloud_sync import RmCloudSync
 from .state import StateManager, SyncRecord
@@ -75,6 +82,7 @@ class SyncResult:
         remarkable_uuid: UUID of generated reMarkable document (if successful)
         page_count: Number of pages generated (if successful)
         error: Error message (if failed)
+        skipped: True if file was unchanged and not uploaded
     """
 
     vault_name: str
@@ -83,6 +91,26 @@ class SyncResult:
     remarkable_uuid: Optional[str] = None
     page_count: Optional[int] = None
     error: Optional[str] = None
+    skipped: bool = False
+
+
+def merge_annotation_maps(
+    target: dict[int, AnnotationInfo],
+    source: dict[int, AnnotationInfo]
+) -> None:
+    """Merge source annotation map into target, combining counts for matching indices.
+
+    Args:
+        target: Target annotation map to merge into (modified in place)
+        source: Source annotation map to merge from
+    """
+    for idx, info in source.items():
+        if idx in target:
+            target[idx].highlights += info.highlights
+            target[idx].strokes += info.strokes
+            target[idx].notes += info.notes
+        else:
+            target[idx] = info
 
 
 class SyncEngine:
@@ -221,17 +249,50 @@ class SyncEngine:
                 file_size=file_size,
             )
 
-            # Check if needs sync (compare hash)
+            # Check if needs sync (compare semantic content hash)
             current_state = self.state.get_file_state(vault.name, relative_path)
 
             if current_state and current_state.content_hash == md_doc.content_hash:
-                logger.debug(f"File unchanged, skipping: {vault.name}:{relative_path}")
+                # Semantic content unchanged - but check if markers need updating
+                logger.debug(f"Semantic content unchanged: {vault.name}:{relative_path}")
+
+                # Download .rm files to check for new annotations
+                existing_uuid = current_state.remarkable_uuid
+                annotation_map = None
+
+                if existing_uuid:
+                    existing_page_uuids = self.cloud_sync.get_existing_page_uuids(existing_uuid)
+                    if existing_page_uuids:
+                        temp_dir = Path(f".cache/annotations/{existing_uuid}")
+                        existing_rm_files = self.cloud_sync.download_page_rm_files(
+                            existing_uuid, existing_page_uuids, temp_dir
+                        )
+
+                        # Map annotations from .rm files
+                        annotation_map = {}
+                        for rm_file in existing_rm_files:
+                            if rm_file and rm_file.exists():
+                                file_annotations = map_annotations_to_paragraphs(
+                                    rm_file, md_doc.content
+                                )
+                                merge_annotation_maps(annotation_map, file_annotations)
+
+                # Update markers if we have annotations
+                if annotation_map:
+                    logger.info(f"Updating annotation markers (content unchanged)")
+                    self._update_annotation_markers(
+                        markdown_path, md_doc.content, annotation_map, vault.name, relative_path
+                    )
+                else:
+                    logger.debug(f"No annotations to update, skipping: {vault.name}:{relative_path}")
+
                 return SyncResult(
                     vault_name=vault.name,
                     path=markdown_path,
                     success=True,
                     remarkable_uuid=current_state.remarkable_uuid,
                     page_count=current_state.page_count,
+                    skipped=True,
                 )
 
             # Ensure parent folder hierarchy exists (including vault root folder if configured)
@@ -240,6 +301,7 @@ class SyncEngine:
             # Generate reMarkable document (reuse UUID if updating existing file)
             existing_uuid = current_state.remarkable_uuid if current_state else None
             existing_page_uuids = []
+            existing_rm_files = []
 
             if existing_uuid:
                 logger.info(f"Updating existing document {existing_uuid} for {markdown_path}")
@@ -247,11 +309,47 @@ class SyncEngine:
                 existing_page_uuids = self.cloud_sync.get_existing_page_uuids(existing_uuid)
                 if existing_page_uuids:
                     logger.debug(f"Found {len(existing_page_uuids)} existing pages to reuse")
+
+                    # Download existing .rm files to preserve annotations
+                    temp_dir = Path(f".cache/annotations/{existing_uuid}")
+                    existing_rm_files = self.cloud_sync.download_page_rm_files(
+                        existing_uuid, existing_page_uuids, temp_dir
+                    )
+                    logger.info(
+                        f"Downloaded {len([f for f in existing_rm_files if f])} .rm files "
+                        f"for annotation preservation"
+                    )
             else:
                 logger.info(f"Generating new reMarkable document for {markdown_path}")
 
+            # Strip markers before generating device document (keep device view clean)
+            content_for_device = md_doc.content
+            raw_content = markdown_path.read_text(encoding='utf-8')
+
+            if has_annotation_markers(raw_content):
+                logger.debug("Stripping annotation markers before device sync")
+                # Strip markers and re-parse to get clean ContentBlocks
+                clean_content = strip_annotation_markers(raw_content)
+
+                # Write to temp file and parse
+                import tempfile
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False, encoding='utf-8') as tmp_file:
+                    tmp_file.write(clean_content)
+                    tmp_path = Path(tmp_file.name)
+
+                try:
+                    # Parse clean content
+                    clean_doc = parse_markdown_file(tmp_path)
+                    content_for_device = clean_doc.content
+                    logger.debug("Using clean content (markers stripped) for device generation")
+                finally:
+                    tmp_path.unlink()
+
+            # Create document with clean content (no markers)
+            # Use clean_doc directly - parser strips markers before computing hash
             rm_doc = self.generator.generate_document(
-                md_doc, parent_uuid, existing_uuid, existing_page_uuids
+                clean_doc,
+                parent_uuid, existing_uuid, existing_page_uuids, existing_rm_files
             )
 
             # Generate binary .rm files for each page
@@ -268,6 +366,34 @@ class SyncEngine:
                 parent_uuid=parent_uuid,
             )
 
+            # Add annotation markers to file if we have annotations
+            file_hash_with_markers = None
+            if existing_rm_files and any(existing_rm_files):
+                # Map annotations from .rm files (iterate over each page)
+                annotation_map = {}
+                for rm_file in existing_rm_files:
+                    if rm_file and rm_file.exists():
+                        file_annotations = map_annotations_to_paragraphs(
+                            rm_file, md_doc.content
+                        )
+                        merge_annotation_maps(annotation_map, file_annotations)
+
+                if annotation_map:
+                    logger.info(f"Adding annotation markers after sync")
+                    # Add markers using ContentBlock alignment
+                    marked_content = add_annotation_markers_aligned(md_doc.content, annotation_map)
+
+                    # Write marked content back to file
+                    with open(markdown_path, 'w', encoding='utf-8') as f:
+                        f.write(marked_content)
+
+                    # Calculate file hash WITH markers
+                    file_hash_with_markers = compute_file_hash(markdown_path)
+
+                    logger.info(
+                        f"Added {len(annotation_map)} annotation markers to {vault.name}:{relative_path}"
+                    )
+
             # Update state database
             new_state = SyncRecord(
                 vault_name=vault.name,
@@ -277,6 +403,7 @@ class SyncEngine:
                 last_sync_time=int(time.time()),
                 page_count=len(rm_doc.pages),
                 status="synced",
+                file_hash_with_markers=file_hash_with_markers,
             )
             self.state.update_file_state(new_state)
             self.state.log_sync_action(
@@ -501,6 +628,61 @@ class SyncEngine:
             folder_uuid=uuid,
             folder_name=name,
             parent_uuid=parent_uuid,
+        )
+
+    def _update_annotation_markers(
+        self,
+        markdown_path: Path,
+        content_blocks: list,
+        annotation_map: dict[int, AnnotationInfo],
+        vault_name: str,
+        relative_path: str,
+    ) -> None:
+        """Update annotation markers in markdown file (automatic bi-directional sync).
+
+        This method adds or updates HTML comment markers in the markdown file to
+        indicate which paragraphs have annotations on the device. This is part of
+        the automatic bi-directional sync - no user interaction required.
+
+        Uses ContentBlock-aligned marker insertion to ensure markers appear at
+        correct paragraph boundaries.
+
+        Args:
+            markdown_path: Path to markdown file
+            content_blocks: Parsed ContentBlock list from parser
+            annotation_map: Dictionary mapping block index to annotation info
+            vault_name: Name of vault
+            relative_path: Relative path in vault
+        """
+        logger.debug(f"Updating annotation markers for {len(annotation_map)} blocks")
+
+        # Add markers using ContentBlock alignment
+        marked_content = add_annotation_markers_aligned(content_blocks, annotation_map)
+
+        # Write marked content back to file
+        with open(markdown_path, 'w', encoding='utf-8') as f:
+            f.write(marked_content)
+
+        # Calculate file hash WITH markers
+        file_hash_with_markers = compute_file_hash(markdown_path)
+
+        # Update state with file_hash_with_markers (but keep same content_hash)
+        current_state = self.state.get_file_state(vault_name, relative_path)
+        if current_state:
+            updated_state = SyncRecord(
+                vault_name=vault_name,
+                obsidian_path=relative_path,
+                remarkable_uuid=current_state.remarkable_uuid,
+                content_hash=current_state.content_hash,  # Unchanged
+                last_sync_time=current_state.last_sync_time,
+                page_count=current_state.page_count,
+                status=current_state.status,
+                file_hash_with_markers=file_hash_with_markers,  # Updated
+            )
+            self.state.update_file_state(updated_state)
+
+        logger.info(
+            f"Updated {len(annotation_map)} annotation markers in {vault_name}:{relative_path}"
         )
 
     def unsync_vault(

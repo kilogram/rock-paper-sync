@@ -142,3 +142,15 @@ config.toml
 
 # Generated reMarkable files (for testing)
 test_output/
+
+# Phase 1 test vault generated files
+tests/testdata/phase1_test_vault/test.md
+tests/testdata/phase1_test_vault/.rock-paper-sync/
+tests/testdata/phase1_test_vault/.cache/
+sync2.log
+
+# Device measurement vault generated files
+tests/testdata/device_measurements/.rock-paper-sync/
+tests/testdata/device_measurements/device_measurements.json
+tests/testdata/device_measurements/*.png
+tests/testdata/device_measurements/*.jpg
