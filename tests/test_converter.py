@@ -403,3 +403,151 @@ class TestSyncResult:
         assert result.error == "Test error"
         assert result.remarkable_uuid is None
         assert result.page_count is None
+
+
+class TestUnsync:
+    """Test unsync functionality."""
+
+    def test_unsync_vault_without_delete(
+        self,
+        sample_config: AppConfig,
+        state_manager: StateManager,
+        temp_vault: Path,
+        test_vault_config: VaultConfig,
+        mock_cloud_sync,
+    ) -> None:
+        """Test unsyncing a vault without deleting from cloud."""
+        # Sync some files first
+        file1 = temp_vault / "test1.md"
+        file2 = temp_vault / "test2.md"
+        file1.write_text("# Test 1")
+        file2.write_text("# Test 2")
+
+        engine = SyncEngine(sample_config, state_manager, cloud_sync=mock_cloud_sync)
+        engine.sync_file(test_vault_config, file1)
+        engine.sync_file(test_vault_config, file2)
+
+        # Verify files are synced
+        assert len(state_manager.get_all_synced_files("test-vault")) == 2
+
+        # Unsync without deleting from cloud
+        removed, deleted = engine.unsync_vault("test-vault", delete_from_cloud=False)
+
+        assert removed == 2
+        assert deleted == 0
+        assert len(state_manager.get_all_synced_files("test-vault")) == 0
+        # Verify cloud delete was NOT called
+        assert not mock_cloud_sync.delete_document.called
+
+    def test_unsync_vault_with_delete(
+        self,
+        sample_config: AppConfig,
+        state_manager: StateManager,
+        temp_vault: Path,
+        test_vault_config: VaultConfig,
+        mock_cloud_sync,
+    ) -> None:
+        """Test unsyncing a vault with deletion from cloud."""
+        # Sync some files first
+        file1 = temp_vault / "test1.md"
+        file2 = temp_vault / "test2.md"
+        file1.write_text("# Test 1")
+        file2.write_text("# Test 2")
+
+        engine = SyncEngine(sample_config, state_manager, cloud_sync=mock_cloud_sync)
+        result1 = engine.sync_file(test_vault_config, file1)
+        result2 = engine.sync_file(test_vault_config, file2)
+
+        # Verify files are synced
+        assert len(state_manager.get_all_synced_files("test-vault")) == 2
+
+        # Unsync with deletion from cloud
+        removed, deleted = engine.unsync_vault("test-vault", delete_from_cloud=True)
+
+        assert removed == 2
+        assert deleted == 2
+        assert len(state_manager.get_all_synced_files("test-vault")) == 0
+        # Verify cloud delete WAS called
+        assert mock_cloud_sync.delete_document.call_count == 2
+
+    def test_unsync_vault_invalid_name(
+        self,
+        sample_config: AppConfig,
+        state_manager: StateManager,
+        mock_cloud_sync,
+    ) -> None:
+        """Test unsyncing with invalid vault name raises error."""
+        engine = SyncEngine(sample_config, state_manager, cloud_sync=mock_cloud_sync)
+
+        with pytest.raises(ValueError, match="not found in configuration"):
+            engine.unsync_vault("nonexistent-vault")
+
+    def test_unsync_vault_delete_error(
+        self,
+        sample_config: AppConfig,
+        state_manager: StateManager,
+        temp_vault: Path,
+        test_vault_config: VaultConfig,
+        mock_cloud_sync,
+    ) -> None:
+        """Test unsync continues after cloud delete errors."""
+        # Sync a file first
+        file1 = temp_vault / "test1.md"
+        file1.write_text("# Test 1")
+
+        engine = SyncEngine(sample_config, state_manager, cloud_sync=mock_cloud_sync)
+        engine.sync_file(test_vault_config, file1)
+
+        # Make delete raise an error
+        mock_cloud_sync.delete_document.side_effect = RuntimeError("Cloud delete failed")
+
+        # Unsync with deletion should handle error gracefully
+        removed, deleted = engine.unsync_vault("test-vault", delete_from_cloud=True)
+
+        assert removed == 1  # State still removed
+        assert deleted == 0  # But cloud delete failed
+        assert len(state_manager.get_all_synced_files("test-vault")) == 0
+
+    def test_unsync_all_vaults(
+        self,
+        sample_config: AppConfig,
+        state_manager: StateManager,
+        temp_vault: Path,
+        test_vault_config: VaultConfig,
+        mock_cloud_sync,
+    ) -> None:
+        """Test unsyncing all vaults."""
+        # Sync files in the test vault
+        file1 = temp_vault / "test1.md"
+        file1.write_text("# Test 1")
+
+        engine = SyncEngine(sample_config, state_manager, cloud_sync=mock_cloud_sync)
+        engine.sync_file(test_vault_config, file1)
+
+        # Verify file is synced
+        assert len(state_manager.get_all_synced_files("test-vault")) == 1
+
+        # Unsync all vaults
+        results = engine.unsync_all(delete_from_cloud=False)
+
+        assert "test-vault" in results
+        removed, deleted = results["test-vault"]
+        assert removed == 1
+        assert deleted == 0
+        assert len(state_manager.get_all_synced_files("test-vault")) == 0
+
+    def test_unsync_empty_vault(
+        self,
+        sample_config: AppConfig,
+        state_manager: StateManager,
+        test_vault_config: VaultConfig,
+        mock_cloud_sync,
+    ) -> None:
+        """Test unsyncing a vault with no synced files."""
+        engine = SyncEngine(sample_config, state_manager, cloud_sync=mock_cloud_sync)
+
+        # Unsync empty vault
+        removed, deleted = engine.unsync_vault("test-vault", delete_from_cloud=False)
+
+        assert removed == 0
+        assert deleted == 0

@@ -2,6 +2,7 @@
 
 Provides user-facing commands:
 - sync: One-time sync of all changed files
+- unsync: Stop syncing vault(s) and optionally delete from cloud
 - watch: Continuously monitor for changes
 - status: Show sync statistics
 - reset: Clear sync state
@@ -132,6 +133,97 @@ def sync(ctx: click.Context, dry_run: bool, vault: str | None) -> None:
             click.echo(f"  ✗ {result.path.name}: {result.error}", err=True)
 
     state.close()
+
+
+@main.command()
+@click.option("--vault", "-V", help="Unsync specific vault only (by name)")
+@click.option(
+    "--delete-from-cloud",
+    "-d",
+    is_flag=True,
+    help="Also delete files from reMarkable cloud",
+)
+@click.confirmation_option(
+    prompt="This will remove sync state for the specified vault(s). Continue?"
+)
+@click.pass_context
+def unsync(ctx: click.Context, vault: str | None, delete_from_cloud: bool) -> None:
+    """Stop syncing vault(s) and optionally delete from cloud.
+
+    Removes sync state from the database so files are no longer tracked.
+    Optionally deletes the reMarkable files from the cloud.
+
+    Use --vault to unsync a specific vault, or omit to unsync all vaults.
+
+    Examples:
+        # Stop syncing 'personal' vault (keep files on device)
+        rock-paper-sync unsync --vault personal
+
+        # Stop syncing 'work' vault and delete files from cloud
+        rock-paper-sync unsync --vault work --delete-from-cloud
+
+        # Stop syncing all vaults (keep files on device)
+        rock-paper-sync unsync
+    """
+    config: AppConfig = ctx.obj["config"]
+
+    # Validate vault name if specified
+    if vault:
+        vault_names = [v.name for v in config.sync.vaults]
+        if vault not in vault_names:
+            click.echo(f"Error: Vault '{vault}' not found in configuration", err=True)
+            click.echo(f"Available vaults: {', '.join(vault_names)}", err=True)
+            return
+
+    state = StateManager(config.sync.state_database)
+    engine = SyncEngine(config, state)
+
+    if delete_from_cloud:
+        click.echo(
+            "Warning: Files will be deleted from reMarkable cloud and removed from your device!",
+            err=True,
+        )
+
+    try:
+        if vault:
+            # Unsync specific vault
+            click.echo(f"Unsyncing vault '{vault}'...")
+            removed, deleted = engine.unsync_vault(
+                vault, delete_from_cloud=delete_from_cloud
+            )
+
+            click.echo(f"\nVault '{vault}' unsynced:")
+            click.echo(f"  - {removed} file(s) removed from sync state")
+            if delete_from_cloud:
+                click.echo(f"  - {deleted} file(s) deleted from cloud")
+        else:
+            # Unsync all vaults
+            click.echo(f"Unsyncing all {len(config.sync.vaults)} vault(s)...")
+            results = engine.unsync_all(delete_from_cloud=delete_from_cloud)
+
+            click.echo("\nResults by vault:")
+            total_removed = 0
+            total_deleted = 0
+            for vault_name, (removed, deleted) in results.items():
+                if removed > 0:
+                    click.echo(f"  [{vault_name}] {removed} files removed from state")
+                    if delete_from_cloud:
+                        click.echo(f"  [{vault_name}] {deleted} files deleted from cloud")
+                total_removed += removed
+                total_deleted += deleted
+
+            click.echo(f"\nTotal: {total_removed} files removed from state")
+            if delete_from_cloud:
+                click.echo(f"Total: {total_deleted} files deleted from cloud")
+
+    except ValueError as e:
+        click.echo(f"Error: {e}", err=True)
+    except Exception as e:
+        click.echo(f"Error during unsync: {e}", err=True)
+        import traceback
+        traceback.print_exc()
+    finally:
+        state.close()
 
 
 @main.command()

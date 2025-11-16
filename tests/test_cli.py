@@ -451,3 +451,96 @@ class TestSyncCommandErrors:
         assert result.exit_code == 0  # CLI should complete even with errors
         assert "✗" in result.output or "error" in result.output.lower()
         assert "Simulated error" in result.output
+
+
+class TestUnsyncCommand:
+    """Test unsync command."""
+
+    def test_unsync_vault_without_delete(
+        self, runner: CliRunner, config_file: Path, temp_vault: Path, mock_cloud_sync
+    ) -> None:
+        """Test unsync command without deletion."""
+        # Sync a file first
+        (temp_vault / "test.md").write_text("# Test")
+        runner.invoke(cli.main, ["--config", str(config_file), "sync"])
+
+        # Unsync the vault
+        result = runner.invoke(
+            cli.main,
+            ["--config", str(config_file), "unsync", "--vault", "test-vault"],
+            input="y\n"
+        )
+
+        assert result.exit_code == 0
+        assert "test-vault" in result.output
+        assert "removed from sync state" in result.output
+
+    def test_unsync_vault_with_delete(
+        self, runner: CliRunner, config_file: Path, temp_vault: Path, mock_cloud_sync
+    ) -> None:
+        """Test unsync command with cloud deletion."""
+        # Sync a file first
+        (temp_vault / "test.md").write_text("# Test")
+        runner.invoke(cli.main, ["--config", str(config_file), "sync"])
+
+        # Unsync with deletion
+        result = runner.invoke(
+            cli.main,
+            ["--config", str(config_file), "unsync", "--vault", "test-vault", "--delete-from-cloud"],
+            input="y\n"
+        )
+
+        assert result.exit_code == 0
+        assert "deleted from cloud" in result.output
+        assert mock_cloud_sync.delete_document.called
+
+    def test_unsync_all_vaults(
+        self, runner: CliRunner, config_file: Path, temp_vault: Path, mock_cloud_sync
+    ) -> None:
+        """Test unsync all vaults."""
+        # Sync a file first
+        (temp_vault / "test.md").write_text("# Test")
+        runner.invoke(cli.main, ["--config", str(config_file), "sync"])
+
+        # Unsync all
+        result = runner.invoke(
+            cli.main,
+            ["--config", str(config_file), "unsync"],
+            input="y\n"
+        )
+
+        assert result.exit_code == 0
+        assert "Results by vault" in result.output or "Total:" in result.output
+
+    def test_unsync_invalid_vault(
+        self, runner: CliRunner, config_file: Path
+    ) -> None:
+        """Test unsync with invalid vault name."""
+        result = runner.invoke(
+            cli.main,
+            ["--config", str(config_file), "unsync", "--vault", "nonexistent"],
+            input="y\n"
+        )
+
+        assert result.exit_code == 0
+        assert "not found" in result.output
+
+    def test_unsync_no_confirmation(
+        self, runner: CliRunner, config_file: Path, temp_vault: Path, mock_cloud_sync
+    ) -> None:
+        """Test unsync aborts without confirmation."""
+        # Sync a file first
+        (temp_vault / "test.md").write_text("# Test")
+        runner.invoke(cli.main, ["--config", str(config_file), "sync"])
+
+        # Try to unsync but decline confirmation
+        result = runner.invoke(
+            cli.main,
+            ["--config", str(config_file), "unsync", "--vault", "test-vault"],
+            input="n\n"
+        )
+
+        assert result.exit_code == 1  # Aborted
+        # File should still be in sync state
+        status_result = runner.invoke(cli.main, ["--config", str(config_file), "status"])
+        assert "1" in status_result.output  # Still 1 file synced

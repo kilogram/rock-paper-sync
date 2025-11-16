@@ -471,3 +471,108 @@ class SyncEngine:
             folder_name=name,
             parent_uuid=parent_uuid,
         )
+
+    def unsync_vault(
+        self, vault_name: str, delete_from_cloud: bool = False
+    ) -> tuple[int, int]:
+        """Remove sync state for all files in a vault.
+
+        Args:
+            vault_name: Name of vault to unsync
+            delete_from_cloud: If True, also delete files from reMarkable cloud
+
+        Returns:
+            Tuple of (files_removed, files_deleted_from_cloud)
+
+        Raises:
+            ValueError: If vault_name not found in configuration
+        """
+        # Find the vault config
+        vault_config = next(
+            (v for v in self.config.sync.vaults if v.name == vault_name), None
+        )
+        if not vault_config:
+            raise ValueError(f"Vault '{vault_name}' not found in configuration")
+
+        logger.info(
+            f"Unsyncing vault '{vault_name}' (delete_from_cloud={delete_from_cloud})"
+        )
+
+        # Get all synced files for this vault
+        synced_files = self.state.get_all_synced_files(vault_name=vault_name)
+
+        files_removed = 0
+        files_deleted = 0
+
+        for record in synced_files:
+            # Delete from cloud if requested
+            if delete_from_cloud:
+                try:
+                    logger.info(
+                        f"Deleting from cloud: {vault_name}:{record.obsidian_path} "
+                        f"(UUID: {record.remarkable_uuid})"
+                    )
+                    self.cloud_sync.delete_document(record.remarkable_uuid)
+                    files_deleted += 1
+                    self.state.log_sync_action(
+                        vault_name,
+                        record.obsidian_path,
+                        "deleted",
+                        "Removed from cloud via unsync",
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"Failed to delete {vault_name}:{record.obsidian_path} "
+                        f"from cloud: {e}",
+                        exc_info=True,
+                    )
+                    self.state.log_sync_action(
+                        vault_name,
+                        record.obsidian_path,
+                        "error",
+                        f"Delete failed during unsync: {e}",
+                    )
+
+            # Remove from state database
+            self.state.delete_file_state(vault_name, record.obsidian_path)
+            files_removed += 1
+
+        logger.info(
+            f"Vault '{vault_name}' unsynced: {files_removed} files removed from state, "
+            f"{files_deleted} deleted from cloud"
+        )
+
+        return files_removed, files_deleted
+
+    def unsync_all(self, delete_from_cloud: bool = False) -> dict[str, tuple[int, int]]:
+        """Remove sync state for all vaults.
+
+        Args:
+            delete_from_cloud: If True, also delete files from reMarkable cloud
+
+        Returns:
+            Dictionary mapping vault name to (files_removed, files_deleted_from_cloud)
+        """
+        logger.info(f"Unsyncing all vaults (delete_from_cloud={delete_from_cloud})")
+
+        results = {}
+        for vault in self.config.sync.vaults:
+            try:
+                removed, deleted = self.unsync_vault(
+                    vault.name, delete_from_cloud=delete_from_cloud
+                )
+                results[vault.name] = (removed, deleted)
+            except Exception as e:
+                logger.error(
+                    f"Failed to unsync vault '{vault.name}': {e}", exc_info=True
+                )
+                results[vault.name] = (0, 0)
+
+        total_removed = sum(r[0] for r in results.values())
+        total_deleted = sum(r[1] for r in results.values())
+        logger.info(
+            f"All vaults unsynced: {total_removed} files removed from state, "
+            f"{total_deleted} deleted from cloud"
+        )
+
+        return results
