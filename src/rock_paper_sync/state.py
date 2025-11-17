@@ -212,6 +212,41 @@ class StateManager:
             cursor = self.conn.execute("SELECT * FROM sync_state")
         return [SyncRecord(**dict(row)) for row in cursor.fetchall()]
 
+    def get_all_folders(self, vault_name: str) -> list[tuple[str, str]]:
+        """Get all folder mappings for a vault.
+
+        Args:
+            vault_name: Name of the vault
+
+        Returns:
+            List of (folder_path, remarkable_uuid) tuples, ordered by depth (deepest first)
+            This order ensures child folders are processed before parent folders.
+        """
+        cursor = self.conn.execute(
+            """
+            SELECT obsidian_folder, remarkable_uuid
+            FROM folder_mapping
+            WHERE vault_name = ?
+            ORDER BY LENGTH(obsidian_folder) DESC
+            """,
+            (vault_name,)
+        )
+        return [(row[0], row[1]) for row in cursor.fetchall()]
+
+    def delete_folder_mapping(self, vault_name: str, folder_path: str) -> None:
+        """Delete a folder mapping from the database.
+
+        Args:
+            vault_name: Name of the vault
+            folder_path: Relative path of folder in Obsidian vault
+        """
+        with self.conn:
+            self.conn.execute(
+                "DELETE FROM folder_mapping WHERE vault_name = ? AND obsidian_folder = ?",
+                (vault_name, folder_path)
+            )
+        logger.debug(f"Deleted folder mapping: {vault_name}:{folder_path}")
+
     def compute_file_hash(self, file_path: Path) -> str:
         """Compute SHA-256 hash of file content.
 

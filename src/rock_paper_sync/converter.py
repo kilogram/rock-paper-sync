@@ -568,9 +568,37 @@ class SyncEngine:
             self.state.delete_file_state(vault_name, record.obsidian_path)
             files_removed += 1
 
+        # Delete folders (if delete_from_cloud is True)
+        # Process folders in reverse depth order (deepest first) to avoid deleting
+        # parent folders before their children
+        folders_deleted = 0
+        if delete_from_cloud:
+            folders = self.state.get_all_folders(vault_name)
+            logger.info(f"Found {len(folders)} folders to delete for vault '{vault_name}'")
+
+            for folder_path, folder_uuid in folders:
+                try:
+                    logger.info(
+                        f"Deleting folder from cloud: {vault_name}:{folder_path} "
+                        f"(UUID: {folder_uuid})"
+                    )
+                    self.cloud_sync.delete_document(folder_uuid)
+                    folders_deleted += 1
+                except Exception as e:
+                    logger.error(
+                        f"Failed to delete folder {vault_name}:{folder_path} "
+                        f"from cloud: {e}",
+                        exc_info=True,
+                    )
+
+        # Remove all folder mappings from state (regardless of delete_from_cloud)
+        folders = self.state.get_all_folders(vault_name)
+        for folder_path, _ in folders:
+            self.state.delete_folder_mapping(vault_name, folder_path)
+
         logger.info(
             f"Vault '{vault_name}' unsynced: {files_removed} files removed from state, "
-            f"{files_deleted} deleted from cloud"
+            f"{files_deleted} files + {folders_deleted} folders deleted from cloud"
         )
 
         # AUDIT: Log unsync operation with complete details
