@@ -37,11 +37,10 @@ Generated documents appear on your reMarkable device as native notebooks with ty
 git clone https://github.com/yourusername/rock-paper-sync.git
 cd rock-paper-sync
 
-# Create virtual environment
-python -m venv .venv
-source .venv/bin/activate  # or .venv\Scripts\activate on Windows
+# Install with uv (recommended)
+uv sync
 
-# Install in development mode
+# Or with pip
 pip install -e ".[dev]"
 ```
 
@@ -141,12 +140,6 @@ Status for specific vault:
 rock-paper-sync status --vault personal
 ```
 
-### View Sync Status
-
-```bash
-rock-paper-sync status
-```
-
 ### Reset Sync State
 
 ```bash
@@ -199,78 +192,53 @@ Generated reMarkable documents have this structure:
 
 ## Development
 
-### Running Tests
-
 ```bash
-pytest tests/
-```
+# Run tests
+uv run pytest
 
-### Code Quality
-
-```bash
-# Format code
-black src/ tests/
-
-# Lint
-ruff check src/ tests/
+# Format and lint
+uv run black src/ tests/
+uv run ruff check src/ tests/
 
 # Type check
-mypy src/
+uv run mypy src/
 ```
 
-### Test Coverage
-
-```bash
-pytest --cov=rock_paper_sync tests/
-```
+See `CLAUDE.md` for detailed development workflow.
 
 ## Project Structure
 
 ```
-remarkable-obsidian-sync/
-├── CLAUDE.md              # Claude Code instructions
+rock-paper-sync/
+├── CLAUDE.md              # Development guide
+├── README.md              # This file
 ├── docs/
-│   ├── REQUIREMENTS.md    # Detailed requirements
-│   ├── ARCHITECTURE.md    # Technical architecture
-│   └── TASKS.md          # Implementation tasks
+│   ├── MULTI_VAULT.md     # Multi-vault configuration
+│   ├── SYNC_PROTOCOL.md   # Sync v3 protocol details
+│   └── RMSCENE_FINDINGS.md # reMarkable format notes
 ├── src/rock_paper_sync/
-│   ├── cli.py            # Command-line interface
-│   ├── config.py         # Configuration loading
-│   ├── watcher.py        # File system monitoring
-│   ├── parser.py         # Markdown parsing
-│   ├── converter.py      # Sync orchestration
-│   ├── generator.py      # RM file generation
-│   ├── metadata.py       # RM metadata creation
-│   └── state.py          # SQLite state management
-├── tests/
-│   └── fixtures/         # Test markdown files
-├── pyproject.toml        # Project configuration
-└── example_config.toml   # Example config file
+│   ├── cli.py             # Command-line interface
+│   ├── config.py          # Configuration loading
+│   ├── parser.py          # Markdown parsing
+│   ├── generator.py       # RM file generation
+│   ├── metadata.py        # RM metadata creation
+│   ├── rm_cloud_sync.py   # Cloud sync protocol
+│   ├── converter.py       # Sync orchestration
+│   └── state.py           # SQLite state management
+└── tests/                 # Test suite
 ```
 
-## Roadmap
+## Future
 
-### Phase 1 (Current): Obsidian → reMarkable
-- Convert markdown to readable reMarkable documents
-- Preserve folder structure
-- Track sync state
-
-### Phase 2 (Future): Add OCR
-- Extract handwritten annotations
-- Convert to searchable markdown
-- Local OCR training support
-
-### Phase 3 (Future): Bidirectional Sync
-- Detect changes on both sides
-- Three-way merge for conflicts
-- Git-style conflict markers
+- Annotation preservation (see `docs/ANNOTATION_ARCHITECTURE_REVIEW.md`)
+- Bidirectional sync
+- Image embedding
 
 ## Contributing
 
-1. Read the documentation in `docs/`
-2. Check `CLAUDE.md` for development guidelines
-3. Follow the task breakdown in `docs/TASKS.md`
-4. Submit PRs with tests
+1. Check `CLAUDE.md` for development guidelines
+2. Read technical docs in `docs/`
+3. Submit PRs with tests
 
 ## License
 

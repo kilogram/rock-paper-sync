@@ -407,5 +407,4 @@ When implementing new components, add tests for:
 - [pytest documentation](https://docs.pytest.org/)
 - [pytest-cov documentation](https://pytest-cov.readthedocs.io/)
 - [Testing Best Practices](https://docs.python-guide.org/writing/tests/)
-- Project architecture: `docs/ARCHITECTURE.md`
-- Implementation tasks: `docs/TASKS.md`
+- Development guide: `CLAUDE.md`

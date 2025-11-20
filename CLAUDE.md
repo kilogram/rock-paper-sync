@@ -124,35 +124,11 @@ uv run pytest --cov=src/rock_paper_sync --cov-report=term-missing
 
 ## Configuration
 
-### Multi-Vault Setup
+See `docs/MULTI_VAULT.md` for vault configuration details and examples.
 
-```toml
-[[vaults]]
-name = "personal"               # Unique identifier
-path = "~/vault-personal"       # Vault directory
-remarkable_folder = "Personal"  # Optional - folder on device
-include_patterns = ["**/*.md"]  # Files to sync
-exclude_patterns = [".obsidian/**"]  # Files to ignore
-
-[[vaults]]
-name = "work"
-path = "~/vault-work"
-remarkable_folder = "Work"
-include_patterns = ["**/*.md"]
-exclude_patterns = ["archive/**"]
-```
-
-**Rules**:
+**Key Rules**:
 - Vault names must be unique
 - When multiple vaults: at most ONE can omit `remarkable_folder`
-- See `docs/MULTI_VAULT.md` for detailed guide
-
-### Cloud Configuration
-
-```toml
-[cloud]
-base_url = "http://localhost:3000"  # rm_cloud or official cloud
-```
 
 ## Milestones
 
@@ -211,7 +187,6 @@ level = "debug"
 - `docs/MULTI_VAULT.md` - Multi-vault user guide
 - `docs/SYNC_PROTOCOL.md` - Technical protocol reference
 - `docs/RMSCENE_FINDINGS.md` - rmscene library notes
-- `docs/ANNOTATION_POSITION_ADJUSTMENT.md` - ML-ready X,Y annotation adjustment architecture
 - `docs/ANNOTATION_ARCHITECTURE_REVIEW.md` - Coordinate space analysis and fixes
 
 ## Getting Help
