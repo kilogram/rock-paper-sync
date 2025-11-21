@@ -1,12 +1,16 @@
-# Config missing required vault path
+# Config with vault missing required 'path' field
 [paths]
-remarkable_output = "/tmp/test_output"
 state_database = "/tmp/test_state.db"
 
-[sync]
+[[vaults]]
+name = "test-vault"
+# path is missing
+remarkable_folder = "Test"
 include_patterns = ["**/*.md"]
 exclude_patterns = []
-debounce_seconds = 5
+
+[cloud]
+base_url = "http://localhost:3000"
 
 [layout]
 lines_per_page = 28

@@ -1,12 +1,15 @@
 [paths]
-obsidian_vault = "~/obsidian-vault"
-remarkable_output = "~/remarkable-sync"
 state_database = "~/.local/share/rock-paper-sync/state.db"
 
-[sync]
+[[vaults]]
+name = "test-vault"
+path = "~/obsidian-vault"
+remarkable_folder = "Test"
 include_patterns = ["**/*.md"]
 exclude_patterns = []
-debounce_seconds = 5
+
+[cloud]
+base_url = "http://localhost:3000"
 
 [layout]
 lines_per_page = 28

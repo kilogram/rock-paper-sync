@@ -9,6 +9,7 @@ from rock_paper_sync.config import (
     ConfigError,
     LayoutConfig,
     SyncConfig,
+    VaultConfig,
     expand_path,
     load_config,
     validate_config,
@@ -54,16 +55,20 @@ class TestLoadConfig:
         assert isinstance(config.sync, SyncConfig)
         assert isinstance(config.layout, LayoutConfig)
 
-        # Check paths were expanded
-        assert config.sync.obsidian_vault == temp_vault
+        # Check vaults were loaded
+        assert len(config.sync.vaults) == 1
+        vault = config.sync.vaults[0]
+        assert vault.name == "test-vault"
+        assert vault.path == temp_vault
+        assert vault.remarkable_folder == "Test Vault"
 
         # Check cloud config
         assert config.cloud.base_url == "http://localhost:3000"
 
         # Check default values
-        assert config.sync.include_patterns == ["**/*.md"]
+        assert vault.include_patterns == ["**/*.md"]
         assert config.sync.debounce_seconds == 5
-        assert config.layout.lines_per_page == 28
+        assert config.layout.lines_per_page == 45
         assert config.log_level == "info"
 
     def test_load_missing_file(self, tmp_path: Path) -> None:
@@ -87,16 +92,15 @@ class TestLoadConfig:
     def test_missing_required_field(self, config_samples_dir: Path) -> None:
         """Test that missing required field raises ConfigError."""
         config_path = config_samples_dir / "missing_vault_path.toml"
-        with pytest.raises(ConfigError, match="Missing required field: paths.obsidian_vault"):
+        with pytest.raises(ConfigError, match="missing required 'path' field"):
             load_config(config_path)
 
     def test_all_sections_present(self, tmp_path: Path, temp_vault: Path, temp_output: Path) -> None:
         """Test that all required sections must be present."""
-        # Test missing sync section
-        config_path = tmp_path / "no_sync.toml"
+        # Test missing vaults section
+        config_path = tmp_path / "no_vaults.toml"
         config_path.write_text(f"""
 [paths]
-obsidian_vault = "{temp_vault}"
 state_database = "{tmp_path / 'state.db'}"
 
 [cloud]
@@ -113,23 +117,24 @@ margin_right = 50
 level = "info"
 file = "{tmp_path / 'sync.log'}"
 """)
-        with pytest.raises(ConfigError, match="Missing required \\[sync\\] section"):
+        with pytest.raises(ConfigError, match="Missing required \\[\\[vaults\\]\\] section"):
             load_config(config_path)
 
         # Test missing layout section
         config_path = tmp_path / "no_layout.toml"
         config_path.write_text(f"""
 [paths]
-obsidian_vault = "{temp_vault}"
 state_database = "{tmp_path / 'state.db'}"
+
+[[vaults]]
+name = "test-vault"
+path = "{temp_vault}"
+remarkable_folder = "Test"
+include_patterns = ["**/*.md"]
+exclude_patterns = []
 
 [cloud]
 base_url = "http://localhost:3000"
-
-[sync]
-include_patterns = ["**/*.md"]
-exclude_patterns = []
-debounce_seconds = 5
 
 [logging]
 level = "info"
@@ -142,16 +147,17 @@ file = "{tmp_path / 'sync.log'}"
         config_path = tmp_path / "no_logging.toml"
         config_path.write_text(f"""
 [paths]
-obsidian_vault = "{temp_vault}"
 state_database = "{tmp_path / 'state.db'}"
+
+[[vaults]]
+name = "test-vault"
+path = "{temp_vault}"
+remarkable_folder = "Test"
+include_patterns = ["**/*.md"]
+exclude_patterns = []
 
 [cloud]
 base_url = "http://localhost:3000"
-
-[sync]
-include_patterns = ["**/*.md"]
-exclude_patterns = []
-debounce_seconds = 5
 
 [layout]
 lines_per_page = 45
@@ -180,10 +186,16 @@ class TestValidateConfig:
         nonexistent_vault = tmp_path / "nonexistent_vault"
         config = AppConfig(
             sync=SyncConfig(
-                obsidian_vault=nonexistent_vault,
+                vaults=[
+                    VaultConfig(
+                        name="test-vault",
+                        path=nonexistent_vault,
+                        remarkable_folder="Test",
+                        include_patterns=["**/*.md"],
+                        exclude_patterns=[],
+                    )
+                ],
                 state_database=config.sync.state_database,
-                include_patterns=config.sync.include_patterns,
-                exclude_patterns=config.sync.exclude_patterns,
                 debounce_seconds=config.sync.debounce_seconds,
             ),
             cloud=config.cloud,
@@ -192,7 +204,7 @@ class TestValidateConfig:
             log_file=config.log_file,
         )
 
-        with pytest.raises(ConfigError, match="Obsidian vault directory does not exist"):
+        with pytest.raises(ConfigError, match="directory does not exist"):
             validate_config(config)
 
     def test_validate_vault_is_file_not_directory(self, valid_config_toml: Path, tmp_path: Path) -> None:
@@ -204,10 +216,16 @@ class TestValidateConfig:
 
         config = AppConfig(
             sync=SyncConfig(
-                obsidian_vault=file_path,
+                vaults=[
+                    VaultConfig(
+                        name="test-vault",
+                        path=file_path,
+                        remarkable_folder="Test",
+                        include_patterns=["**/*.md"],
+                        exclude_patterns=[],
+                    )
+                ],
                 state_database=config.sync.state_database,
-                include_patterns=config.sync.include_patterns,
-                exclude_patterns=config.sync.exclude_patterns,
                 debounce_seconds=config.sync.debounce_seconds,
             ),
             cloud=config.cloud,
@@ -227,10 +245,8 @@ class TestValidateConfig:
 
         config = AppConfig(
             sync=SyncConfig(
-                obsidian_vault=config.sync.obsidian_vault,
+                vaults=config.sync.vaults,
                 state_database=new_db_path,
-                include_patterns=config.sync.include_patterns,
-                exclude_patterns=config.sync.exclude_patterns,
                 debounce_seconds=config.sync.debounce_seconds,
             ),
             cloud=config.cloud,
@@ -268,10 +284,8 @@ class TestValidateConfig:
         config = load_config(valid_config_toml)
         config = AppConfig(
             sync=SyncConfig(
-                obsidian_vault=config.sync.obsidian_vault,
+                vaults=config.sync.vaults,
                 state_database=config.sync.state_database,
-                include_patterns=config.sync.include_patterns,
-                exclude_patterns=config.sync.exclude_patterns,
                 debounce_seconds=-1,
             ),
             cloud=config.cloud,
@@ -342,10 +356,16 @@ class TestValidateConfig:
         config = load_config(valid_config_toml)
         config = AppConfig(
             sync=SyncConfig(
-                obsidian_vault=config.sync.obsidian_vault,
+                vaults=[
+                    VaultConfig(
+                        name="test-vault",
+                        path=config.sync.vaults[0].path,
+                        remarkable_folder="Test",
+                        include_patterns=[],
+                        exclude_patterns=[],
+                    )
+                ],
                 state_database=config.sync.state_database,
-                include_patterns=[],
-                exclude_patterns=config.sync.exclude_patterns,
                 debounce_seconds=config.sync.debounce_seconds,
             ),
             cloud=config.cloud,
@@ -354,7 +374,7 @@ class TestValidateConfig:
             log_file=config.log_file,
         )
 
-        with pytest.raises(ConfigError, match="include_patterns cannot be empty"):
+        with pytest.raises(ConfigError, match="has no include_patterns"):
             validate_config(config)
 
     def test_missing_state_database(self, config_samples_dir: Path) -> None:
@@ -456,10 +476,8 @@ class TestValidateConfig:
         bad_db = tmp_path / "nonexistent_parent" / "state.db"
         config = AppConfig(
             sync=SyncConfig(
-                obsidian_vault=config.sync.obsidian_vault,
+                vaults=config.sync.vaults,
                 state_database=bad_db,
-                include_patterns=config.sync.include_patterns,
-                exclude_patterns=config.sync.exclude_patterns,
                 debounce_seconds=config.sync.debounce_seconds,
             ),
             cloud=config.cloud,
@@ -485,10 +503,8 @@ class TestValidateConfig:
 
         config = AppConfig(
             sync=SyncConfig(
-                obsidian_vault=config.sync.obsidian_vault,
+                vaults=config.sync.vaults,
                 state_database=db_path,
-                include_patterns=config.sync.include_patterns,
-                exclude_patterns=config.sync.exclude_patterns,
                 debounce_seconds=config.sync.debounce_seconds,
             ),
             cloud=config.cloud,

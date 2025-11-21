@@ -326,6 +326,9 @@ class SyncEngine:
             content_for_device = md_doc.content
             raw_content = markdown_path.read_text(encoding='utf-8')
 
+            # Default to original document (will be replaced if markers need stripping)
+            clean_doc = md_doc
+
             if has_annotation_markers(raw_content):
                 logger.debug("Stripping annotation markers before device sync")
                 # Strip markers and re-parse to get clean ContentBlocks

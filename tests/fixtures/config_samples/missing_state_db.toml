@@ -1,12 +1,16 @@
 [paths]
-obsidian_vault = "~/obsidian-vault"
-remarkable_output = "~/remarkable-sync"
-# Missing state_database
+# state_database is intentionally missing
+dummy_key = "to make paths non-empty"
 
-[sync]
+[[vaults]]
+name = "test-vault"
+path = "~/obsidian-vault"
+remarkable_folder = "Test"
 include_patterns = ["**/*.md"]
 exclude_patterns = []
-debounce_seconds = 5
+
+[cloud]
+base_url = "http://localhost:3000"
 
 [layout]
 lines_per_page = 28

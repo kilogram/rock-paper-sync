@@ -204,7 +204,7 @@ def unsync(ctx: click.Context, vault: str | None, delete_from_cloud: bool, yes: 
     # Confirm unless --yes flag is set
     if not yes and not click.confirm("This will remove sync state for the specified vault(s). Continue?"):
         click.echo("Aborted.")
-        return
+        ctx.exit(1)
 
     state = StateManager(config.sync.state_database)
     engine = SyncEngine(config, state)

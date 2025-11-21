@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from rock_paper_sync.config import AppConfig, CloudConfig, LayoutConfig, SyncConfig
+from rock_paper_sync.config import AppConfig, CloudConfig, LayoutConfig, SyncConfig, VaultConfig
 from rock_paper_sync.parser import BlockType, FormatStyle, parse_markdown_file
 from rock_paper_sync.state import StateManager, SyncRecord
 
@@ -26,10 +26,16 @@ def integration_env(tmp_path: Path):
 
     config = AppConfig(
         sync=SyncConfig(
-            obsidian_vault=vault,
+            vaults=[
+                VaultConfig(
+                    name="test-vault",
+                    path=vault,
+                    remarkable_folder="Test",
+                    include_patterns=["**/*.md"],
+                    exclude_patterns=[".obsidian/**", "templates/**"],
+                )
+            ],
             state_database=db,
-            include_patterns=["**/*.md"],
-            exclude_patterns=[".obsidian/**", "templates/**"],
             debounce_seconds=1,
         ),
         cloud=CloudConfig(
@@ -85,10 +91,12 @@ This is a **test** with *formatting*.
         # Verify parsing
         assert doc.title == "Integration Test"
         assert len(doc.content) > 0
-        assert doc.content_hash == hashlib.sha256(content.encode()).hexdigest()
+        # content_hash is now a semantic hash, just verify it exists and is valid
+        assert len(doc.content_hash) == 64  # SHA256 hex digest length
 
         # Store in state
         record = SyncRecord(
+            vault_name="test-vault",
             obsidian_path="test.md",
             remarkable_uuid="test-uuid-123",
             content_hash=doc.content_hash,
@@ -99,7 +107,7 @@ This is a **test** with *formatting*.
         state.update_file_state(record)
 
         # Verify state
-        retrieved = state.get_file_state("test.md")
+        retrieved = state.get_file_state("test-vault", "test.md")
         assert retrieved is not None
         assert retrieved.content_hash == doc.content_hash
         assert retrieved.remarkable_uuid == "test-uuid-123"
@@ -116,6 +124,7 @@ This is a **test** with *formatting*.
 
         doc1 = parse_markdown_file(test_file)
         record1 = SyncRecord(
+            vault_name="test-vault",
             obsidian_path="changing.md",
             remarkable_uuid="uuid-1",
             content_hash=doc1.content_hash,
@@ -136,11 +145,12 @@ This is a **test** with *formatting*.
         assert doc1.content_hash != doc2.content_hash
 
         # State should detect change
-        current_state = state.get_file_state("changing.md")
+        current_state = state.get_file_state("test-vault", "changing.md")
         assert current_state.content_hash != doc2.content_hash
 
         # Update state
         record2 = SyncRecord(
+            vault_name="test-vault",
             obsidian_path="changing.md",
             remarkable_uuid="uuid-1",
             content_hash=doc2.content_hash,
@@ -151,7 +161,7 @@ This is a **test** with *formatting*.
         state.update_file_state(record2)
 
         # Verify update
-        updated_state = state.get_file_state("changing.md")
+        updated_state = state.get_file_state("test-vault", "changing.md")
         assert updated_state.content_hash == doc2.content_hash
 
     def test_multiple_file_workflow(self, integration_env):
@@ -173,6 +183,7 @@ This is a **test** with *formatting*.
             # Parse and track
             doc = parse_markdown_file(file_path)
             record = SyncRecord(
+                vault_name="test-vault",
                 obsidian_path=filename,
                 remarkable_uuid=f"uuid-{filename}",
                 content_hash=doc.content_hash,
@@ -183,7 +194,7 @@ This is a **test** with *formatting*.
             state.update_file_state(record)
 
         # Verify all files tracked
-        all_synced = state.get_all_synced_files()
+        all_synced = state.get_all_synced_files("test-vault")
         assert len(all_synced) == 3
 
         synced_paths = {f.obsidian_path for f in all_synced}
@@ -212,6 +223,7 @@ This is a **test** with *formatting*.
 
             doc = parse_markdown_file(abs_path)
             record = SyncRecord(
+                vault_name="test-vault",
                 obsidian_path=rel_path,
                 remarkable_uuid=f"uuid-{rel_path.replace('/', '-')}",
                 content_hash=doc.content_hash,
@@ -222,7 +234,7 @@ This is a **test** with *formatting*.
             state.update_file_state(record)
 
         # Verify all tracked
-        all_synced = state.get_all_synced_files()
+        all_synced = state.get_all_synced_files("test-vault")
         assert len(all_synced) == 4
 
         # Verify folder mappings can be created
@@ -233,11 +245,11 @@ This is a **test** with *formatting*.
         ]
 
         for folder_path, folder_uuid in folder_mappings:
-            state.create_folder_mapping(folder_path, folder_uuid)
+            state.create_folder_mapping("test-vault", folder_path, folder_uuid)
 
         # Verify retrieval
-        assert state.get_folder_uuid("projects") == "folder-uuid-projects"
-        assert state.get_folder_uuid("projects/work") == "folder-uuid-work"
+        assert state.get_folder_uuid("test-vault", "projects") == "folder-uuid-projects"
+        assert state.get_folder_uuid("test-vault", "projects/work") == "folder-uuid-work"
 
 
 class TestConfigIntegration:
@@ -269,10 +281,12 @@ class TestConfigIntegration:
         (vault / "ideas.md").write_text("Ideas note")
 
         # Find changed files with exclusions
+        vault_config = config.sync.vaults[0]
         changed = state.find_changed_files(
-            config.sync.obsidian_vault,
-            config.sync.include_patterns,
-            config.sync.exclude_patterns,
+            vault_config.name,
+            vault_config.path,
+            vault_config.include_patterns,
+            vault_config.exclude_patterns,
         )
 
         # Should only find the included files
@@ -468,6 +482,7 @@ Mixed: Hello 世界 café! 🎉
 
         # Hash should work with unicode
         record = SyncRecord(
+            vault_name="test-vault",
             obsidian_path="unicode.md",
             remarkable_uuid="unicode-uuid",
             content_hash=doc.content_hash,
@@ -478,7 +493,7 @@ Mixed: Hello 世界 café! 🎉
         state.update_file_state(record)
 
         # Verify stored correctly
-        retrieved = state.get_file_state("unicode.md")
+        retrieved = state.get_file_state("test-vault", "unicode.md")
         assert retrieved is not None
 
     def test_empty_files_handled(self, integration_env):
@@ -536,7 +551,7 @@ class TestFullPipelineStubs:
         assert mock_cloud_sync.upload_document.called
 
         # Verify state was updated
-        file_state = state.get_file_state("test.md")
+        file_state = state.get_file_state("test-vault", "test.md")
         assert file_state is not None
         assert file_state.status == "synced"
 
@@ -565,7 +580,8 @@ class TestFullPipelineStubs:
 
         # Second sync without changes - should skip
         results2 = engine.sync_all_changed()
-        assert len(results2) == 0  # No changes = no results
+        # File still appears in results but marked as skipped
+        assert all(r.skipped for r in results2)  # All results should be skipped
 
         # Upload should not be called again (file unchanged)
         assert not mock_cloud_sync.upload_document.called
@@ -594,8 +610,8 @@ class TestFullPipelineStubs:
         assert mock_cloud_sync.upload_folder.called
 
         # Verify folders were created in state
-        assert state.get_folder_uuid("projects") is not None
-        assert state.get_folder_uuid("projects/work") is not None
+        assert state.get_folder_uuid("test-vault", "projects") is not None
+        assert state.get_folder_uuid("test-vault", "projects/work") is not None
 
 
 class TestStateManagementEdgeCases:
@@ -616,6 +632,7 @@ class TestStateManagementEdgeCases:
 
             doc = parse_markdown_file(test_file)
             record = SyncRecord(
+                vault_name="test-vault",
                 obsidian_path="rapid.md",
                 remarkable_uuid="rapid-uuid",
                 content_hash=doc.content_hash,
@@ -625,16 +642,17 @@ class TestStateManagementEdgeCases:
             )
             state.update_file_state(record)
             # Log the action
-            state.log_sync_action("rapid.md", "updated", f"Version {i}")
+            state.log_sync_action("test-vault", "rapid.md", "updated", f"Version {i}")
 
         # Final state should reflect last change
-        final_state = state.get_file_state("rapid.md")
+        final_state = state.get_file_state("test-vault", "rapid.md")
         assert final_state is not None
 
         # History should show all changes
         history = state.get_recent_history(limit=20)
         # Should have logged all updates
-        rapid_entries = [h for h in history if h[0] == "rapid.md"]
+        # History tuples are: (vault_name, obsidian_path, action, timestamp, details)
+        rapid_entries = [h for h in history if h[1] == "rapid.md"]
         assert len(rapid_entries) >= 10  # All 10 updates logged
 
     def test_file_deletion_tracking(self, integration_env):
@@ -648,6 +666,7 @@ class TestStateManagementEdgeCases:
 
         doc = parse_markdown_file(test_file)
         record = SyncRecord(
+            vault_name="test-vault",
             obsidian_path="to_delete.md",
             remarkable_uuid="delete-uuid",
             content_hash=doc.content_hash,
@@ -658,10 +677,10 @@ class TestStateManagementEdgeCases:
         state.update_file_state(record)
 
         # Delete from state
-        state.delete_file_state("to_delete.md")
+        state.delete_file_state("test-vault", "to_delete.md")
 
         # Verify deleted
-        assert state.get_file_state("to_delete.md") is None
+        assert state.get_file_state("test-vault", "to_delete.md") is None
 
     def test_state_statistics(self, integration_env):
         """Test state statistics reporting."""
@@ -683,6 +702,7 @@ class TestStateManagementEdgeCases:
 
                 doc = parse_markdown_file(file_path)
                 record = SyncRecord(
+                    vault_name="test-vault",
                     obsidian_path=f"file_{status}_{i}.md",
                     remarkable_uuid=f"uuid-{count}",
                     content_hash=doc.content_hash,
@@ -694,7 +714,7 @@ class TestStateManagementEdgeCases:
                 count += 1
 
         # Get statistics
-        stats = state.get_stats()
+        stats = state.get_stats("test-vault")
 
         # Verify
         assert stats["synced"] == 5
@@ -721,6 +741,7 @@ class TestPerformance:
 
             doc = parse_markdown_file(file_path)
             record = SyncRecord(
+                vault_name="test-vault",
                 obsidian_path=f"file{i}.md",
                 remarkable_uuid=f"uuid-{i}",
                 content_hash=doc.content_hash,
@@ -736,7 +757,7 @@ class TestPerformance:
         assert elapsed < 10.0
 
         # Verify all tracked
-        all_synced = state.get_all_synced_files()
+        all_synced = state.get_all_synced_files("test-vault")
         assert len(all_synced) == num_files
 
     @pytest.mark.slow
@@ -784,7 +805,8 @@ class TestDocumentUpdateFlow:
 
         # First sync
         engine = SyncEngine(config, state, cloud_sync=mock_cloud_sync)
-        result1 = engine.sync_file(test_file)
+        vault_config = config.sync.vaults[0]
+        result1 = engine.sync_file(vault_config, test_file)
 
         assert result1.success
         uuid1 = result1.remarkable_uuid
@@ -800,7 +822,7 @@ class TestDocumentUpdateFlow:
         mock_cloud_sync.reset_mock()
 
         # Second sync
-        result2 = engine.sync_file(test_file)
+        result2 = engine.sync_file(vault_config, test_file)
 
         assert result2.success
         uuid2 = result2.remarkable_uuid
@@ -829,11 +851,12 @@ class TestDocumentUpdateFlow:
         ]
 
         uuid = None
+        vault_config = config.sync.vaults[0]
         for i, content in enumerate(versions):
             test_file.write_text(content)
             time.sleep(0.01)  # Ensure timestamp changes
 
-            result = engine.sync_file(test_file)
+            result = engine.sync_file(vault_config, test_file)
             assert result.success
 
             if uuid is None:
@@ -858,7 +881,8 @@ class TestDocumentUpdateFlow:
         test_file.write_text("# Original\n\nIn root folder.")
 
         engine = SyncEngine(config, state, cloud_sync=mock_cloud_sync)
-        result1 = engine.sync_file(test_file)
+        vault_config = config.sync.vaults[0]
+        result1 = engine.sync_file(vault_config, test_file)
 
         uuid = result1.remarkable_uuid
         assert result1.success
@@ -874,7 +898,7 @@ class TestDocumentUpdateFlow:
 
         # Note: Current implementation treats this as a NEW file
         # since the path changed. This is expected behavior for Phase 1.
-        result2 = engine.sync_file(new_file)
+        result2 = engine.sync_file(vault_config, new_file)
         assert result2.success
         # New file path = new UUID (expected for Phase 1)
         assert result2.remarkable_uuid != uuid
@@ -898,11 +922,12 @@ class TestDocumentUpdateFlow:
             files.append(f)
 
         engine = SyncEngine(config, state, cloud_sync=mock_cloud_sync)
+        vault_config = config.sync.vaults[0]
 
         # First sync all
         first_uuids = {}
         for f in files:
-            result = engine.sync_file(f)
+            result = engine.sync_file(vault_config, f)
             assert result.success
             first_uuids[f.name] = result.remarkable_uuid
 
@@ -912,7 +937,7 @@ class TestDocumentUpdateFlow:
 
         # Sync updates
         for f in files:
-            result = engine.sync_file(f)
+            result = engine.sync_file(vault_config, f)
             assert result.success
             # Each should preserve its UUID
             assert result.remarkable_uuid == first_uuids[f.name]
@@ -932,13 +957,14 @@ class TestDocumentUpdateFlow:
         test_file.write_text("# V1\n\nFirst.")
 
         engine = SyncEngine(config, state, cloud_sync=mock_cloud_sync)
+        vault_config = config.sync.vaults[0]
 
         # First sync
-        result1 = engine.sync_file(test_file)
+        result1 = engine.sync_file(vault_config, test_file)
         uuid = result1.remarkable_uuid
 
         # Check state
-        file_state1 = state.get_file_state("tracked.md")
+        file_state1 = state.get_file_state("test-vault", "tracked.md")
         assert file_state1 is not None
         assert file_state1.remarkable_uuid == uuid
         hash1 = file_state1.content_hash
@@ -948,10 +974,10 @@ class TestDocumentUpdateFlow:
 
         # Update
         test_file.write_text("# V2\n\nSecond.")
-        result2 = engine.sync_file(test_file)
+        result2 = engine.sync_file(vault_config, test_file)
 
         # Check updated state
-        file_state2 = state.get_file_state("tracked.md")
+        file_state2 = state.get_file_state("test-vault", "tracked.md")
         assert file_state2 is not None
         assert file_state2.remarkable_uuid == uuid  # Same UUID
         assert file_state2.content_hash != hash1  # Different hash

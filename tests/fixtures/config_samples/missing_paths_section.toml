@@ -1,8 +1,13 @@
 # Config missing [paths] section
-[sync]
+[[vaults]]
+name = "test-vault"
+path = "~/obsidian-vault"
+remarkable_folder = "Test"
 include_patterns = ["**/*.md"]
 exclude_patterns = []
-debounce_seconds = 5
+
+[cloud]
+base_url = "http://localhost:3000"
 
 [layout]
 lines_per_page = 28
