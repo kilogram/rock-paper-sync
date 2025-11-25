@@ -618,6 +618,137 @@ class TestDeleteDocument:
         assert mock_update_root.call_count == 2
 
 
+class TestDeleteDocumentsBatch:
+    """Tests for batch document deletion."""
+
+    @patch.object(SyncV3Client, "update_root")
+    @patch.object(SyncV3Client, "upload_index")
+    @patch.object(SyncV3Client, "get_root_documents")
+    @patch.object(SyncV3Client, "get_current_generation")
+    def test_delete_multiple_documents_success(
+        self, mock_get_gen, mock_get_docs, mock_upload_idx, mock_update_root
+    ):
+        """Should delete multiple documents in single root update."""
+        mock_get_gen.return_value = ("root", 5)
+        mock_get_docs.return_value = [
+            BlobEntry("hash1", DOC_TYPE, "doc-1", 3, 0),
+            BlobEntry("hash2", DOC_TYPE, "doc-2", 2, 0),
+            BlobEntry("hash3", DOC_TYPE, "doc-3", 1, 0),
+            BlobEntry("hash4", DOC_TYPE, "doc-keep", 2, 0),
+        ]
+        mock_upload_idx.return_value = ("new-root", b"index")
+        mock_update_root.return_value = 6
+
+        client = SyncV3Client("http://localhost:3000", "token")
+
+        client.delete_documents_batch(["doc-1", "doc-2", "doc-3"], broadcast=True)
+
+        # Should make only one root update call (batch operation)
+        assert mock_update_root.call_count == 1
+
+        # Should upload index with only remaining document
+        call_args = mock_upload_idx.call_args[0][0]
+        assert len(call_args) == 1
+        assert call_args[0].entry_name == "doc-keep"
+
+    @patch.object(SyncV3Client, "update_root")
+    @patch.object(SyncV3Client, "upload_index")
+    @patch.object(SyncV3Client, "get_root_documents")
+    @patch.object(SyncV3Client, "get_current_generation")
+    def test_delete_batch_partial_match(
+        self, mock_get_gen, mock_get_docs, mock_upload_idx, mock_update_root
+    ):
+        """Should handle case where only some documents exist."""
+        mock_get_gen.return_value = ("root", 5)
+        mock_get_docs.return_value = [
+            BlobEntry("hash1", DOC_TYPE, "doc-1", 3, 0),
+            BlobEntry("hash2", DOC_TYPE, "doc-2", 2, 0),
+        ]
+        mock_upload_idx.return_value = ("new-root", b"index")
+        mock_update_root.return_value = 6
+
+        client = SyncV3Client("http://localhost:3000", "token")
+
+        # Request to delete 3 docs, but only 2 exist
+        client.delete_documents_batch(["doc-1", "doc-2", "doc-nonexistent"])
+
+        # Should still proceed and delete the 2 found docs
+        assert mock_update_root.call_count == 1
+        call_args = mock_upload_idx.call_args[0][0]
+        assert len(call_args) == 0  # All found docs deleted
+
+    @patch.object(SyncV3Client, "get_root_documents")
+    @patch.object(SyncV3Client, "get_current_generation")
+    def test_delete_batch_empty_list(self, mock_get_gen, mock_get_docs):
+        """Should return early for empty list."""
+        client = SyncV3Client("http://localhost:3000", "token")
+
+        # Should not make any API calls
+        client.delete_documents_batch([])
+
+        # Verify no API calls made
+        assert mock_get_gen.call_count == 0
+        assert mock_get_docs.call_count == 0
+
+    @patch.object(SyncV3Client, "update_root")
+    @patch.object(SyncV3Client, "upload_index")
+    @patch.object(SyncV3Client, "get_root_documents")
+    @patch.object(SyncV3Client, "get_current_generation")
+    def test_delete_batch_none_found(
+        self, mock_get_gen, mock_get_docs, mock_upload_idx, mock_update_root
+    ):
+        """Should skip root update when no documents found (Issue #1 fix)."""
+        mock_get_gen.return_value = ("root", 5)
+        mock_get_docs.return_value = [
+            BlobEntry("hash1", DOC_TYPE, "doc-other", 3, 0),
+        ]
+
+        client = SyncV3Client("http://localhost:3000", "token")
+
+        # Try to delete docs that don't exist
+        client.delete_documents_batch(["doc-missing-1", "doc-missing-2"])
+
+        # Should NOT upload index or update root (early exit)
+        assert mock_upload_idx.call_count == 0
+        assert mock_update_root.call_count == 0
+
+    @patch.object(SyncV3Client, "update_root")
+    @patch.object(SyncV3Client, "upload_index")
+    @patch.object(SyncV3Client, "get_root_documents")
+    @patch.object(SyncV3Client, "get_current_generation")
+    def test_delete_batch_retry_on_conflict(
+        self, mock_get_gen, mock_get_docs, mock_upload_idx, mock_update_root
+    ):
+        """Should retry batch deletion on conflict."""
+        mock_get_gen.side_effect = [("root1", 5), ("root2", 6)]
+        mock_get_docs.return_value = [
+            BlobEntry("hash1", DOC_TYPE, "doc-1", 3, 0),
+            BlobEntry("hash2", DOC_TYPE, "doc-2", 2, 0),
+        ]
+        mock_upload_idx.return_value = ("new-root", b"index")
+        mock_update_root.side_effect = [
+            GenerationConflictError(5, 6),
+            7,  # Success on retry
+        ]
+
+        client = SyncV3Client("http://localhost:3000", "token")
+
+        client.delete_documents_batch(["doc-1", "doc-2"], max_retries=3)
+
+        # Should retry once after conflict
+        assert mock_update_root.call_count == 2
+
+    def test_delete_single_uses_batch(self):
+        """delete_document should delegate to delete_documents_batch."""
+        client = SyncV3Client("http://localhost:3000", "token")
+
+        with patch.object(client, "delete_documents_batch") as mock_batch:
+            client.delete_document("doc-uuid", broadcast=False, max_retries=5)
+
+            # Should call batch method with single-item list (using positional args)
+            mock_batch.assert_called_once_with(["doc-uuid"], False, 5)
+
+
 class TestGetDocumentPageUUIDs:
     """Tests for extracting page UUIDs from .content file."""
 
