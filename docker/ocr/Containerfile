@@ -1,0 +1,46 @@
+# OCR Service Container for TrOCR inference and fine-tuning
+# Compatible with both local Podman execution and Runpods deployment
+
+FROM docker.io/pytorch/pytorch:2.1.0-cuda12.1-cudnn8-runtime
+
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV TRANSFORMERS_CACHE=/app/models
+ENV HF_HOME=/app/models
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create app directory
+WORKDIR /app
+
+# Install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Create directories for models and data
+RUN mkdir -p /app/models /app/data /app/checkpoints
+
+# Pre-download base model (speeds up cold starts)
+# This layer is cached and won't re-upload unless requirements change
+RUN python -c "from transformers import TrOCRProcessor, VisionEncoderDecoderModel; \
+    TrOCRProcessor.from_pretrained('microsoft/trocr-base-handwritten'); \
+    VisionEncoderDecoderModel.from_pretrained('microsoft/trocr-base-handwritten')"
+
+# Copy service code (changes frequently, so put last)
+COPY src/ocr_service /app/ocr_service
+
+# Expose port for FastAPI
+EXPOSE 8000
+
+# Health check (using Python to avoid additional dependencies)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)" || exit 1
+
+# Entry point - use serverless for Runpods, serve for local/pod
+ENTRYPOINT ["python", "-m", "ocr_service"]
+CMD ["serverless"]

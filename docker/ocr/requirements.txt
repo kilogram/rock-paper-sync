@@ -1,0 +1,20 @@
+# Core ML dependencies
+torch>=2.1.0
+transformers>=4.35.0,<4.50.0  # Pin to avoid PyTorch 2.1 incompatibility
+pillow>=10.0.0
+peft>=0.6.0,<0.15.0  # For LoRA fine-tuning
+
+# API server
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6
+
+# Data handling
+datasets>=2.15.0
+pyarrow>=14.0.0
+
+# Utilities
+httpx>=0.25.0
+
+# Runpods serverless
+runpod>=1.6.0

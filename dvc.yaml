@@ -1,0 +1,38 @@
+# DVC Pipeline for OCR Model Training
+#
+# This pipeline manages the reproducible training workflow for TrOCR fine-tuning.
+# Intermediate artifacts are stored in XDG_CACHE_HOME for versioning.
+#
+# Usage:
+#   dvc repro -s --set-param version=v1 --set-param output_version=ft-v1
+
+stages:
+  prepare_dataset:
+    cmd: >
+      python -m rock_paper_sync.cli ocr-prepare-dataset
+      --version ${version}
+    deps:
+      - src/rock_paper_sync/ocr/training.py
+    params:
+      - version
+    outs:
+      - ${XDG_CACHE_HOME}/rock-paper-sync/ocr/datasets/${version}.parquet:
+          cache: true
+
+  train:
+    cmd: >
+      python -m rock_paper_sync.cli ocr-train
+      --dataset ${version}
+      --output ${output_version}
+    deps:
+      - ${XDG_CACHE_HOME}/rock-paper-sync/ocr/datasets/${version}.parquet
+      - docker/ocr/src/ocr_service/training.py
+    params:
+      - version
+      - output_version
+    outs:
+      - ${XDG_CACHE_HOME}/rock-paper-sync/ocr/models/${output_version}:
+          cache: true
+    metrics:
+      - ${XDG_CACHE_HOME}/rock-paper-sync/ocr/models/${output_version}/metadata.json:
+          cache: false
