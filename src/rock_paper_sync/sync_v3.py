@@ -7,6 +7,7 @@ Implements the hash-based blob storage protocol used by reMarkable devices.
 import hashlib
 import io
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -54,6 +55,9 @@ class SyncV3Client:
     Uploads documents using hash-based blob storage.
     """
 
+    # Default number of retry attempts for optimistic concurrency control
+    DEFAULT_MAX_RETRIES = 3
+
     def __init__(self, base_url: str, device_token: str):
         """
         Initialize Sync v3 client.
@@ -86,24 +90,6 @@ class SyncV3Client:
         logger.debug(f"Uploading blob {blob_hash} ({len(content)} bytes)")
         response = requests.put(url, headers=self.headers, data=content)
         response.raise_for_status()
-
-    def upload_file_as_blob(self, file_path: Path) -> tuple[str, int]:
-        """
-        Upload a file as a blob and return its hash and size.
-
-        Args:
-            file_path: Path to file to upload
-
-        Returns:
-            Tuple of (hash, size)
-
-        Raises:
-            requests.HTTPError: If upload fails
-        """
-        content = file_path.read_bytes()
-        file_hash = self._sha256(content)
-        self.upload_blob(file_hash, content)
-        return file_hash, len(content)
 
     def upload_index(self, entries: list[BlobEntry]) -> tuple[str, bytes]:
         """
@@ -335,9 +321,9 @@ class SyncV3Client:
     def _retry_root_update(
         self,
         operation_name: str,
-        modify_root_fn,
+        modify_root_fn: Callable[[list[BlobEntry]], list[BlobEntry] | None],
         broadcast: bool = True,
-        max_retries: int = 3,
+        max_retries: int | None = None,
     ) -> int:
         """
         Execute a root modification operation with optimistic concurrency retry.
@@ -347,18 +333,22 @@ class SyncV3Client:
 
         Args:
             operation_name: Name for logging (e.g., "merge document", "delete documents")
-            modify_root_fn: Function that takes current root entries and returns modified entries.
+            modify_root_fn: Function that takes current root entries and returns modified entries,
+                           or None to signal no changes needed (early exit).
                            Should be idempotent as it may be called multiple times on retry.
             broadcast: Whether to trigger sync notification to device
-            max_retries: Maximum retry attempts on conflicts
+            max_retries: Maximum retry attempts on conflicts (defaults to DEFAULT_MAX_RETRIES)
 
         Returns:
-            New generation number after successful update
+            New generation number after successful update (or current generation if no changes)
 
         Raises:
             GenerationConflictError: If max retries exceeded
             requests.HTTPError: If update fails for other reasons
         """
+        if max_retries is None:
+            max_retries = self.DEFAULT_MAX_RETRIES
+
         for attempt in range(max_retries):
             try:
                 # Read current state
@@ -372,6 +362,11 @@ class SyncV3Client:
 
                 # Modify (operation-specific)
                 new_entries = modify_root_fn(root_entries)
+
+                # Early exit if no changes needed
+                if new_entries is None:
+                    logger.info(f"No changes needed for {operation_name}, skipping root update")
+                    return current_generation
 
                 # Write new state
                 root_index_hash, _ = self.upload_index(new_entries)
@@ -400,8 +395,8 @@ class SyncV3Client:
                     )
                     raise
 
-        # Unreachable but makes type checker happy
-        raise RuntimeError("Unreachable: retry loop exited without return or raise")
+        # Should never reach here - loop always returns or raises
+        raise AssertionError("Retry loop should always return or raise")
 
     def upload_document_files(
         self, doc_uuid: str, files: dict[str, bytes]
@@ -464,7 +459,7 @@ class SyncV3Client:
         return hash_of_hashes, file_entries
 
     def merge_document_into_root(
-        self, doc_uuid: str, hash_of_hashes: str, num_files: int, broadcast: bool = True, max_retries: int = 3
+        self, doc_uuid: str, hash_of_hashes: str, num_files: int, broadcast: bool = True, max_retries: int | None = None
     ) -> int:
         """
         Merge a document into the root index with retry logic.
@@ -474,7 +469,7 @@ class SyncV3Client:
             hash_of_hashes: The hashOfHashesV3 for this document
             num_files: Number of files in the document
             broadcast: Whether to trigger sync notification
-            max_retries: Maximum number of retry attempts on conflicts
+            max_retries: Maximum number of retry attempts on conflicts (defaults to DEFAULT_MAX_RETRIES)
 
         Returns:
             New generation number
@@ -541,7 +536,7 @@ class SyncV3Client:
         )
 
     def delete_document(
-        self, doc_uuid: str, broadcast: bool = True, max_retries: int = 3
+        self, doc_uuid: str, broadcast: bool = True, max_retries: int | None = None
     ) -> None:
         """
         Delete a document using Sync v3 protocol with retry logic.
@@ -551,7 +546,7 @@ class SyncV3Client:
         Args:
             doc_uuid: Document UUID to delete
             broadcast: Whether to trigger sync notification to xochitl
-            max_retries: Maximum number of retry attempts on conflicts
+            max_retries: Maximum number of retry attempts on conflicts (defaults to DEFAULT_MAX_RETRIES)
 
         Raises:
             requests.HTTPError: If delete fails
@@ -560,7 +555,7 @@ class SyncV3Client:
         self.delete_documents_batch([doc_uuid], broadcast, max_retries)
 
     def delete_documents_batch(
-        self, doc_uuids: list[str], broadcast: bool = True, max_retries: int = 3
+        self, doc_uuids: list[str], broadcast: bool = True, max_retries: int | None = None
     ) -> None:
         """
         Delete multiple documents in a single root update.
@@ -572,7 +567,7 @@ class SyncV3Client:
         Args:
             doc_uuids: List of document UUIDs to delete
             broadcast: Whether to trigger sync notification to xochitl
-            max_retries: Maximum number of retry attempts on conflicts
+            max_retries: Maximum number of retry attempts on conflicts (defaults to DEFAULT_MAX_RETRIES)
 
         Raises:
             requests.HTTPError: If delete fails
@@ -587,8 +582,12 @@ class SyncV3Client:
 
         uuids_to_delete = set(doc_uuids)
 
-        def _delete_operation(entries: list[BlobEntry]) -> list[BlobEntry]:
-            """Remove documents from root entries."""
+        def _delete_operation(entries: list[BlobEntry]) -> list[BlobEntry] | None:
+            """Remove documents from root entries.
+
+            Returns:
+                Modified entry list, or None if no documents were found to delete.
+            """
             new_entries = []
             deleted_count = 0
 
@@ -601,11 +600,13 @@ class SyncV3Client:
                 else:
                     new_entries.append(entry)
 
+            # Early exit if nothing to delete - avoid unnecessary root update
             if deleted_count == 0:
                 logger.warning(
                     f"None of the {len(doc_uuids)} documents found in root "
                     f"(root has {len(entries)} entries)"
                 )
+                return None
             elif deleted_count < len(doc_uuids):
                 logger.warning(
                     f"Only {deleted_count}/{len(doc_uuids)} documents found in root"

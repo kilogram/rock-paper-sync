@@ -432,3 +432,36 @@ class RmCloudSync:
             doc_uuid=doc_uuid,
             broadcast=True,
         )
+
+    def delete_documents_batch(
+        self, doc_uuids: list[str], broadcast: bool = True
+    ) -> None:
+        """
+        Delete multiple documents from rm_cloud in a single operation.
+
+        More efficient than multiple delete_document() calls and avoids
+        device sync issues when deleting related documents (like nested folders).
+        The device receives one notification showing the final state.
+
+        Args:
+            doc_uuids: List of document UUIDs to delete
+            broadcast: Whether to trigger sync notification to device
+
+        Raises:
+            Exception: If deletion fails
+        """
+        if not doc_uuids:
+            logger.warning("delete_documents_batch called with empty list")
+            return
+
+        logger.info(f"Deleting {len(doc_uuids)} documents from cloud in batch")
+        self.sync_client.delete_documents_batch(doc_uuids, broadcast=broadcast)
+        logger.info(f"Successfully deleted {len(doc_uuids)} documents")
+
+        # AUDIT: Log batch delete operation
+        audit = get_audit_logger()
+        for doc_uuid in doc_uuids:
+            audit.log_cloud_delete(
+                doc_uuid=doc_uuid,
+                broadcast=broadcast,
+            )
