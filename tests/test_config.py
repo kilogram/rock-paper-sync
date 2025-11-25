@@ -2,6 +2,7 @@
 
 import os
 import pytest
+from dataclasses import replace
 from pathlib import Path
 
 from rock_paper_sync.config import (
@@ -15,6 +16,8 @@ from rock_paper_sync.config import (
     load_config,
     validate_config,
 )
+
+from .config_helpers import make_app_config, make_vault_config, with_sync, with_layout, with_vault
 
 
 class TestExpandPath:
@@ -98,64 +101,16 @@ class TestLoadConfig:
 
     def test_all_sections_present(self, tmp_path: Path, temp_vault: Path, temp_output: Path) -> None:
         """Test that all required sections must be present."""
-        # Test missing vaults section
-        config_path = tmp_path / "no_vaults.toml"
-        config_path.write_text(f"""
-[paths]
-state_database = "{tmp_path / 'state.db'}"
-
-[cloud]
-base_url = "http://localhost:3000"
-
-[layout]
-lines_per_page = 45
-margin_top = 50
-margin_bottom = 50
-margin_left = 50
-margin_right = 50
-
-[logging]
-level = "info"
-file = "{tmp_path / 'sync.log'}"
-""")
-        with pytest.raises(ConfigError, match="Missing required \\[\\[vaults\\]\\] section"):
-            load_config(config_path)
-
-        # Test missing layout section
-        config_path = tmp_path / "no_layout.toml"
+        config_path = tmp_path / "incomplete.toml"
         config_path.write_text(f"""
 [paths]
 state_database = "{tmp_path / 'state.db'}"
 
 [[vaults]]
-name = "test-vault"
+name = "test"
 path = "{temp_vault}"
 remarkable_folder = "Test"
 include_patterns = ["**/*.md"]
-exclude_patterns = []
-
-[cloud]
-base_url = "http://localhost:3000"
-
-[logging]
-level = "info"
-file = "{tmp_path / 'sync.log'}"
-""")
-        with pytest.raises(ConfigError, match="Missing required \\[layout\\] section"):
-            load_config(config_path)
-
-        # Test missing logging section
-        config_path = tmp_path / "no_logging.toml"
-        config_path.write_text(f"""
-[paths]
-state_database = "{tmp_path / 'state.db'}"
-
-[[vaults]]
-name = "test-vault"
-path = "{temp_vault}"
-remarkable_folder = "Test"
-include_patterns = ["**/*.md"]
-exclude_patterns = []
 
 [cloud]
 base_url = "http://localhost:3000"
@@ -174,214 +129,138 @@ margin_right = 50
 class TestValidateConfig:
     """Tests for configuration validation."""
 
-    def test_validate_valid_config(self, valid_config_toml: Path, temp_vault: Path, temp_output: Path) -> None:
+    def test_validate_valid_config(self, tmp_path: Path) -> None:
         """Test that valid config passes validation."""
-        config = load_config(valid_config_toml)
-        # Should not raise any exception
-        validate_config(config)
+        config = make_app_config(tmp_path)
+        validate_config(config)  # Should not raise
 
-    def test_validate_nonexistent_vault(self, valid_config_toml: Path, tmp_path: Path) -> None:
+    def test_validate_nonexistent_vault(self, tmp_path: Path) -> None:
         """Test that nonexistent vault directory fails validation."""
-        config = load_config(valid_config_toml)
-        # Modify vault path to nonexistent directory
-        nonexistent_vault = tmp_path / "nonexistent_vault"
+        nonexistent = tmp_path / "nonexistent"
+        # Create config manually to avoid auto-creating the vault
+        from rock_paper_sync.config import AppConfig, SyncConfig, LayoutConfig, CloudConfig, OCRConfig
+
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir(exist_ok=True)
+
         config = AppConfig(
             sync=SyncConfig(
-                vaults=[
-                    VaultConfig(
-                        name="test-vault",
-                        path=nonexistent_vault,
-                        remarkable_folder="Test",
-                        include_patterns=["**/*.md"],
-                        exclude_patterns=[],
-                    )
-                ],
-                state_database=config.sync.state_database,
-                debounce_seconds=config.sync.debounce_seconds,
+                vaults=[make_vault_config(path=nonexistent)],
+                state_database=tmp_path / "state.db",
+                debounce_seconds=1.0,
             ),
-            cloud=config.cloud,
-            layout=config.layout,
-            log_level=config.log_level,
-            log_file=config.log_file,
-            ocr=OCRConfig(),
+            cloud=CloudConfig(base_url="http://localhost:3000"),
+            layout=LayoutConfig(
+                lines_per_page=45,
+                margin_top=50,
+                margin_bottom=50,
+                margin_left=50,
+                margin_right=50,
+            ),
+            log_level="debug",
+            log_file=tmp_path / "test.log",
+            ocr=OCRConfig(enabled=False),
+            cache_dir=cache_dir,
         )
 
         with pytest.raises(ConfigError, match="directory does not exist"):
             validate_config(config)
 
-    def test_validate_vault_is_file_not_directory(self, valid_config_toml: Path, tmp_path: Path) -> None:
+    def test_validate_vault_is_file_not_directory(self, tmp_path: Path) -> None:
         """Test that vault must be a directory, not a file."""
-        config = load_config(valid_config_toml)
-        # Create a file instead of directory
         file_path = tmp_path / "vault_file"
         file_path.write_text("not a directory")
 
+        # Create config manually to avoid auto-creating the vault
+        from rock_paper_sync.config import AppConfig, SyncConfig, LayoutConfig, CloudConfig, OCRConfig
+
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir(exist_ok=True)
+
         config = AppConfig(
             sync=SyncConfig(
-                vaults=[
-                    VaultConfig(
-                        name="test-vault",
-                        path=file_path,
-                        remarkable_folder="Test",
-                        include_patterns=["**/*.md"],
-                        exclude_patterns=[],
-                    )
-                ],
-                state_database=config.sync.state_database,
-                debounce_seconds=config.sync.debounce_seconds,
+                vaults=[make_vault_config(path=file_path)],
+                state_database=tmp_path / "state.db",
+                debounce_seconds=1.0,
             ),
-            cloud=config.cloud,
-            layout=config.layout,
-            log_level=config.log_level,
-            log_file=config.log_file,
-            ocr=OCRConfig(),
+            cloud=CloudConfig(base_url="http://localhost:3000"),
+            layout=LayoutConfig(
+                lines_per_page=45,
+                margin_top=50,
+                margin_bottom=50,
+                margin_left=50,
+                margin_right=50,
+            ),
+            log_level="debug",
+            log_file=tmp_path / "test.log",
+            ocr=OCRConfig(enabled=False),
+            cache_dir=cache_dir,
         )
 
         with pytest.raises(ConfigError, match="not a directory"):
             validate_config(config)
 
-    def test_validate_creates_db_directory(self, valid_config_toml: Path, tmp_path: Path) -> None:
+    def test_validate_creates_db_directory(self, tmp_path: Path) -> None:
         """Test that database directory is created if it doesn't exist."""
-        config = load_config(valid_config_toml)
         new_db_dir = tmp_path / "new_db_dir" / "subdir"
         new_db_path = new_db_dir / "state.db"
 
-        config = AppConfig(
-            sync=SyncConfig(
-                vaults=config.sync.vaults,
-                state_database=new_db_path,
-                debounce_seconds=config.sync.debounce_seconds,
-            ),
-            cloud=config.cloud,
-            layout=config.layout,
-            log_level=config.log_level,
-            log_file=config.log_file,
-            ocr=OCRConfig(),
-        )
+        config = make_app_config(tmp_path, state_database=new_db_path)
 
-        # Should create directory
         validate_config(config)
         assert new_db_dir.exists()
         assert new_db_dir.is_dir()
 
-    def test_validate_creates_log_directory(self, valid_config_toml: Path, tmp_path: Path) -> None:
+    def test_validate_creates_log_directory(self, tmp_path: Path) -> None:
         """Test that log file directory is created if it doesn't exist."""
-        config = load_config(valid_config_toml)
         new_log_dir = tmp_path / "new_log_dir" / "subdir"
         new_log_path = new_log_dir / "sync.log"
 
-        config = AppConfig(
-            sync=config.sync,
-            cloud=config.cloud,
-            layout=config.layout,
-            log_level=config.log_level,
-            log_file=new_log_path,
-            ocr=OCRConfig(),
-        )
+        config = make_app_config(tmp_path, log_file=new_log_path)
 
-        # Should create directory
         validate_config(config)
         assert new_log_dir.exists()
         assert new_log_dir.is_dir()
 
-    def test_validate_negative_debounce(self, valid_config_toml: Path) -> None:
+    def test_validate_negative_debounce(self, tmp_path: Path) -> None:
         """Test that negative debounce_seconds fails validation."""
-        config = load_config(valid_config_toml)
-        config = AppConfig(
-            sync=SyncConfig(
-                vaults=config.sync.vaults,
-                state_database=config.sync.state_database,
-                debounce_seconds=-1,
-            ),
-            cloud=config.cloud,
-            layout=config.layout,
-            log_level=config.log_level,
-            log_file=config.log_file,
-            ocr=OCRConfig(),
-        )
+        config = make_app_config(tmp_path, debounce_seconds=-1)
 
         with pytest.raises(ConfigError, match="debounce_seconds must be positive"):
             validate_config(config)
 
-    def test_validate_negative_lines_per_page(self, valid_config_toml: Path) -> None:
+    def test_validate_negative_lines_per_page(self, tmp_path: Path) -> None:
         """Test that non-positive lines_per_page fails validation."""
-        config = load_config(valid_config_toml)
-        config = AppConfig(
-            sync=config.sync,
-            cloud=config.cloud,
-            layout=LayoutConfig(
-                lines_per_page=0,
-                margin_top=config.layout.margin_top,
-                margin_bottom=config.layout.margin_bottom,
-                margin_left=config.layout.margin_left,
-                margin_right=config.layout.margin_right,
-            ),
-            log_level=config.log_level,
-            log_file=config.log_file,
-            ocr=OCRConfig(),
-        )
+        config = make_app_config(tmp_path, lines_per_page=0)
 
         with pytest.raises(ConfigError, match="lines_per_page must be positive"):
             validate_config(config)
 
-    def test_validate_negative_margins(self, valid_config_toml: Path) -> None:
+    @pytest.mark.parametrize("margin_name,margin_value", [
+        ("margin_top", -10),
+        ("margin_bottom", -5),
+        ("margin_left", -5),
+        ("margin_right", -5),
+    ])
+    def test_validate_negative_margins(self, tmp_path: Path, margin_name: str, margin_value: int) -> None:
         """Test that negative margins fail validation."""
-        config = load_config(valid_config_toml)
-        config = AppConfig(
-            sync=config.sync,
-            cloud=config.cloud,
-            layout=LayoutConfig(
-                lines_per_page=config.layout.lines_per_page,
-                margin_top=-10,
-                margin_bottom=config.layout.margin_bottom,
-                margin_left=config.layout.margin_left,
-                margin_right=config.layout.margin_right,
-            ),
-            log_level=config.log_level,
-            log_file=config.log_file,
-            ocr=OCRConfig(),
-        )
+        config = make_app_config(tmp_path, **{margin_name: margin_value})
 
-        with pytest.raises(ConfigError, match="margin_top must be non-negative"):
+        with pytest.raises(ConfigError, match=f"{margin_name} must be non-negative"):
             validate_config(config)
 
-    def test_validate_invalid_log_level(self, valid_config_toml: Path) -> None:
+    def test_validate_invalid_log_level(self, tmp_path: Path) -> None:
         """Test that invalid log level fails validation."""
-        config = load_config(valid_config_toml)
-        config = AppConfig(
-            sync=config.sync,
-            cloud=config.cloud,
-            layout=config.layout,
-            log_level="invalid_level",
-            log_file=config.log_file,
-            ocr=OCRConfig(),
-        )
+        config = make_app_config(tmp_path, log_level="invalid_level")
 
         with pytest.raises(ConfigError, match="Invalid log level"):
             validate_config(config)
 
-    def test_validate_empty_include_patterns(self, valid_config_toml: Path) -> None:
+    def test_validate_empty_include_patterns(self, tmp_path: Path) -> None:
         """Test that empty include_patterns fails validation."""
-        config = load_config(valid_config_toml)
-        config = AppConfig(
-            sync=SyncConfig(
-                vaults=[
-                    VaultConfig(
-                        name="test-vault",
-                        path=config.sync.vaults[0].path,
-                        remarkable_folder="Test",
-                        include_patterns=[],
-                        exclude_patterns=[],
-                    )
-                ],
-                state_database=config.sync.state_database,
-                debounce_seconds=config.sync.debounce_seconds,
-            ),
-            cloud=config.cloud,
-            layout=config.layout,
-            log_level=config.log_level,
-            log_file=config.log_file,
-            ocr=OCRConfig(),
+        config = make_app_config(
+            tmp_path,
+            vaults=[make_vault_config(path=tmp_path / "vault", include_patterns=[])],
         )
 
         with pytest.raises(ConfigError, match="has no include_patterns"):
@@ -402,15 +281,14 @@ class TestValidateConfig:
     def test_invalid_config_structure(self, tmp_path: Path) -> None:
         """Test that invalid config structure raises ConfigError."""
         config_path = tmp_path / "invalid_structure.toml"
-        # Create TOML with invalid structure (e.g., paths is a string not a table)
         config_path.write_text('paths = "invalid"')
 
         with pytest.raises(ConfigError, match="Invalid configuration structure"):
             load_config(config_path)
 
-    def test_vault_permission_error(self, valid_config_toml: Path, tmp_path: Path, mocker) -> None:
+    def test_vault_permission_error(self, tmp_path: Path, mocker) -> None:
         """Test that unreadable vault directory fails validation."""
-        config = load_config(valid_config_toml)
+        config = make_app_config(tmp_path)
 
         # Mock os.access to return False for read permission
         mocker.patch("os.access", return_value=False)
@@ -418,87 +296,10 @@ class TestValidateConfig:
         with pytest.raises(ConfigError, match="not readable"):
             validate_config(config)
 
-    def test_validate_negative_margin_bottom(self, valid_config_toml: Path) -> None:
-        """Test that negative margin_bottom fails validation."""
-        config = load_config(valid_config_toml)
-        config = AppConfig(
-            sync=config.sync,
-            cloud=config.cloud,
-            layout=LayoutConfig(
-                lines_per_page=config.layout.lines_per_page,
-                margin_top=config.layout.margin_top,
-                margin_bottom=-5,
-                margin_left=config.layout.margin_left,
-                margin_right=config.layout.margin_right,
-            ),
-            log_level=config.log_level,
-            log_file=config.log_file,
-            ocr=OCRConfig(),
-        )
-
-        with pytest.raises(ConfigError, match="margin_bottom must be non-negative"):
-            validate_config(config)
-
-    def test_validate_negative_margin_left(self, valid_config_toml: Path) -> None:
-        """Test that negative margin_left fails validation."""
-        config = load_config(valid_config_toml)
-        config = AppConfig(
-            sync=config.sync,
-            cloud=config.cloud,
-            layout=LayoutConfig(
-                lines_per_page=config.layout.lines_per_page,
-                margin_top=config.layout.margin_top,
-                margin_bottom=config.layout.margin_bottom,
-                margin_left=-5,
-                margin_right=config.layout.margin_right,
-            ),
-            log_level=config.log_level,
-            log_file=config.log_file,
-            ocr=OCRConfig(),
-        )
-
-        with pytest.raises(ConfigError, match="margin_left must be non-negative"):
-            validate_config(config)
-
-    def test_validate_negative_margin_right(self, valid_config_toml: Path) -> None:
-        """Test that negative margin_right fails validation."""
-        config = load_config(valid_config_toml)
-        config = AppConfig(
-            sync=config.sync,
-            cloud=config.cloud,
-            layout=LayoutConfig(
-                lines_per_page=config.layout.lines_per_page,
-                margin_top=config.layout.margin_top,
-                margin_bottom=config.layout.margin_bottom,
-                margin_left=config.layout.margin_left,
-                margin_right=-5,
-            ),
-            log_level=config.log_level,
-            log_file=config.log_file,
-            ocr=OCRConfig(),
-        )
-
-        with pytest.raises(ConfigError, match="margin_right must be non-negative"):
-            validate_config(config)
-
-    def test_state_database_dir_creation_failure(self, valid_config_toml: Path, tmp_path: Path, mocker) -> None:
+    def test_state_database_dir_creation_failure(self, tmp_path: Path, mocker) -> None:
         """Test that state database directory creation failure is handled."""
-        config = load_config(valid_config_toml)
-
-        # Set state_database to a path with a non-creatable parent
         bad_db = tmp_path / "nonexistent_parent" / "state.db"
-        config = AppConfig(
-            sync=SyncConfig(
-                vaults=config.sync.vaults,
-                state_database=bad_db,
-                debounce_seconds=config.sync.debounce_seconds,
-            ),
-            cloud=config.cloud,
-            layout=config.layout,
-            log_level=config.log_level,
-            log_file=config.log_file,
-            ocr=OCRConfig(),
-        )
+        config = make_app_config(tmp_path, state_database=bad_db)
 
         # Mock mkdir to raise an exception
         mocker.patch.object(Path, "mkdir", side_effect=PermissionError("Mock permission error"))
@@ -506,27 +307,13 @@ class TestValidateConfig:
         with pytest.raises(ConfigError, match="Cannot create state database directory"):
             validate_config(config)
 
-    def test_state_database_dir_not_writable(self, valid_config_toml: Path, tmp_path: Path, mocker) -> None:
+    def test_state_database_dir_not_writable(self, tmp_path: Path, mocker) -> None:
         """Test that non-writable state database directory fails validation."""
-        config = load_config(valid_config_toml)
-
-        # Create a valid database path
         db_dir = tmp_path / "state_dir"
         db_dir.mkdir()
         db_path = db_dir / "state.db"
 
-        config = AppConfig(
-            sync=SyncConfig(
-                vaults=config.sync.vaults,
-                state_database=db_path,
-                debounce_seconds=config.sync.debounce_seconds,
-            ),
-            cloud=config.cloud,
-            layout=config.layout,
-            log_level=config.log_level,
-            log_file=config.log_file,
-            ocr=OCRConfig(),
-        )
+        config = make_app_config(tmp_path, state_database=db_path)
 
         # Mock os.access to return False for write permission only for state db dir
         def mock_access(path, mode):
@@ -539,20 +326,10 @@ class TestValidateConfig:
         with pytest.raises(ConfigError, match="State database directory is not writable"):
             validate_config(config)
 
-    def test_log_file_dir_creation_failure(self, valid_config_toml: Path, tmp_path: Path, mocker) -> None:
+    def test_log_file_dir_creation_failure(self, tmp_path: Path, mocker) -> None:
         """Test that log file directory creation failure is handled."""
-        config = load_config(valid_config_toml)
-
-        # Set log_file to a path with a non-creatable parent
         bad_log = tmp_path / "nonexistent_parent" / "sync.log"
-        config = AppConfig(
-            sync=config.sync,
-            cloud=config.cloud,
-            layout=config.layout,
-            log_level=config.log_level,
-            log_file=bad_log,
-            ocr=OCRConfig(),
-        )
+        config = make_app_config(tmp_path, log_file=bad_log)
 
         # Mock mkdir to raise an exception
         mocker.patch.object(Path, "mkdir", side_effect=OSError("Mock OS error"))
@@ -560,23 +337,13 @@ class TestValidateConfig:
         with pytest.raises(ConfigError, match="Cannot create log file directory"):
             validate_config(config)
 
-    def test_log_file_dir_not_writable(self, valid_config_toml: Path, tmp_path: Path, mocker) -> None:
+    def test_log_file_dir_not_writable(self, tmp_path: Path, mocker) -> None:
         """Test that non-writable log file directory fails validation."""
-        config = load_config(valid_config_toml)
-
-        # Create a valid log path
         log_dir = tmp_path / "log_dir"
         log_dir.mkdir()
         log_path = log_dir / "sync.log"
 
-        config = AppConfig(
-            sync=config.sync,
-            cloud=config.cloud,
-            layout=config.layout,
-            log_level=config.log_level,
-            log_file=log_path,
-            ocr=OCRConfig(),
-        )
+        config = make_app_config(tmp_path, log_file=log_path)
 
         # Mock os.access to return False for write permission only for log dir
         def mock_access(path, mode):

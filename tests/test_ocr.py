@@ -737,9 +737,10 @@ class TestRunpodsService:
 
     def test_service_initialization_without_credentials(self):
         """Test that service raises error without credentials."""
-        from rock_paper_sync.ocr.runpods import RunpodsOCRService, RunpodsOCRServiceError
+        from rock_paper_sync.ocr.runpods import RunpodsOCRService
+        from rock_paper_sync.ocr.protocol import OCRServiceError
 
-        with pytest.raises(RunpodsOCRServiceError, match="endpoint ID required"):
+        with pytest.raises(OCRServiceError, match="endpoint ID required"):
             RunpodsOCRService()
 
     def test_service_initialization_with_credentials(self):

@@ -23,6 +23,8 @@ def integration_env(tmp_path: Path):
 
     db = tmp_path / "state.db"
     log_file = tmp_path / "test.log"
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
 
     config = AppConfig(
         sync=SyncConfig(
@@ -51,6 +53,7 @@ def integration_env(tmp_path: Path):
         log_level="debug",
         log_file=log_file,
         ocr=OCRConfig(),
+        cache_dir=cache_dir,
     )
 
     state = StateManager(db)

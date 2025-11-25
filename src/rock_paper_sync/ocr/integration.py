@@ -23,6 +23,13 @@ from rock_paper_sync.annotations import (
     read_annotations,
 )
 from rock_paper_sync.annotation_mapper import extract_text_blocks_from_rm
+from rock_paper_sync.coordinate_transformer import (
+    extract_text_origin,
+    build_parent_anchor_map,
+    CoordinateTransformer,
+    is_text_relative,
+    NEGATIVE_Y_OFFSET,
+)
 from rock_paper_sync.ocr.corrections import CorrectionManager
 from rock_paper_sync.ocr.factory import create_ocr_service
 from rock_paper_sync.ocr.markers import (
@@ -461,34 +468,13 @@ class OCRProcessor:
         Returns:
             X coordinate of text origin (default -375.0 if not found)
         """
-        import rmscene
-        from rmscene.scene_stream import RootTextBlock
+        origin = extract_text_origin(rm_file)
+        return origin.x
 
-        try:
-            with rm_file.open("rb") as f:
-                blocks = list(rmscene.read_blocks(f))
-
-            # Find RootTextBlock
-            for block in blocks:
-                if isinstance(block, RootTextBlock):
-                    if hasattr(block, "value") and hasattr(block.value, "pos_x"):
-                        return block.value.pos_x
-
-        except Exception as e:
-            logger.warning(f"Failed to extract text origin X: {e}")
-
-        # Default text X position if not found
-        return -375.0
-
-    def _build_parent_baseline_map(self, rm_file: Path) -> dict["CrdtId", tuple[float, int]]:
+    def _build_parent_baseline_map(self, rm_file: Path) -> dict["CrdtId", tuple[float, float]]:
         """Build mapping of parent_ids to (X, Y) anchor origins via anchor system.
 
-        Each TreeNodeBlock (parent layer) has:
-        - anchor_id: pointing to a specific text character
-        - anchor_origin_x: X offset for this parent's coordinate space
-
-        We map the anchor_id to its text block to get Y baseline, and extract
-        anchor_origin_x directly from the TreeNodeBlock.
+        Uses the coordinate_transformer module for extraction.
 
         Args:
             rm_file: Path to .rm file
@@ -496,79 +482,9 @@ class OCRProcessor:
         Returns:
             Dictionary mapping parent_id (CrdtId) to (anchor_x, baseline_y) tuple
         """
-        import rmscene
-        from rmscene.scene_stream import TreeNodeBlock
-        from rock_paper_sync.annotation_mapper import extract_text_blocks_from_rm
-
-        parent_to_anchor_origin = {}
-
-        try:
-            # Step 1: Extract TreeNodeBlocks with their node_ids and anchor_ids
-            with rm_file.open("rb") as f:
-                blocks = list(rmscene.read_blocks(f))
-
-            tree_node_blocks = [b for b in blocks if isinstance(b, TreeNodeBlock)]
-
-            # Build parent_id → (anchor_id, anchor_origin_x) mapping
-            parent_to_anchor = {}
-            parent_to_anchor_x = {}
-
-            for tnb in tree_node_blocks:
-                if not hasattr(tnb, "group"):
-                    continue
-
-                node_id = tnb.group.node_id
-                anchor_id = tnb.group.anchor_id
-                anchor_origin_x = tnb.group.anchor_origin_x
-
-                # Extract actual anchor_id from LwwValue wrapper
-                if anchor_id and hasattr(anchor_id, "value"):
-                    anchor_crdt_id = anchor_id.value
-                    if anchor_crdt_id:
-                        parent_to_anchor[node_id] = anchor_crdt_id
-
-                # Extract anchor_origin_x from LwwValue wrapper
-                if anchor_origin_x and hasattr(anchor_origin_x, "value"):
-                    anchor_x_value = anchor_origin_x.value
-                    if anchor_x_value is not None:
-                        parent_to_anchor_x[node_id] = anchor_x_value
-
-            # Step 2: Extract text blocks with Y positions
-            rm_text_blocks, _ = extract_text_blocks_from_rm(rm_file)
-
-            # Step 3: Build character index → text block mapping
-            char_to_block = {}
-            char_index = 0
-
-            for block_idx, block in enumerate(rm_text_blocks):
-                block_char_count = len(block.content)
-                for i in range(block_char_count):
-                    char_to_block[char_index + i] = block_idx
-                char_index += block_char_count
-
-            # Step 4: Map parent_ids to (anchor_x, baseline_y) tuples
-            for parent_id, anchor_id in parent_to_anchor.items():
-                # Get character index from anchor_id
-                char_idx = anchor_id.part2 if hasattr(anchor_id, "part2") else anchor_id
-
-                # Find text block containing this character to get Y baseline
-                baseline_y = None
-                if char_idx in char_to_block:
-                    block_idx = char_to_block[char_idx]
-                    text_block = rm_text_blocks[block_idx]
-                    baseline_y = text_block.y_start
-
-                # Get anchor_origin_x for this parent
-                anchor_x = parent_to_anchor_x.get(parent_id, 0.0)
-
-                # Only add to map if we have a Y baseline
-                if baseline_y is not None:
-                    parent_to_anchor_origin[parent_id] = (anchor_x, baseline_y)
-
-        except Exception as e:
-            logger.warning(f"Failed to build parent anchor origin map: {e}")
-
-        return parent_to_anchor_origin
+        anchor_map = build_parent_anchor_map(rm_file)
+        # Convert AnchorOrigin objects to tuples for backwards compatibility
+        return {pid: (origin.x, origin.y) for pid, origin in anchor_map.items()}
 
     def _get_parent_origin_offset(
         self, parent_id: "CrdtId", parent_anchor_map: dict["CrdtId", tuple[float, float]],
@@ -601,13 +517,7 @@ class OCRProcessor:
     ) -> list[Annotation]:
         """Transform annotations from native coordinate space to absolute page coordinates.
 
-        reMarkable v6 uses multiple coordinate spaces:
-        - Absolute coordinates: Items parented to root layer (CrdtId(0, 11))
-        - Text-relative coordinates: Items parented to text layers (need transformation)
-
-        Different parent_ids represent different text lines, each with its own anchor
-        origin in both X and Y. This function uses per-parent anchor origins to
-        correctly transform coordinates.
+        Uses coordinate_transformer module for transformations. See docs/STROKE_ANCHORING.md.
 
         Args:
             annotations: List of annotations (possibly in mixed coordinate spaces)
@@ -618,16 +528,14 @@ class OCRProcessor:
         Returns:
             List of annotations with all coordinates transformed to absolute space
         """
-        from rmscene.tagged_block_common import CrdtId
         from copy import deepcopy
+        from rock_paper_sync.annotations import Point, Rectangle
 
         transformed = []
 
         for ann in annotations:
             # Check if annotation is in text-relative space
-            is_text_relative = ann.parent_id and ann.parent_id != CrdtId(0, 11)
-
-            if not is_text_relative:
+            if not is_text_relative(ann.parent_id):
                 # Already in absolute coordinates
                 transformed.append(ann)
                 continue
@@ -642,41 +550,23 @@ class OCRProcessor:
                     ann.parent_id, parent_anchor_map, text_origin_x, text_origin_y
                 )
 
-                # Transform each point by adding parent anchor origin
-                # See docs/STROKE_ANCHORING.md for detailed explanation
-                #
-                # Key insights:
-                # - Positive Y: anchored to text_origin_y (text top)
-                # - Negative Y: anchored to text_origin_y + 60px (baseline + line height)
-                # - Must calculate offset PER-STROKE (not per-point) to avoid distortion
-
-                # Typography-based constants
-                NEGATIVE_Y_OFFSET = 60  # LINE_HEIGHT (35) + BASELINE_OFFSET (25)
-
                 # Calculate stroke's center Y to determine which coordinate space
                 bbox = ann_copy.stroke.bounding_box
                 stroke_center_y = bbox.y + bbox.h / 2
 
                 # Determine Y offset based on coordinate space
-                if stroke_center_y >= 0:
-                    # Positive Y: relative to text origin (top of text area)
-                    y_offset = 0
-                else:
-                    # Negative Y: relative to baseline + line height
-                    # This offset accounts for typography (where handwriting naturally sits)
-                    y_offset = NEGATIVE_Y_OFFSET
+                # Positive Y: relative to text origin (top of text area)
+                # Negative Y: relative to baseline + line height
+                y_offset = NEGATIVE_Y_OFFSET if stroke_center_y < 0 else 0
 
                 # Apply same offset to ALL points in stroke (preserves shape)
-                transformed_points = []
-                for point in ann_copy.stroke.points:
-                    from rock_paper_sync.annotations import Point
-
-                    absolute_x = point.x + anchor_x
-                    absolute_y = text_origin_y + y_offset + point.y
-
-                    transformed_points.append(
-                        Point(x=absolute_x, y=absolute_y)
+                transformed_points = [
+                    Point(
+                        x=point.x + anchor_x,
+                        y=text_origin_y + y_offset + point.y,
                     )
+                    for point in ann_copy.stroke.points
+                ]
 
                 # Update stroke with transformed points
                 ann_copy.stroke.points = transformed_points
@@ -687,13 +577,8 @@ class OCRProcessor:
                     max_x = max(p.x for p in transformed_points)
                     min_y = min(p.y for p in transformed_points)
                     max_y = max(p.y for p in transformed_points)
-
-                    from rock_paper_sync.annotations import Rectangle
                     ann_copy.stroke.bounding_box = Rectangle(
-                        x=min_x,
-                        y=min_y,
-                        w=max_x - min_x,
-                        h=max_y - min_y,
+                        x=min_x, y=min_y, w=max_x - min_x, h=max_y - min_y
                     )
 
                 transformed.append(ann_copy)

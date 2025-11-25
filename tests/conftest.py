@@ -56,10 +56,13 @@ def temp_vault2(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def sample_config(temp_vault: Path, temp_state_db: Path):
+def sample_config(temp_vault: Path, temp_state_db: Path, tmp_path: Path):
     """Create sample AppConfig for testing with single vault"""
     # Import here to avoid circular imports during test collection
     from rock_paper_sync.config import AppConfig, SyncConfig, LayoutConfig, CloudConfig, VaultConfig, OCRConfig
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir(exist_ok=True)
 
     return AppConfig(
         sync=SyncConfig(
@@ -88,13 +91,17 @@ def sample_config(temp_vault: Path, temp_state_db: Path):
         log_level="debug",
         log_file=temp_state_db.parent / "test.log",
         ocr=OCRConfig(),
+        cache_dir=cache_dir,
     )
 
 
 @pytest.fixture
-def multi_vault_config(temp_vault: Path, temp_vault2: Path, temp_state_db: Path):
+def multi_vault_config(temp_vault: Path, temp_vault2: Path, temp_state_db: Path, tmp_path: Path):
     """Create sample AppConfig with multiple vaults for testing"""
     from rock_paper_sync.config import AppConfig, SyncConfig, LayoutConfig, CloudConfig, VaultConfig, OCRConfig
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir(exist_ok=True)
 
     return AppConfig(
         sync=SyncConfig(
@@ -130,6 +137,7 @@ def multi_vault_config(temp_vault: Path, temp_vault2: Path, temp_state_db: Path)
         log_level="debug",
         log_file=temp_state_db.parent / "test.log",
         ocr=OCRConfig(),
+        cache_dir=cache_dir,
     )
 
 
@@ -339,7 +347,9 @@ def sample_config_with_ocr(temp_vault: Path, temp_state_db: Path, tmp_path: Path
         AppConfig, SyncConfig, LayoutConfig, CloudConfig, VaultConfig, OCRConfig
     )
 
-    cache_dir = tmp_path / "ocr_cache"
+    ocr_cache_dir = tmp_path / "ocr_cache"
+    ocr_cache_dir.mkdir()
+    cache_dir = tmp_path / "cache"
     cache_dir.mkdir()
 
     return AppConfig(
@@ -371,10 +381,11 @@ def sample_config_with_ocr(temp_vault: Path, temp_state_db: Path, tmp_path: Path
         ocr=OCRConfig(
             enabled=True,
             provider="runpods",
-            cache_dir=cache_dir,
+            cache_dir=ocr_cache_dir,
             confidence_threshold=0.7,
             min_corrections_for_dataset=10,
         ),
+        cache_dir=cache_dir,
     )
 
 
@@ -451,3 +462,84 @@ def mock_ocr_service():
     ))
 
     return mock_service
+
+
+@pytest.fixture
+def ocr_result_factory(state_manager):
+    """Factory fixture for creating OCR results in database.
+
+    Usage:
+        def test_example(ocr_result_factory):
+            ocr_result_factory(text="recognized text", confidence=0.9)
+            # OCR result is now in state_manager
+    """
+    import hashlib
+    import uuid
+
+    created_uuids = []
+
+    def _create(
+        vault_name: str = "test-vault",
+        obsidian_path: str = "test.md",
+        paragraph_index: int = 0,
+        text: str = "original text",
+        confidence: float = 0.9,
+        model_version: str = "v1",
+    ) -> str:
+        annotation_uuid = str(uuid.uuid4())
+        created_uuids.append(annotation_uuid)
+
+        state_manager.update_ocr_result(
+            vault_name=vault_name,
+            obsidian_path=obsidian_path,
+            annotation_uuid=annotation_uuid,
+            paragraph_index=paragraph_index,
+            ocr_text=text,
+            ocr_text_hash=hashlib.sha256(text.encode()).hexdigest(),
+            original_text_hash=hashlib.sha256(b"paragraph text").hexdigest(),
+            image_hash=hashlib.sha256(annotation_uuid.encode()).hexdigest(),
+            confidence=confidence,
+            model_version=model_version,
+        )
+
+        return annotation_uuid
+
+    return _create
+
+
+@pytest.fixture
+def annotation_image_factory():
+    """Factory fixture for creating annotation images.
+
+    Returns simple PNG images for testing.
+    """
+    from PIL import Image
+    import io
+
+    def _create(width: int = 100, height: int = 30, color: str = "black") -> bytes:
+        img = Image.new("RGB", (width, height), color="white")
+
+        # Draw a simple line to simulate handwriting
+        from PIL import ImageDraw
+        draw = ImageDraw.Draw(img)
+        draw.line([(10, height // 2), (width - 10, height // 2)], fill=color, width=2)
+
+        buffer = io.BytesIO()
+        img.save(buffer, format="PNG")
+        return buffer.getvalue()
+
+    return _create
+
+
+@pytest.fixture
+def testdata_rmscene_dir() -> Path:
+    """Path to rmscene testdata directory with real .rm files."""
+    return Path(__file__).parent / "testdata" / "rmscene"
+
+
+@pytest.fixture
+def rmscene_test_files(testdata_rmscene_dir) -> list[Path]:
+    """Get list of .rm files from rmscene testdata."""
+    if not testdata_rmscene_dir.exists():
+        return []
+    return list(testdata_rmscene_dir.glob("*.rm"))

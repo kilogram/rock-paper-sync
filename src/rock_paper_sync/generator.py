@@ -39,6 +39,10 @@ from .annotations import (
     read_annotations,
 )
 from .config import LayoutConfig
+from .coordinate_transformer import (
+    apply_y_offset_to_block,
+    get_annotation_center_y,
+)
 from .parser import BlockType, ContentBlock, FormatStyle, MarkdownDocument, TextFormat
 
 logger = logging.getLogger("rock_paper_sync.generator")
@@ -472,7 +476,7 @@ class RemarkableGenerator:
 
         # For Lines (strokes), use spatial Y-only approach
         # Get the annotation's center Y position in ABSOLUTE coordinates
-        center_y_absolute = self._get_annotation_center_y_absolute(block, old_text_origin_y)
+        center_y_absolute = get_annotation_center_y(block, old_text_origin_y)
 
         if center_y_absolute is None:
             logger.debug("Cannot determine annotation center Y, keeping original position")
@@ -516,7 +520,7 @@ class RemarkableGenerator:
             return block
 
         # Apply the Y offset to the annotation block
-        self._apply_y_offset_to_block(block, y_offset)
+        apply_y_offset_to_block(block, y_offset)
 
         logger.debug(
             f"Adjusted annotation at y={center_y_absolute:.1f} by offset={y_offset:.1f} "
@@ -525,37 +529,6 @@ class RemarkableGenerator:
 
         return block
 
-    def _apply_y_offset_to_block(self, block, y_offset: float) -> None:
-        """Apply Y offset to all coordinates in an rmscene annotation block.
-
-        Modifies the block in place.
-
-        Args:
-            block: rmscene annotation block
-            y_offset: Y offset to apply (positive = move down)
-        """
-        try:
-            if not hasattr(block, 'item') or not hasattr(block.item, 'value'):
-                return
-
-            value = block.item.value
-
-            # For Line blocks (strokes)
-            if 'Line' in type(value).__name__:
-                if hasattr(value, 'points') and value.points:
-                    for point in value.points:
-                        if hasattr(point, 'y'):
-                            point.y += y_offset
-
-            # For Glyph blocks (highlights)
-            if 'Glyph' in type(value).__name__:
-                if hasattr(value, 'rectangles') and value.rectangles:
-                    for rect in value.rectangles:
-                        if hasattr(rect, 'y'):
-                            rect.y += y_offset
-
-        except Exception as e:
-            logger.warning(f"Failed to apply Y offset to annotation block: {e}")
 
     def _adjust_glyph_with_content_anchoring(
         self,
@@ -654,112 +627,6 @@ class RemarkableGenerator:
         )
 
         return glyph_block
-
-    def _get_annotation_center_y(self, block) -> float | None:
-        """Extract the center Y coordinate from an rmscene annotation block.
-
-        Args:
-            block: rmscene annotation block
-
-        Returns:
-            Center Y coordinate or None if cannot be determined
-        """
-        try:
-            if not hasattr(block, 'item') or not hasattr(block.item, 'value'):
-                return None
-
-            value = block.item.value
-
-            # For Line blocks (strokes)
-            if 'Line' in type(value).__name__:
-                if hasattr(value, 'points') and value.points:
-                    ys = [p.y for p in value.points if hasattr(p, 'y')]
-                    if ys:
-                        return sum(ys) / len(ys)
-
-            # For Glyph blocks (highlights)
-            if 'Glyph' in type(value).__name__:
-                if hasattr(value, 'rectangles') and value.rectangles:
-                    ys = [r.y + r.h / 2 for r in value.rectangles if hasattr(r, 'y')]
-                    if ys:
-                        return sum(ys) / len(ys)
-
-            return None
-
-        except Exception:
-            return None
-
-    def _get_annotation_center_y_absolute(
-        self, block, text_origin_y: float
-    ) -> float | None:
-        """Extract center Y coordinate in ABSOLUTE page coordinates.
-
-        Detects the coordinate space from the annotation's parent_id and
-        transforms text-relative coordinates to absolute coordinates.
-
-        Coordinate spaces in reMarkable v6 files:
-        - Absolute: Items parented to root layer (CrdtId(0, 11))
-        - Text-relative: Items parented to text layers (e.g., CrdtId(2, 1316))
-          These use coordinates relative to RootTextBlock.pos_y
-
-        Args:
-            block: rmscene annotation block
-            text_origin_y: The RootTextBlock.pos_y value for coordinate transformation
-
-        Returns:
-            Center Y coordinate in absolute page coordinates, or None if cannot determine
-        """
-        try:
-            if not hasattr(block, 'item') or not hasattr(block.item, 'value'):
-                return None
-
-            value = block.item.value
-
-            # Determine coordinate space from parent_id
-            is_text_relative = False
-            if hasattr(block, 'parent_id'):
-                parent_id = block.parent_id
-                # Root layer (0, 11) uses absolute coordinates
-                # Other layers use text-relative coordinates
-                is_text_relative = (parent_id != CrdtId(0, 11))
-
-            # Extract Y coordinate in its native space
-            native_y = None
-
-            # For Line blocks (strokes)
-            if 'Line' in type(value).__name__:
-                if hasattr(value, 'points') and value.points:
-                    ys = [p.y for p in value.points if hasattr(p, 'y')]
-                    if ys:
-                        native_y = sum(ys) / len(ys)
-
-            # For Glyph blocks (highlights)
-            if 'Glyph' in type(value).__name__:
-                if hasattr(value, 'rectangles') and value.rectangles:
-                    ys = [r.y + r.h / 2 for r in value.rectangles if hasattr(r, 'y')]
-                    if ys:
-                        native_y = sum(ys) / len(ys)
-
-            if native_y is None:
-                return None
-
-            # Transform to absolute coordinates if needed
-            if is_text_relative:
-                absolute_y = text_origin_y + native_y
-                logger.debug(
-                    f"Transformed text-relative y={native_y:.1f} to absolute y={absolute_y:.1f} "
-                    f"(text_origin_y={text_origin_y:.1f})"
-                )
-                return absolute_y
-            else:
-                logger.debug(
-                    f"Annotation already in absolute coordinates: y={native_y:.1f}"
-                )
-                return native_y
-
-        except Exception as e:
-            logger.warning(f"Failed to get annotation center Y: {e}")
-            return None
 
     def paginate_content(
         self, blocks: list[ContentBlock]
