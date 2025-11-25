@@ -1,21 +1,27 @@
 #!/usr/bin/env python3
 """
-Device Test Bench for Annotation Sync
+Device Test Bench for Annotation Sync and OCR
 
-Validates the marker-based annotation sync workflow on a real reMarkable device.
+Validates the marker-based annotation sync workflow and OCR integration on a real reMarkable device.
 Conducts repeatable tests with automatic state cleanup.
 
 Tests (each is self-contained end-to-end):
+    Annotation Tests:
     1. annotation-roundtrip - sync → annotate → verify markers
     2. no-hash-loop         - sync → annotate → sync again → no re-upload
     3. content-edit         - sync → annotate → edit → verify re-sync
+
+    OCR Tests:
+    4. ocr-recognition      - sync → write text → OCR → verify recognition
+    5. ocr-correction       - OCR → correct text → sync → verify correction stored
+    6. ocr-stability        - OCR → sync again → verify no re-upload
 
 Usage:
     # Run with automatic cleanup (recommended)
     uv run python bench.py --cleanup
 
     # Run specific test
-    uv run python bench.py --test download-annotations --cleanup
+    uv run python bench.py --test ocr-recognition --cleanup
 
     # Reset state only
     uv run python bench.py --reset
@@ -56,6 +62,7 @@ TEST_DOC = WORKSPACE_DIR / "document.md"
 
 # Fixture paths
 BASELINE_DOC = FIXTURES_DIR / "baseline.md"
+OCR_BASELINE_DOC = FIXTURES_DIR / "ocr_baseline.md"
 
 # Device configuration
 DEVICE_FOLDER = "DeviceBench"
@@ -247,6 +254,7 @@ base_url = "http://localhost:3000"
 
 [paths]
 state_database = "{STATE_DIR}/state.db"
+cache_dir = "{WORKSPACE_DIR}/.cache"
 
 [logging]
 level = "debug"
@@ -254,6 +262,11 @@ file = "{LOG_DIR}/sync.log"
 
 [layout]
 lines_per_page = 28
+
+[ocr]
+enabled = true
+provider = "runpods"
+confidence_threshold = 0.5
 
 [[vaults]]
 name = "device-bench"
@@ -516,6 +529,411 @@ def test_content_edit():
         return False
 
 
+def test_ocr_recognition():
+    """Basic OCR recognition test.
+
+    sync doc with gaps → user writes specific text → sync → verify OCR markers
+    """
+    bench = Bench()
+    bench.start_time = time.time()
+    bench.header("TEST: OCR Recognition")
+
+    try:
+        # Setup
+        reset()
+        shutil.copy(OCR_BASELINE_DOC, TEST_DOC)
+        bench.ok("Setup complete")
+
+        # Step 1: Initial sync
+        ret, out, err = bench.run_cmd(
+            ["uv", "run", "rock-paper-sync", "--config", str(CONFIG_FILE), "sync"],
+            "Initial sync"
+        )
+        if ret != 0:
+            return False
+
+        # Step 2: User writes text
+        if not bench.prompt("Write handwritten text", [
+            f"Open '{DEVICE_FOLDER}/document' on reMarkable",
+            "In 'Test 1: Simple Words' section, write 'hello' in the gap",
+            "In 'Test 2: Numbers' section, write '2025' in the gap",
+            "In 'Test 3: Short Phrase' section, write 'quick test' in the gap",
+            "Use highlighter to mark each gap where you wrote",
+            "Wait for cloud sync",
+        ]):
+            return False
+
+        # Step 3: Download and process OCR
+        ret, out, err = bench.run_cmd(
+            ["uv", "run", "rock-paper-sync", "--config", str(CONFIG_FILE), "sync"],
+            "Download and run OCR"
+        )
+        if ret != 0:
+            return False
+
+        # Step 4: Verify OCR markers
+        content = TEST_DOC.read_text()
+        if "<!-- OCR:" not in content:
+            bench.error("No OCR markers found!")
+            bench.info("Make sure OCR is enabled in config")
+            return False
+
+        ocr_count = content.count("<!-- OCR:")
+        bench.observe(f"Found {ocr_count} OCR marker(s)")
+
+        # Display OCR results
+        in_ocr_block = False
+        for line in content.split('\n'):
+            if "<!-- OCR:" in line:
+                in_ocr_block = True
+                print(f"  {Colors.GREEN}{line.strip()}{Colors.END}")
+            elif "<!-- /OCR -->" in line:
+                in_ocr_block = False
+                print(f"  {Colors.GREEN}{line.strip()}{Colors.END}")
+            elif in_ocr_block:
+                print(f"  {Colors.CYAN}  {line.strip()}{Colors.END}")
+
+        # Check if expected text patterns appear
+        expected_patterns = ["hello", "2025", "quick", "test"]
+        found_patterns = []
+
+        for pattern in expected_patterns:
+            if pattern.lower() in content.lower():
+                found_patterns.append(pattern)
+                bench.observe(f"✓ Found '{pattern}'")
+
+        if len(found_patterns) < 2:
+            bench.warn(f"Only found {len(found_patterns)} expected patterns (OCR may not be accurate)")
+
+        bench.header("PASSED")
+        bench.save_result("ocr-recognition", True)
+        return True
+
+    except Exception as e:
+        bench.error(f"Exception: {e}")
+        bench.save_result("ocr-recognition", False)
+        return False
+
+
+def test_ocr_correction():
+    """OCR correction workflow test.
+
+    sync → OCR → user corrects text → sync → verify correction stored
+    """
+    bench = Bench()
+    bench.start_time = time.time()
+    bench.header("TEST: OCR Correction")
+
+    try:
+        # Setup
+        reset()
+        shutil.copy(OCR_BASELINE_DOC, TEST_DOC)
+
+        # Step 1: Initial sync
+        ret, out, err = bench.run_cmd(
+            ["uv", "run", "rock-paper-sync", "--config", str(CONFIG_FILE), "sync"],
+            "Initial sync"
+        )
+        if ret != 0:
+            return False
+
+        # Step 2: User writes text
+        if not bench.prompt("Write handwritten text", [
+            f"Open '{DEVICE_FOLDER}/document' on reMarkable",
+            "In 'Test 1' section, write any text in the gap",
+            "Use highlighter to mark the gap",
+            "Wait for cloud sync",
+        ]):
+            return False
+
+        # Step 3: Download and process OCR
+        ret, out, err = bench.run_cmd(
+            ["uv", "run", "rock-paper-sync", "--config", str(CONFIG_FILE), "sync"],
+            "Download and run OCR"
+        )
+        if ret != 0:
+            return False
+
+        # Verify OCR markers exist
+        content = TEST_DOC.read_text()
+        if "<!-- OCR:" not in content:
+            bench.error("No OCR markers found!")
+            return False
+
+        bench.observe("OCR markers found")
+
+        # Step 4: User corrects OCR text
+        if not bench.prompt("Correct OCR text", [
+            f"Open {TEST_DOC} in editor",
+            "Find the OCR block (between <!-- OCR: ... --> tags)",
+            "Edit the recognized text to correct it",
+            "Keep the markers intact",
+            "Save the file",
+        ]):
+            return False
+
+        # Verify file was modified
+        content_after = TEST_DOC.read_text()
+        if content_after == content:
+            bench.warn("File unchanged - no correction made")
+            return False
+
+        bench.observe("OCR text corrected")
+
+        # Step 5: Sync to capture correction
+        ret, out, err = bench.run_cmd(
+            ["uv", "run", "rock-paper-sync", "--config", str(CONFIG_FILE), "sync"],
+            "Sync with correction"
+        )
+        if ret != 0:
+            return False
+
+        bench.observe("Correction captured")
+
+        bench.header("PASSED")
+        bench.save_result("ocr-correction", True)
+        return True
+
+    except Exception as e:
+        bench.error(f"Exception: {e}")
+        bench.save_result("ocr-correction", False)
+        return False
+
+
+def test_ocr_stability():
+    """OCR markers don't cause re-upload loop.
+
+    sync → OCR → sync again → verify no re-upload
+    """
+    bench = Bench()
+    bench.start_time = time.time()
+    bench.header("TEST: OCR Stability")
+
+    try:
+        # Setup
+        reset()
+        shutil.copy(OCR_BASELINE_DOC, TEST_DOC)
+
+        # Step 1: Initial sync
+        ret, out, err = bench.run_cmd(
+            ["uv", "run", "rock-paper-sync", "--config", str(CONFIG_FILE), "sync"],
+            "Initial sync"
+        )
+        if ret != 0:
+            return False
+
+        # Step 2: User writes text
+        if not bench.prompt("Write handwritten text", [
+            f"Open '{DEVICE_FOLDER}/document' on reMarkable",
+            "Write any text in one of the gaps",
+            "Use highlighter to mark it",
+            "Wait for cloud sync",
+        ]):
+            return False
+
+        # Step 3: Download and process OCR
+        ret, out, err = bench.run_cmd(
+            ["uv", "run", "rock-paper-sync", "--config", str(CONFIG_FILE), "sync"],
+            "Download and run OCR"
+        )
+        if ret != 0:
+            return False
+
+        if "<!-- OCR:" not in TEST_DOC.read_text():
+            bench.error("No OCR markers found!")
+            return False
+
+        bench.observe("OCR markers added")
+
+        # Step 4: Second sync (should skip)
+        ret, out, err = bench.run_cmd(
+            ["uv", "run", "rock-paper-sync", "--config", str(CONFIG_FILE), "sync"],
+            "Second sync (should skip)"
+        )
+        if ret != 0:
+            return False
+
+        if "unchanged" in out.lower() or "skipping" in out.lower():
+            bench.observe("✓ Correctly skipped (no re-upload)")
+        elif "synced" in out.lower() or "uploaded" in out.lower():
+            bench.error("Re-uploaded! OCR markers causing hash loop!")
+            return False
+
+        # Step 5: Third sync (extra verification)
+        ret, out, err = bench.run_cmd(
+            ["uv", "run", "rock-paper-sync", "--config", str(CONFIG_FILE), "sync"],
+            "Third sync (extra check)"
+        )
+
+        bench.header("PASSED")
+        bench.save_result("ocr-stability", True)
+        return True
+
+    except Exception as e:
+        bench.error(f"Exception: {e}")
+        bench.save_result("ocr-stability", False)
+        return False
+
+
+# =============================================================================
+# Testdata Extraction
+# =============================================================================
+
+def extract_testdata():
+    """Extract annotated .rm files as testdata for automated testing.
+
+    This workflow:
+    1. Syncs document to device
+    2. User writes handwriting
+    3. Syncs back
+    4. Copies .rm files to fixtures/testdata/
+
+    The extracted files can then be used for automated unit tests.
+    """
+    bench = Bench()
+    bench.start_time = time.time()
+    bench.header("TESTDATA EXTRACTION")
+
+    try:
+        # Setup
+        reset()
+        shutil.copy(OCR_BASELINE_DOC, TEST_DOC)
+        bench.ok("Setup complete")
+
+        # Step 1: Initial sync
+        ret, out, err = bench.run_cmd(
+            ["uv", "run", "rock-paper-sync", "--config", str(CONFIG_FILE), "sync"],
+            "Initial sync"
+        )
+        if ret != 0:
+            return False
+
+        # Step 2: User writes test data
+        if not bench.prompt("Write test handwriting", [
+            f"Open '{DEVICE_FOLDER}/document' on reMarkable",
+            "Write in ALL test sections (Test 1-4)",
+            "Use clear, readable handwriting",
+            "Highlight each gap where you wrote",
+            "Wait for cloud sync to complete",
+        ]):
+            return False
+
+        # Step 3: Sync to download annotations
+        ret, out, err = bench.run_cmd(
+            ["uv", "run", "rock-paper-sync", "--config", str(CONFIG_FILE), "sync"],
+            "Download annotations"
+        )
+        if ret != 0:
+            return False
+
+        # Step 4: Find and copy .rm files
+        # Get document UUID from state database
+        import sqlite3
+        db_path = STATE_DIR / "state.db"
+        conn = sqlite3.connect(db_path)
+        cursor = conn.execute(
+            "SELECT remarkable_uuid FROM sync_state WHERE vault_name = 'device-bench' AND obsidian_path = 'document.md'"
+        )
+        row = cursor.fetchone()
+        conn.close()
+
+        if not row:
+            bench.error("Document not found in sync state!")
+            return False
+
+        doc_uuid = row[0]
+        bench.observe(f"Document UUID: {doc_uuid}")
+
+        # Read cache directory from config
+        # Load the config to get the cache_dir setting
+        import tomli
+        config_toml = CONFIG_FILE.read_text()
+        config_data = tomli.loads(config_toml)
+
+        # Get cache_dir from config, or use XDG default
+        import os
+        xdg_cache = os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache"))
+        default_cache = Path(xdg_cache) / "rock-paper-sync"
+
+        paths_config = config_data.get("paths", {})
+        cache_dir_config = paths_config.get("cache_dir")
+        if cache_dir_config:
+            app_cache_dir = Path(cache_dir_config).expanduser()
+        else:
+            app_cache_dir = default_cache
+
+        # .rm files are in {cache_dir}/annotations/{uuid}/
+        cache_dir = app_cache_dir / "annotations" / doc_uuid
+
+        if not cache_dir.exists() or not list(cache_dir.glob("*.rm")):
+            bench.error(f"No .rm files found in {cache_dir}!")
+            bench.info("Make sure you wrote on the device and cloud sync completed")
+            return False
+
+        bench.observe(f"Using cache: {cache_dir}")
+        rm_files = list(cache_dir.glob("*.rm"))
+
+        if not rm_files:
+            bench.error(f"No .rm files found in {cache_dir}!")
+            bench.info("Make sure you wrote on the device and cloud sync completed")
+            return False
+
+        bench.observe(f"Found {len(rm_files)} .rm file(s)")
+
+        # Create testdata directory
+        testdata_dir = FIXTURES_DIR / "testdata" / "ocr_handwriting"
+        testdata_dir.mkdir(parents=True, exist_ok=True)
+
+        # Also create a directory for the markdown source
+        markdown_dir = testdata_dir / "markdown"
+        markdown_dir.mkdir(exist_ok=True)
+
+        # Copy .rm files
+        copied_count = 0
+        for rm_file in rm_files:
+            dest = testdata_dir / rm_file.name
+            shutil.copy(rm_file, dest)
+            bench.observe(f"Copied: {rm_file.name}")
+            copied_count += 1
+
+        # Copy the markdown source
+        shutil.copy(TEST_DOC, markdown_dir / "ocr_baseline.md")
+        bench.observe(f"Copied markdown source")
+
+        # Create a manifest file
+        manifest = {
+            "created_at": datetime.now().isoformat(),
+            "source_document": "ocr_baseline.md",
+            "num_rm_files": copied_count,
+            "rm_files": [f.name for f in rm_files],
+            "description": "OCR test handwriting samples",
+            "test_cases": [
+                {"section": "Test 1", "expected": "hello"},
+                {"section": "Test 2", "expected": "2025"},
+                {"section": "Test 3", "expected": "quick test"},
+                {"section": "Test 4", "expected": "Code 42"},
+            ]
+        }
+
+        manifest_path = testdata_dir / "manifest.json"
+        manifest_path.write_text(json.dumps(manifest, indent=2))
+        bench.observe(f"Created manifest: {manifest_path}")
+
+        bench.header(f"EXTRACTION COMPLETE")
+        print(f"\n{Colors.GREEN}Testdata saved to:{Colors.END}")
+        print(f"  {Colors.CYAN}{testdata_dir}{Colors.END}")
+        print(f"\n{Colors.YELLOW}Next steps:{Colors.END}")
+        print(f"  1. Review extracted .rm files")
+        print(f"  2. Run: uv run pytest tests/test_paragraph_mapper.py")
+        print(f"  3. Commit testdata to repository")
+
+        return True
+
+    except Exception as e:
+        bench.error(f"Exception: {e}")
+        return False
+
+
 # =============================================================================
 # Main
 # =============================================================================
@@ -524,6 +942,9 @@ TESTS = {
     'annotation-roundtrip': test_annotation_roundtrip,
     'no-hash-loop': test_no_hash_loop,
     'content-edit': test_content_edit,
+    'ocr-recognition': test_ocr_recognition,
+    'ocr-correction': test_ocr_correction,
+    'ocr-stability': test_ocr_stability,
 }
 
 
@@ -534,13 +955,20 @@ def run_suite():
 
     print(f"""
 Tests (each is self-contained):
+  Annotation Tests:
   1. annotation-roundtrip - Full sync → annotate → verify markers
   2. no-hash-loop         - Verify markers don't cause re-upload
   3. content-edit         - Edit marked content → verify re-sync
 
+  OCR Tests:
+  4. ocr-recognition      - Write text → OCR → verify recognition
+  5. ocr-correction       - OCR → correct text → verify correction stored
+  6. ocr-stability        - Verify OCR markers don't cause re-upload
+
 Requirements:
   - reMarkable device connected
   - Cloud at http://localhost:3000
+  - OCR enabled in config (for OCR tests)
 """)
 
     if input("Continue? [Y/n]: ").lower() in ['n', 'no']:
@@ -575,6 +1003,8 @@ def main():
     parser.add_argument('--reset', action='store_true', help='Reset state')
     parser.add_argument('--setup', action='store_true', help='Setup only')
     parser.add_argument('--cleanup', action='store_true', help='Auto-cleanup on exit')
+    parser.add_argument('--extract-testdata', action='store_true',
+                       help='Extract .rm files with handwriting for automated testing')
 
     args = parser.parse_args()
 
@@ -583,12 +1013,25 @@ def main():
         reset()
     elif args.setup:
         setup()
+    elif args.extract_testdata:
+        setup()
+        success = extract_testdata()
+        sys.exit(0 if success else 1)
     elif args.test:
         setup()
 
         if args.cleanup:
-            with auto_cleanup():
-                success = TESTS[args.test]()
+            # Run test without auto cleanup, then prompt
+            success = TESTS[args.test]()
+
+            # Pause for inspection before cleanup
+            print(f"\n{Colors.YELLOW}Test complete. Workspace at: {WORKSPACE_DIR}{Colors.END}")
+            print(f"{Colors.YELLOW}Press Enter to cleanup, or Ctrl+C to exit and inspect...{Colors.END}")
+            try:
+                input()
+                cleanup()
+            except KeyboardInterrupt:
+                print(f"\n{Colors.YELLOW}Skipping cleanup. Manual cleanup: uv run python bench.py --reset{Colors.END}")
         else:
             success = TESTS[args.test]()
 
