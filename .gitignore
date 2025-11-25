@@ -97,6 +97,7 @@ celerybeat.pid
 
 # Environments
 .env
+secrets.env
 .venv
 env/
 venv/
@@ -154,3 +155,7 @@ tests/testdata/device_measurements/.rock-paper-sync/
 tests/testdata/device_measurements/device_measurements.json
 tests/testdata/device_measurements/*.png
 tests/testdata/device_measurements/*.jpg
+
+# OCR diagnostic and test output files
+tests/device_bench/fixtures/testdata/ocr_handwriting/diagnostic_output/
+tests/device_bench/fixtures/testdata/ocr_handwriting/transformation_tests/
