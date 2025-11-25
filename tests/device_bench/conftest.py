@@ -82,8 +82,8 @@ def pytest_addoption(parser):
     )
     parser.addoption(
         "--rmfakecloud-url",
-        default="http://localhost:3000",
-        help="rmfakecloud URL for offline mode",
+        default="http://localhost:3001",
+        help="rmfakecloud URL for offline mode (default: 3001 to avoid conflict with real rmfakecloud)",
     )
     parser.addoption(
         "--list-tests",
@@ -350,13 +350,21 @@ def rmfakecloud_service(request):
         pytest.skip("No container runtime found (docker/podman)")
 
     container_name = "device_bench_rmfakecloud"
-    port = 3000
+    port = 3001  # Use different port than real rmfakecloud (3000)
     url = f"http://localhost:{port}"
 
-    # Check if already running
-    if is_rmfakecloud_ready(url):
-        yield url
-        return
+    # Don't reuse existing - always want our test container
+    # Check if our test container is already running
+    result = subprocess.run(
+        [runtime, "ps", "-q", "-f", f"name={container_name}"],
+        capture_output=True,
+        text=True,
+    )
+    if result.stdout.strip():
+        # Our test container is running, check if ready
+        if is_rmfakecloud_ready(url):
+            yield url
+            return
 
     # Remove any existing stopped container
     subprocess.run(
@@ -370,7 +378,7 @@ def rmfakecloud_service(request):
         runtime, "run", "-d",
         "--name", container_name,
         "-p", f"{port}:3000",
-        "-e", "STORAGE_URL=http://localhost:3000",
+        "-e", f"STORAGE_URL=http://localhost:{port}",
         "-e", "JWT_SECRET_KEY=test-secret-key",
         image,
     ]

@@ -1,0 +1,15 @@
+{
+  "test_id": "pen_colors_multicolor",
+  "created_at": "2025-11-25T10:11:27.892410",
+  "doc_uuid": "353106ad-3cca-4088-b96f-dace1968f783",
+  "page_uuids": [
+    "217ec8e2-e9c5-4715-86ef-3b29df4939cc",
+    "5c67bd2f-aa25-4c14-8c92-605ffd0b3a86",
+    "68b11ed3-01e2-4351-af08-ebfd5fea44bd",
+    "6fcf4e54-1579-4df1-b47f-863e86d5d697"
+  ],
+  "source_document": "pen_properties_baseline.md",
+  "description": "Section 1: Write 'hello' in black, red, blue, green, yellow",
+  "annotations_count": 4,
+  "metadata": {}
+}

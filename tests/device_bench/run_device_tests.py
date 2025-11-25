@@ -25,6 +25,7 @@ Usage:
         --set-name=basic_annotations --test-ids=test1,test2
 """
 
+import shutil
 import signal
 import sys
 from pathlib import Path
@@ -349,6 +350,12 @@ def list_tests() -> None:
     click.echo("-" * 60)
 
 
+def _is_test_in_progress(workspace: WorkspaceManager) -> bool:
+    """Check if a test is already in progress (state DB exists)."""
+    state_db = workspace.state_dir / "state.db"
+    return state_db.exists()
+
+
 @cli.command("collect")
 @click.argument("source_file", type=click.Path(exists=True, path_type=Path))
 @click.option(
@@ -373,63 +380,102 @@ def collect(
     Push SOURCE_FILE to device, wait for annotations, capture for replay.
 
     \b
-    Workflow:
+    Auto-resumes if a test is in progress:
+    - If workspace has state, skips upload and goes straight to sync-down
+    - To start fresh, run 'reset' first or delete the workspace directory
+
+    \b
+    Workflow (fresh start):
     1. Syncs SOURCE_FILE to device
     2. User adds annotations on device
     3. Syncs back to download annotations
     4. Saves source + .rm files as testdata with TEST_ID
 
     \b
+    Workflow (resume):
+    1. Syncs back to download annotations
+    2. Saves source + .rm files as testdata with TEST_ID
+
+    \b
     Examples:
         # Collect from a custom scenario file
         run_device_tests collect my_scenario.md --test-id=custom_001
 
-        # With description
-        run_device_tests collect handwriting_test.md \\
-            --test-id=hw_cursive_001 \\
-            --description="Cursive handwriting samples"
+        # Resume after timeout (auto-detected)
+        run_device_tests collect my_scenario.md --test-id=custom_001
+
+        # Force fresh start
+        run_device_tests reset && run_device_tests collect my_scenario.md --test-id=custom_001
 
     Later, replay with:
         run_device_tests run --mode=offline --test-artifact=custom_001
     """
     device_folder = ctx.obj["device_folder"]
-    bench, workspace = setup_workspace(device_folder)
+
+    # Setup workspace WITHOUT reset first to check state
+    global _workspace
+    bench = Bench(REPO_ROOT, WORKSPACE_DIR / "logs")
+    workspace = WorkspaceManager(WORKSPACE_DIR, REPO_ROOT, bench, device_folder)
+    workspace.workspace_dir.mkdir(parents=True, exist_ok=True)
+    workspace.log_dir.mkdir(parents=True, exist_ok=True)
+    workspace._write_config()
+    _workspace = workspace
+
     testdata_store = get_testdata_store()
 
-    bench.header(f"COLLECTING TESTDATA: {test_id}")
+    # Check if resuming
+    resuming = _is_test_in_progress(workspace)
 
-    # Setup with the provided source file
-    workspace.reset()
-    workspace.setup_document(source_file)
+    if resuming:
+        bench.header(f"RESUMING COLLECTION: {test_id}")
+        bench.ok("Detected test in progress, skipping upload")
 
-    # Step 1: Initial sync
-    ret, out, err = workspace.run_sync("Upload document")
-    if ret != 0:
-        bench.error("Failed to upload document")
-        sys.exit(1)
+        # Ensure document exists
+        if not workspace.test_doc.exists():
+            shutil.copy(source_file, workspace.test_doc)
+    else:
+        bench.header(f"COLLECTING TESTDATA: {test_id}")
 
-    doc_uuid = workspace.get_document_uuid()
-    if not doc_uuid:
-        bench.error("Document UUID not found after sync")
-        sys.exit(1)
+        # Fresh start - setup with the provided source file
+        workspace.reset()
+        workspace.setup_document(source_file)
 
-    bench.observe(f"Document UUID: {doc_uuid}")
+        # Step 1: Initial sync (upload)
+        ret, out, err = workspace.run_sync("Upload document")
+        if ret != 0:
+            bench.error("Failed to upload document")
+            sys.exit(1)
 
-    # Step 2: User annotates
-    from .harness.prompts import user_prompt
-    if not user_prompt("Annotate document", [
-        f"Open '{workspace.device_folder}/document' on reMarkable",
-        "Add annotations according to the document instructions",
-        "Wait for cloud sync to complete",
-    ]):
-        bench.warn("Cancelled by user")
-        sys.exit(1)
+        doc_uuid = workspace.get_document_uuid()
+        if not doc_uuid:
+            bench.error("Document UUID not found after sync")
+            sys.exit(1)
+
+        bench.observe(f"Document UUID: {doc_uuid}")
+
+        # Step 2: User annotates
+        from .harness.prompts import user_prompt
+        if not user_prompt("Annotate document", [
+            f"Open '{workspace.device_folder}/document' on reMarkable",
+            "Add annotations according to the document instructions",
+            "Wait for cloud sync to complete",
+        ]):
+            bench.warn("Cancelled by user")
+            sys.exit(1)
 
     # Step 3: Sync to download annotations
     ret, out, err = workspace.run_sync("Download annotations")
     if ret != 0:
         bench.error("Failed to download annotations")
+        bench.error(f"stderr: {err}")
         sys.exit(1)
+
+    doc_uuid = workspace.get_document_uuid()
+    if not doc_uuid:
+        bench.error("Document UUID not found - is the document on the cloud?")
+        sys.exit(1)
+
+    bench.observe(f"Document UUID: {doc_uuid}")
 
     # Step 4: Collect .rm files
     rm_files_paths = workspace.get_cached_rm_files()

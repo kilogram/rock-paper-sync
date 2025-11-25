@@ -1,0 +1,6 @@
+# rmfakecloud test data
+rmfakecloud_data/
+
+# Test credentials (optional - can be committed for team use)
+# Uncomment if you don't want to commit test credentials:
+# rmfakecloud_test_credentials.json

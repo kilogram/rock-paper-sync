@@ -278,14 +278,22 @@ def read_annotations(file_path: Path | str | BinaryIO) -> list[Annotation]:
         if 'Glyph' in type(block).__name__:
             glyph = block.item.value
 
+            # Skip if glyph is None or has no rectangles
+            if glyph is None or not hasattr(glyph, 'rectangles') or glyph.rectangles is None:
+                continue
+
             # Convert rectangles
             rectangles = [
                 Rectangle(x=r.x, y=r.y, w=r.w, h=r.h)
                 for r in glyph.rectangles
             ]
 
+            # Skip if no valid rectangles
+            if not rectangles:
+                continue
+
             highlight = Highlight(
-                text=glyph.text,
+                text=glyph.text if hasattr(glyph, 'text') and glyph.text else "",
                 color=glyph.color.value if hasattr(glyph.color, 'value') else glyph.color,
                 rectangles=rectangles
             )

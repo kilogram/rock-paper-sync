@@ -309,10 +309,11 @@ def reset():
 
 
 # =============================================================================
-# Tests (each is self-contained end-to-end)
+# Scenarios (each is self-contained end-to-end)
+# These are NOT pytest tests - run via CLI: run_device_tests run
 # =============================================================================
 
-def test_annotation_roundtrip():
+def scenario_annotation_roundtrip():
     """Complete annotation sync roundtrip.
 
     sync clean doc → user annotates → sync → verify markers appear
@@ -375,7 +376,7 @@ def test_annotation_roundtrip():
         return False
 
 
-def test_no_hash_loop():
+def scenario_no_hash_loop():
     """Markers don't cause infinite sync loop.
 
     sync → annotate → sync → sync again → verify no re-upload
@@ -450,7 +451,7 @@ def test_no_hash_loop():
         return False
 
 
-def test_content_edit():
+def scenario_content_edit():
     """Editing marked content triggers re-sync.
 
     sync → annotate → sync → edit → sync → verify upload
@@ -529,7 +530,7 @@ def test_content_edit():
         return False
 
 
-def test_ocr_recognition():
+def scenario_ocr_recognition():
     """Basic OCR recognition test.
 
     sync doc with gaps → user writes specific text → sync → verify OCR markers
@@ -615,7 +616,7 @@ def test_ocr_recognition():
         return False
 
 
-def test_ocr_correction():
+def scenario_ocr_correction():
     """OCR correction workflow test.
 
     sync → OCR → user corrects text → sync → verify correction stored
@@ -700,7 +701,7 @@ def test_ocr_correction():
         return False
 
 
-def test_ocr_stability():
+def scenario_ocr_stability():
     """OCR markers don't cause re-upload loop.
 
     sync → OCR → sync again → verify no re-upload

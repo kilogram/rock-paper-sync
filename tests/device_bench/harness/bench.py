@@ -123,7 +123,7 @@ class Bench:
         self,
         cmd: list[str],
         desc: str,
-        timeout: int = 120,
+        timeout: int = 300,  # 5 minutes for Runpods cold start
         capture: bool = True,
     ) -> tuple[int, str, str]:
         """Execute a command and log the result.
