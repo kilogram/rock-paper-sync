@@ -467,8 +467,11 @@ class TestUnsync:
         assert removed == 2
         assert deleted == 2
         assert len(state_manager.get_all_synced_files("test-vault")) == 0
-        # Verify cloud delete WAS called (2 files + 1 folder = 3 total)
-        assert mock_cloud_sync.delete_document.call_count == 3
+        # Verify cloud delete WAS called:
+        # - 2 files deleted individually via delete_document
+        # - 1 folder deleted via delete_documents_batch (batched)
+        assert mock_cloud_sync.delete_document.call_count == 2
+        assert mock_cloud_sync.delete_documents_batch.call_count == 1
 
     def test_unsync_vault_invalid_name(
         self,

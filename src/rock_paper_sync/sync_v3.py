@@ -332,6 +332,77 @@ class SyncV3Client:
         logger.info(f"Root updated successfully (new gen: {new_generation})")
         return new_generation
 
+    def _retry_root_update(
+        self,
+        operation_name: str,
+        modify_root_fn,
+        broadcast: bool = True,
+        max_retries: int = 3,
+    ) -> int:
+        """
+        Execute a root modification operation with optimistic concurrency retry.
+
+        This helper implements the read-modify-write pattern with automatic retry
+        on generation conflicts, eliminating duplication across root operations.
+
+        Args:
+            operation_name: Name for logging (e.g., "merge document", "delete documents")
+            modify_root_fn: Function that takes current root entries and returns modified entries.
+                           Should be idempotent as it may be called multiple times on retry.
+            broadcast: Whether to trigger sync notification to device
+            max_retries: Maximum retry attempts on conflicts
+
+        Returns:
+            New generation number after successful update
+
+        Raises:
+            GenerationConflictError: If max retries exceeded
+            requests.HTTPError: If update fails for other reasons
+        """
+        for attempt in range(max_retries):
+            try:
+                # Read current state
+                current_root_hash, current_generation = self.get_current_generation()
+                root_entries = self.get_root_documents()
+
+                logger.debug(
+                    f"Attempt {attempt + 1}/{max_retries} for {operation_name} "
+                    f"(current gen: {current_generation})"
+                )
+
+                # Modify (operation-specific)
+                new_entries = modify_root_fn(root_entries)
+
+                # Write new state
+                root_index_hash, _ = self.upload_index(new_entries)
+                logger.debug(f"  New root index hash: {root_index_hash}")
+
+                new_generation = self.update_root(
+                    root_index_hash, current_generation, broadcast
+                )
+
+                logger.info(
+                    f"Successfully completed {operation_name} (gen {new_generation})"
+                )
+                return new_generation
+
+            except GenerationConflictError as e:
+                if attempt < max_retries - 1:
+                    logger.warning(
+                        f"Generation conflict during {operation_name} on attempt "
+                        f"{attempt + 1}/{max_retries} (expected {e.expected}, "
+                        f"got {e.actual}), retrying..."
+                    )
+                    continue
+                else:
+                    logger.error(
+                        f"Max retries ({max_retries}) exceeded for {operation_name}"
+                    )
+                    raise
+
+        # Unreachable but makes type checker happy
+        raise RuntimeError("Unreachable: retry loop exited without return or raise")
+
     def upload_document_files(
         self, doc_uuid: str, files: dict[str, bytes]
     ) -> tuple[str, list[BlobEntry]]:
@@ -412,59 +483,34 @@ class SyncV3Client:
             requests.HTTPError: If update fails
             GenerationConflictError: If max retries exceeded
         """
-        for attempt in range(max_retries):
-            try:
-                # Get current root
-                current_root_hash, current_generation = self.get_current_generation()
-                root_entries = self.get_root_documents()
+        doc_entry = BlobEntry(
+            hash=hash_of_hashes,
+            type=DOC_TYPE,
+            entry_name=doc_uuid,
+            subfiles=num_files,
+            size=0,
+        )
 
-                # Create document entry using hashOfHashesV3
-                doc_entry = BlobEntry(
-                    hash=hash_of_hashes,
-                    type=DOC_TYPE,
-                    entry_name=doc_uuid,
-                    subfiles=num_files,
-                    size=0,
-                )
+        def _merge_operation(entries: list[BlobEntry]) -> list[BlobEntry]:
+            """Update or add document to root entries."""
+            # Look for existing document
+            for i, entry in enumerate(entries):
+                if entry.entry_name == doc_uuid:
+                    entries[i] = doc_entry
+                    logger.debug(f"  Updating existing document {doc_uuid}")
+                    return entries
 
-                # Update or add document to root
-                found = False
-                for i, entry in enumerate(root_entries):
-                    if entry.entry_name == doc_uuid:
-                        root_entries[i] = doc_entry
-                        found = True
-                        logger.debug(f"  Updating existing document in root")
-                        break
+            # Not found, add new
+            entries.append(doc_entry)
+            logger.debug(f"  Adding new document {doc_uuid}")
+            return entries
 
-                if not found:
-                    root_entries.append(doc_entry)
-                    logger.debug(f"  Adding new document to root")
-
-                # Create new root index
-                root_index_hash, _ = self.upload_index(root_entries)
-                logger.debug(f"  Root index hash: {root_index_hash}")
-
-                # Update root (may raise GenerationConflictError)
-                new_generation = self.update_root(
-                    root_index_hash, current_generation, broadcast
-                )
-
-                logger.info(
-                    f"Document {doc_uuid} merged into root (gen {new_generation})"
-                )
-                return new_generation
-
-            except GenerationConflictError as e:
-                if attempt < max_retries - 1:
-                    logger.warning(
-                        f"Conflict on attempt {attempt + 1}/{max_retries}, retrying..."
-                    )
-                    continue
-                else:
-                    logger.error(f"Max retries exceeded after {max_retries} attempts")
-                    raise
-
-        raise RuntimeError("Unreachable code")
+        return self._retry_root_update(
+            operation_name=f"merge document {doc_uuid}",
+            modify_root_fn=_merge_operation,
+            broadcast=broadcast,
+            max_retries=max_retries,
+        )
 
     def upload_document(
         self, doc_uuid: str, files: dict[str, bytes], broadcast: bool = True
@@ -500,6 +546,8 @@ class SyncV3Client:
         """
         Delete a document using Sync v3 protocol with retry logic.
 
+        This is a convenience wrapper around delete_documents_batch for single documents.
+
         Args:
             doc_uuid: Document UUID to delete
             broadcast: Whether to trigger sync notification to xochitl
@@ -509,56 +557,70 @@ class SyncV3Client:
             requests.HTTPError: If delete fails
             GenerationConflictError: If max retries exceeded
         """
-        logger.info(f"Deleting document {doc_uuid} via Sync v3")
+        self.delete_documents_batch([doc_uuid], broadcast, max_retries)
 
-        for attempt in range(max_retries):
-            try:
-                # Get current root documents
-                current_root_hash, current_generation = self.get_current_generation()
-                root_entries = self.get_root_documents()
+    def delete_documents_batch(
+        self, doc_uuids: list[str], broadcast: bool = True, max_retries: int = 3
+    ) -> None:
+        """
+        Delete multiple documents in a single root update.
 
-                # DEBUG: Log current root state
-                logger.debug(f"  Current root has {len(root_entries)} entries")
-                for entry in root_entries:
-                    logger.debug(f"    - {entry.entry_name}: {entry.subfiles} files")
+        This is more efficient than calling delete_document() multiple times and
+        avoids device sync issues when deleting related documents (like nested folders).
+        The device only receives one notification showing the final state.
 
-                # Remove the document from root
-                doc_found = False
-                new_entries = []
-                for entry in root_entries:
-                    if entry.entry_name == doc_uuid:
-                        doc_found = True
-                        logger.debug(f"  Removing document from root: {doc_uuid} ({entry.subfiles} files)")
-                    else:
-                        new_entries.append(entry)
+        Args:
+            doc_uuids: List of document UUIDs to delete
+            broadcast: Whether to trigger sync notification to xochitl
+            max_retries: Maximum number of retry attempts on conflicts
 
-                if not doc_found:
-                    logger.warning(f"Document {doc_uuid} not found in root (has {len(root_entries)} entries)")
-                    return
+        Raises:
+            requests.HTTPError: If delete fails
+            GenerationConflictError: If max retries exceeded
+        """
+        if not doc_uuids:
+            logger.warning("delete_documents_batch called with empty list")
+            return
 
-                # DEBUG: Log new root state
-                logger.debug(f"  New root will have {len(new_entries)} entries")
+        logger.info(f"Deleting {len(doc_uuids)} documents in batch via Sync v3")
+        logger.debug(f"  UUIDs: {doc_uuids}")
 
-                # Create new root index and upload it
-                root_index_hash, _ = self.upload_index(new_entries)
-                logger.debug(f"  New root index hash: {root_index_hash}")
+        uuids_to_delete = set(doc_uuids)
 
-                # Update root (may raise GenerationConflictError)
-                new_generation = self.update_root(
-                    root_index_hash, current_generation, broadcast
-                )
+        def _delete_operation(entries: list[BlobEntry]) -> list[BlobEntry]:
+            """Remove documents from root entries."""
+            new_entries = []
+            deleted_count = 0
 
-                logger.info(
-                    f"Document {doc_uuid} deleted successfully (gen {new_generation})"
-                )
-                return
-
-            except GenerationConflictError as e:
-                if attempt < max_retries - 1:
-                    logger.warning(
-                        f"Conflict on attempt {attempt + 1}/{max_retries}, retrying..."
+            for entry in entries:
+                if entry.entry_name in uuids_to_delete:
+                    deleted_count += 1
+                    logger.debug(
+                        f"  Removing document: {entry.entry_name} ({entry.subfiles} files)"
                     )
-                    continue
                 else:
-                    logger.error(f"Max retries exceeded after {max_retries} attempts")
-                    raise
+                    new_entries.append(entry)
+
+            if deleted_count == 0:
+                logger.warning(
+                    f"None of the {len(doc_uuids)} documents found in root "
+                    f"(root has {len(entries)} entries)"
+                )
+            elif deleted_count < len(doc_uuids):
+                logger.warning(
+                    f"Only {deleted_count}/{len(doc_uuids)} documents found in root"
+                )
+            else:
+                logger.debug(
+                    f"  Successfully removed {deleted_count} documents "
+                    f"({len(new_entries)} remaining)"
+                )
+
+            return new_entries
+
+        self._retry_root_update(
+            operation_name=f"delete {len(doc_uuids)} documents",
+            modify_root_fn=_delete_operation,
+            broadcast=broadcast,
+            max_retries=max_retries,
+        )

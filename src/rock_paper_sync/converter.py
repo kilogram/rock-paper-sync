@@ -785,25 +785,32 @@ class SyncEngine:
             files_removed += 1
 
         # Delete folders (if delete_from_cloud is True)
-        # Process folders in reverse depth order (deepest first) to avoid deleting
-        # parent folders before their children
+        # Use batch deletion to avoid device sync issues when deleting nested folders.
+        # The device receives one notification showing the final state instead of
+        # intermediate states that might orphan child folders.
         folders_deleted = 0
         if delete_from_cloud:
             folders = self.state.get_all_folders(vault_name)
             logger.info(f"Found {len(folders)} folders to delete for vault '{vault_name}'")
 
-            for folder_path, folder_uuid in folders:
+            if folders:
+                # Extract folder UUIDs for batch deletion
+                # Folders are already ordered by depth (deepest first) from state.get_all_folders()
+                folder_uuids = [folder_uuid for _, folder_uuid in folders]
+
                 try:
                     logger.info(
-                        f"Deleting folder from cloud: {vault_name}:{folder_path} "
-                        f"(UUID: {folder_uuid})"
+                        f"Deleting {len(folders)} folders from cloud in batch for vault '{vault_name}'"
                     )
-                    self.cloud_sync.delete_document(folder_uuid)
-                    folders_deleted += 1
+                    for folder_path, folder_uuid in folders:
+                        logger.debug(f"  Will delete: {vault_name}:{folder_path} (UUID: {folder_uuid})")
+
+                    self.cloud_sync.delete_documents_batch(folder_uuids)
+                    folders_deleted = len(folders)
+                    logger.info(f"Successfully deleted {folders_deleted} folders in batch")
                 except Exception as e:
                     logger.error(
-                        f"Failed to delete folder {vault_name}:{folder_path} "
-                        f"from cloud: {e}",
+                        f"Failed to delete folders from cloud for vault '{vault_name}': {e}",
                         exc_info=True,
                     )
 
