@@ -6,17 +6,12 @@ Creates appropriate OCR service instance based on configuration.
 import logging
 from typing import TYPE_CHECKING
 
-from rock_paper_sync.ocr.protocol import OCRServiceProtocol
+from rock_paper_sync.ocr.protocol import OCRServiceProtocol, OCRServiceError
 
 if TYPE_CHECKING:
     from rock_paper_sync.config import OCRConfig
 
 logger = logging.getLogger("rock_paper_sync.ocr.factory")
-
-
-class OCRServiceError(Exception):
-    """Exception raised for OCR service creation errors."""
-    pass
 
 
 def create_ocr_service(config: "OCRConfig") -> OCRServiceProtocol:
