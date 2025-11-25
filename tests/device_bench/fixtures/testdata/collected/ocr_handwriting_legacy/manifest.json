@@ -1,0 +1,17 @@
+{
+  "test_id": "ocr_handwriting_legacy",
+  "created_at": "2025-11-25T09:32:32.836867",
+  "doc_uuid": "legacy-6152275d-bbe8-491c-975f-acdec21f60ec",
+  "page_uuids": [
+    "6152275d-bbe8-491c-975f-acdec21f60ec",
+    "fb075fd1-71b4-4d08-96d9-c9b768fa2a72"
+  ],
+  "source_document": "ocr_baseline.md",
+  "description": "OCR test handwriting samples",
+  "annotations_count": 2,
+  "metadata": {
+    "migrated_from": "ocr_handwriting",
+    "original_created_at": "2025-11-24T15:06:53.841502",
+    "test_cases": "[{\"section\": \"Test 1\", \"expected\": \"hello\"}, {\"section\": \"Test 2\", \"expected\": \"2025\"}, {\"section\": \"Test 3\", \"expected\": \"quick test\"}, {\"section\": \"Test 4\", \"expected\": \"Code 42\"}]"
+  }
+}

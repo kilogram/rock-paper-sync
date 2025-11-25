@@ -127,5 +127,6 @@ exclude_lines = [
 dev = [
     "pytest>=9.0.1",
     "pytest-cov>=7.0.0",
+    "pytest-docker>=3.2.5",
     "pytest-mock>=3.15.1",
 ]

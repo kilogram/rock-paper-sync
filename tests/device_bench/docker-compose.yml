@@ -1,0 +1,10 @@
+services:
+  rmfakecloud:
+    image: docker.io/ddvk/rmfakecloud:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - STORAGE_URL=http://localhost:3000
+      - JWT_SECRET_KEY=test-secret-key
+      - LOGLEVEL=debug
+    network_mode: "slirp4netns:port_handler=slirp4netns"

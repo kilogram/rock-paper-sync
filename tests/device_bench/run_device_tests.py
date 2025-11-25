@@ -1,33 +1,43 @@
 #!/usr/bin/env python3
 """Device test runner for interactive device testing.
 
-This script provides the command-line interface for running device tests.
-For programmatic testing, use pytest with the device marker.
+This script provides the command-line interface for running device tests
+in online (real device) or offline (replay via rmfakecloud) mode.
 
 Usage:
-    # Run all tests
-    uv run python -m tests.device_bench.run_device_tests
+    # Run all tests in online mode
+    uv run python -m tests.device_bench.run_device_tests run
+
+    # Run in offline mode
+    uv run python -m tests.device_bench.run_device_tests run --mode=offline
 
     # Run specific test
-    uv run python -m tests.device_bench.run_device_tests --test annotation-roundtrip
+    uv run python -m tests.device_bench.run_device_tests run --test annotation-roundtrip
 
-    # Run with cleanup disabled
-    uv run python -m tests.device_bench.run_device_tests --no-cleanup
-
-    # Reset workspace only
-    uv run python -m tests.device_bench.run_device_tests --reset
+    # List available offline tests
+    uv run python -m tests.device_bench.run_device_tests list-tests
 
     # Extract testdata for automated testing
-    uv run python -m tests.device_bench.run_device_tests --extract-testdata
+    uv run python -m tests.device_bench.run_device_tests extract-testdata
+
+    # Export curated test set
+    uv run python -m tests.device_bench.run_device_tests export-curated \\
+        --set-name=basic_annotations --test-ids=test1,test2
 """
 
-import argparse
-import atexit
 import signal
 import sys
 from pathlib import Path
 
-from .harness import Bench, WorkspaceManager
+import click
+
+from .harness import (
+    Bench,
+    OfflineEmulator,
+    OnlineDevice,
+    TestdataStore,
+    WorkspaceManager,
+)
 from .harness.prompts import display_results, user_confirm
 from .scenarios import ALL_TESTS, TESTS_BY_NAME
 
@@ -42,15 +52,14 @@ BASELINE_DOC = FIXTURES_DIR / "baseline.md"
 OCR_BASELINE_DOC = FIXTURES_DIR / "ocr_baseline.md"
 
 # Global cleanup state
-_cleanup_on_exit = False
 _workspace: WorkspaceManager | None = None
 
 
 def _signal_handler(signum, frame):
     """Handle interrupt signals."""
-    global _cleanup_on_exit, _workspace
-    if _cleanup_on_exit and _workspace:
-        print("\nInterrupted - cleaning up...")
+    global _workspace
+    if _workspace:
+        click.echo("\nInterrupted - cleaning up...")
         _workspace.cleanup()
     sys.exit(1)
 
@@ -59,31 +68,142 @@ signal.signal(signal.SIGINT, _signal_handler)
 signal.signal(signal.SIGTERM, _signal_handler)
 
 
-def setup_workspace() -> tuple[Bench, WorkspaceManager]:
+def setup_workspace(device_folder: str = "DeviceBench") -> tuple[Bench, WorkspaceManager]:
     """Create and setup workspace."""
     global _workspace
 
     bench = Bench(REPO_ROOT, WORKSPACE_DIR / "logs")
-    workspace = WorkspaceManager(WORKSPACE_DIR, REPO_ROOT, bench)
+    workspace = WorkspaceManager(WORKSPACE_DIR, REPO_ROOT, bench, device_folder)
     workspace.setup()
     _workspace = workspace
 
     return bench, workspace
 
 
-def run_test(
+def get_testdata_store() -> TestdataStore:
+    """Get TestdataStore instance."""
+    return TestdataStore(FIXTURES_DIR / "testdata")
+
+
+@click.group()
+@click.option(
+    "--device-folder",
+    default="DeviceBench",
+    help="Folder name on reMarkable device",
+)
+@click.pass_context
+def cli(ctx: click.Context, device_folder: str) -> None:
+    """Device Test Runner for reMarkable device testing.
+
+    Supports two modes:
+
+    \b
+    ONLINE MODE (default): Real device connected
+      - User prompted for manual actions (annotating, syncing)
+      - Testdata automatically captured for later replay
+
+    \b
+    OFFLINE MODE: No device needed
+      - Pre-recorded testdata replayed via rmfakecloud
+      - Enables CI testing without physical device
+    """
+    ctx.ensure_object(dict)
+    ctx.obj["device_folder"] = device_folder
+
+
+@cli.command()
+@click.option(
+    "--mode",
+    type=click.Choice(["online", "offline"]),
+    default="online",
+    help="Device mode: online (real device) or offline (replay)",
+)
+@click.option(
+    "--test",
+    "test_name",
+    type=click.Choice(list(TESTS_BY_NAME.keys())),
+    help="Run specific test",
+)
+@click.option(
+    "--test-artifact",
+    help="Test artifact ID to replay (offline mode only)",
+)
+@click.option(
+    "--rmfakecloud-url",
+    default="http://localhost:3000",
+    help="rmfakecloud URL for offline mode",
+)
+@click.option(
+    "--no-cleanup",
+    is_flag=True,
+    help="Don't cleanup workspace after test",
+)
+@click.pass_context
+def run(
+    ctx: click.Context,
+    mode: str,
+    test_name: str | None,
+    test_artifact: str | None,
+    rmfakecloud_url: str,
+    no_cleanup: bool,
+) -> None:
+    """Run device tests.
+
+    In ONLINE mode, you'll be prompted to perform actions on your device.
+    In OFFLINE mode, pre-recorded testdata is replayed via rmfakecloud.
+
+    Examples:
+
+    \b
+        # Run all tests with real device
+        run_device_tests run
+
+    \b
+        # Run specific test in offline mode
+        run_device_tests run --mode=offline --test=annotation-roundtrip \\
+            --test-artifact=annotation_roundtrip_001
+    """
+    device_folder = ctx.obj["device_folder"]
+    bench, workspace = setup_workspace(device_folder)
+    testdata_store = get_testdata_store()
+
+    # Create device based on mode
+    if mode == "online":
+        device = OnlineDevice(workspace, testdata_store, bench)
+        click.echo("Running in ONLINE mode (real device)")
+    else:
+        device = OfflineEmulator(
+            workspace, testdata_store, bench, cloud_url=rmfakecloud_url
+        )
+        click.echo(f"Running in OFFLINE mode (rmfakecloud: {rmfakecloud_url})")
+
+        if test_artifact:
+            device.load_test(test_artifact)
+
+    cleanup = not no_cleanup
+
+    if test_name:
+        # Run single test
+        success = run_single_test(
+            test_name, bench, workspace, device, cleanup, test_artifact
+        )
+        sys.exit(0 if success else 1)
+    else:
+        # Run all tests
+        results = run_all_tests(bench, workspace, device, cleanup, test_artifact)
+        passed = sum(1 for _, s in results if s)
+        sys.exit(0 if passed == len(results) else 1)
+
+
+def run_single_test(
     test_name: str,
     bench: Bench,
     workspace: WorkspaceManager,
-    cleanup: bool = True,
+    device: OnlineDevice | OfflineEmulator,
+    cleanup: bool,
+    test_artifact: str | None,
 ) -> bool:
     """Run a single test.
-
-    Args:
-        test_name: Name of test to run
-        bench: Bench utilities
-        workspace: Workspace manager
-        cleanup: Whether to cleanup after test
 
     Returns:
         True if test passed
@@ -101,20 +221,27 @@ def run_test(
     else:
         workspace.setup_document(BASELINE_DOC)
 
+    # Start device test session
+    test_id = test_artifact or test_name
+    device.start_test(test_id)
+
     # Create and run test
     test = test_class(workspace, bench)
     result = test.run()
 
+    # End device session
+    device.end_test(test_id, result.success)
+
     # Save result
     bench.save_result(result)
 
-    # Cleanup if requested and test passed (or cleanup_on_failure)
+    # Cleanup
     if cleanup:
         if result.success or test.cleanup_on_failure:
             workspace.cleanup()
         else:
             bench.warn(f"Workspace preserved at: {workspace.workspace_dir}")
-            bench.info("Run with --reset to cleanup manually")
+            bench.info("Run with 'reset' command to cleanup manually")
 
     return result.success
 
@@ -122,14 +249,11 @@ def run_test(
 def run_all_tests(
     bench: Bench,
     workspace: WorkspaceManager,
-    cleanup: bool = True,
+    device: OnlineDevice | OfflineEmulator,
+    cleanup: bool,
+    test_artifact: str | None,
 ) -> list[tuple[str, bool]]:
     """Run all tests.
-
-    Args:
-        bench: Bench utilities
-        workspace: Workspace manager
-        cleanup: Whether to cleanup after all tests
 
     Returns:
         List of (test_name, success) tuples
@@ -137,7 +261,7 @@ def run_all_tests(
     bench.header("DEVICE TEST BENCH")
 
     # Display test info
-    print("""
+    click.echo("""
 Tests (each is self-contained):
   Annotation Tests:
   1. annotation-roundtrip - Full sync → annotate → verify markers
@@ -150,7 +274,8 @@ Tests (each is self-contained):
   6. ocr-stability        - Verify OCR markers don't cause re-upload
 
 Requirements:
-  - reMarkable device connected
+  - reMarkable device connected (online mode)
+  - OR rmfakecloud running + testdata (offline mode)
   - Cloud at http://localhost:3000
   - OCR enabled in config (for OCR tests)
 """)
@@ -167,9 +292,17 @@ Requirements:
         else:
             workspace.setup_document(BASELINE_DOC)
 
+        # Start device session
+        test_id = test_artifact or test_class.name
+        device.start_test(test_id)
+
         # Run test
         test = test_class(workspace, bench)
         result = test.run()
+
+        # End device session
+        device.end_test(test_id, result.success)
+
         bench.save_result(result)
         results.append((test.name, result.success))
 
@@ -188,169 +321,314 @@ Requirements:
     return results
 
 
-def extract_testdata(bench: Bench, workspace: WorkspaceManager) -> bool:
-    """Extract .rm files with handwriting as testdata.
+@cli.command("list-tests")
+def list_tests() -> None:
+    """List available offline test artifacts.
 
-    This workflow:
-    1. Syncs document to device
-    2. User writes handwriting
-    3. Syncs back
-    4. Copies .rm files to testdata directory
+    Shows all test artifacts that can be used with --mode=offline.
     """
-    import json
-    import shutil
-    from datetime import datetime
+    store = get_testdata_store()
+    manifests = store.list_available_tests()
 
-    bench.header("TESTDATA EXTRACTION")
+    click.echo("\nAvailable offline test artifacts:")
+    click.echo("-" * 60)
 
-    # Setup
+    if manifests:
+        for m in manifests:
+            click.echo(f"  {m.test_id}")
+            click.echo(f"    Description: {m.description}")
+            click.echo(f"    Created: {m.created_at}")
+            click.echo(f"    Files: {m.annotations_count} .rm files")
+            click.echo()
+    else:
+        click.echo("  (none found)")
+        click.echo()
+        click.echo("  Run tests in online mode to capture testdata:")
+        click.echo("    run_device_tests run --mode=online")
+
+    click.echo("-" * 60)
+
+
+@cli.command("collect")
+@click.argument("source_file", type=click.Path(exists=True, path_type=Path))
+@click.option(
+    "--test-id",
+    required=True,
+    help="Unique identifier for this test (used for replay)",
+)
+@click.option(
+    "--description",
+    default="",
+    help="Description of what this testdata captures",
+)
+@click.pass_context
+def collect(
+    ctx: click.Context,
+    source_file: Path,
+    test_id: str,
+    description: str,
+) -> None:
+    """Collect testdata from any markdown file.
+
+    Push SOURCE_FILE to device, wait for annotations, capture for replay.
+
+    \b
+    Workflow:
+    1. Syncs SOURCE_FILE to device
+    2. User adds annotations on device
+    3. Syncs back to download annotations
+    4. Saves source + .rm files as testdata with TEST_ID
+
+    \b
+    Examples:
+        # Collect from a custom scenario file
+        run_device_tests collect my_scenario.md --test-id=custom_001
+
+        # With description
+        run_device_tests collect handwriting_test.md \\
+            --test-id=hw_cursive_001 \\
+            --description="Cursive handwriting samples"
+
+    Later, replay with:
+        run_device_tests run --mode=offline --test-artifact=custom_001
+    """
+    device_folder = ctx.obj["device_folder"]
+    bench, workspace = setup_workspace(device_folder)
+    testdata_store = get_testdata_store()
+
+    bench.header(f"COLLECTING TESTDATA: {test_id}")
+
+    # Setup with the provided source file
     workspace.reset()
-    workspace.setup_document(OCR_BASELINE_DOC)
+    workspace.setup_document(source_file)
 
     # Step 1: Initial sync
-    ret, out, err = workspace.run_sync("Initial sync")
+    ret, out, err = workspace.run_sync("Upload document")
     if ret != 0:
-        return False
+        bench.error("Failed to upload document")
+        sys.exit(1)
 
-    # Step 2: User writes
-    from .harness.prompts import user_prompt
-    if not user_prompt("Write test handwriting", [
-        f"Open '{workspace.device_folder}/document' on reMarkable",
-        "Write in ALL test sections (Test 1-4)",
-        "Use clear, readable handwriting",
-        "Highlight each gap where you wrote",
-        "Wait for cloud sync to complete",
-    ]):
-        return False
-
-    # Step 3: Sync to download
-    ret, out, err = workspace.run_sync("Download annotations")
-    if ret != 0:
-        return False
-
-    # Step 4: Find and copy .rm files
     doc_uuid = workspace.get_document_uuid()
     if not doc_uuid:
-        bench.error("Document not found in sync state")
-        return False
+        bench.error("Document UUID not found after sync")
+        sys.exit(1)
 
     bench.observe(f"Document UUID: {doc_uuid}")
 
-    rm_files = workspace.get_cached_rm_files()
-    if not rm_files:
-        bench.error("No .rm files found in cache")
-        return False
+    # Step 2: User annotates
+    from .harness.prompts import user_prompt
+    if not user_prompt("Annotate document", [
+        f"Open '{workspace.device_folder}/document' on reMarkable",
+        "Add annotations according to the document instructions",
+        "Wait for cloud sync to complete",
+    ]):
+        bench.warn("Cancelled by user")
+        sys.exit(1)
+
+    # Step 3: Sync to download annotations
+    ret, out, err = workspace.run_sync("Download annotations")
+    if ret != 0:
+        bench.error("Failed to download annotations")
+        sys.exit(1)
+
+    # Step 4: Collect .rm files
+    rm_files_paths = workspace.get_cached_rm_files()
+    if not rm_files_paths:
+        bench.error("No .rm files found - did you add annotations?")
+        sys.exit(1)
+
+    # Build rm_files dict
+    rm_files: dict[str, bytes] = {}
+    page_uuids: list[str] = []
+    for rm_path in sorted(rm_files_paths):
+        page_uuid = rm_path.stem
+        page_uuids.append(page_uuid)
+        rm_files[page_uuid] = rm_path.read_bytes()
 
     bench.observe(f"Found {len(rm_files)} .rm file(s)")
 
-    # Create testdata directory
-    testdata_dir = FIXTURES_DIR / "testdata" / "ocr_handwriting"
-    testdata_dir.mkdir(parents=True, exist_ok=True)
-    markdown_dir = testdata_dir / "markdown"
-    markdown_dir.mkdir(exist_ok=True)
+    # Step 5: Save to testdata store
+    save_path = testdata_store.save_artifacts(
+        test_id=test_id,
+        doc_uuid=doc_uuid,
+        page_uuids=page_uuids,
+        rm_files=rm_files,
+        source_markdown=source_file,
+        description=description or f"Collected from {source_file.name}",
+    )
 
-    # Copy .rm files
-    for rm_file in rm_files:
-        dest = testdata_dir / rm_file.name
-        shutil.copy(rm_file, dest)
-        bench.observe(f"Copied: {rm_file.name}")
+    bench.header("COLLECTION COMPLETE")
+    click.echo(f"\nTestdata saved to: {save_path}")
+    click.echo(f"\nTo replay this test:")
+    click.echo(f"  run_device_tests run --mode=offline --test-artifact={test_id}")
 
-    # Copy markdown source
-    shutil.copy(workspace.test_doc, markdown_dir / "ocr_baseline.md")
-    bench.observe("Copied markdown source")
 
-    # Create manifest
-    manifest = {
-        "created_at": datetime.now().isoformat(),
-        "source_document": "ocr_baseline.md",
-        "num_rm_files": len(rm_files),
-        "rm_files": [f.name for f in rm_files],
-        "description": "OCR test handwriting samples",
-        "test_cases": [
-            {"section": "Test 1", "expected": "hello"},
-            {"section": "Test 2", "expected": "2025"},
-            {"section": "Test 3", "expected": "quick test"},
-            {"section": "Test 4", "expected": "Code 42"},
-        ]
-    }
+@cli.command("export-curated")
+@click.option(
+    "--set-name",
+    required=True,
+    help="Name for the curated set",
+)
+@click.option(
+    "--test-ids",
+    required=True,
+    help="Comma-separated list of test IDs to include",
+)
+@click.option(
+    "--description",
+    default="",
+    help="Description of the curated set",
+)
+def export_curated(set_name: str, test_ids: str, description: str) -> None:
+    """Export selected tests to a curated set.
 
-    manifest_path = testdata_dir / "manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2))
-    bench.observe(f"Created manifest: {manifest_path}")
+    Curated sets are stable collections of tests for CI/regression testing.
 
-    bench.header("EXTRACTION COMPLETE")
-    print(f"\nTestdata saved to: {testdata_dir}")
-    print("\nNext steps:")
-    print("  1. Review extracted .rm files")
-    print("  2. Run: uv run pytest tests/test_ocr_testdata.py")
-    print("  3. Commit testdata to repository")
+    Example:
 
-    return True
+    \b
+        run_device_tests export-curated \\
+            --set-name=basic_annotations \\
+            --test-ids=annotation_roundtrip_001,annotation_roundtrip_002 \\
+            --description="Basic annotation tests for CI"
+    """
+    store = get_testdata_store()
+    test_id_list = [t.strip() for t in test_ids.split(",")]
+
+    # Validate all test IDs exist
+    missing = []
+    for test_id in test_id_list:
+        if not store.test_exists(test_id):
+            missing.append(test_id)
+
+    if missing:
+        click.echo(f"Error: Test artifacts not found: {', '.join(missing)}", err=True)
+        click.echo("Run 'list-tests' to see available artifacts", err=True)
+        sys.exit(1)
+
+    # Export
+    try:
+        output_dir = store.export_curated_set(
+            test_ids=test_id_list,
+            set_name=set_name,
+            description=description,
+        )
+        click.echo(f"Exported curated set to: {output_dir}")
+        click.echo(f"  Tests: {len(test_id_list)}")
+        click.echo(f"  Description: {description}")
+    except Exception as e:
+        click.echo(f"Error exporting: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command("migrate-legacy")
+def migrate_legacy() -> None:
+    """Migrate legacy testdata to new format.
+
+    Converts the old ocr_handwriting testdata structure to the new
+    collected testdata format so it can be used with offline replay.
+    """
+    import json
+    import shutil
+
+    store = get_testdata_store()
+    legacy_dir = FIXTURES_DIR / "testdata" / "ocr_handwriting"
+
+    if not legacy_dir.exists():
+        click.echo("No legacy testdata found at: {legacy_dir}")
+        return
+
+    # Read old manifest
+    old_manifest_path = legacy_dir / "manifest.json"
+    if not old_manifest_path.exists():
+        click.echo("No manifest.json found in legacy testdata")
+        return
+
+    old_manifest = json.loads(old_manifest_path.read_text())
+
+    click.echo(f"Found legacy testdata: {old_manifest.get('description', 'unknown')}")
+    click.echo(f"  Created: {old_manifest.get('created_at', 'unknown')}")
+    click.echo(f"  .rm files: {old_manifest.get('num_rm_files', 0)}")
+
+    # Collect .rm files
+    rm_files: dict[str, bytes] = {}
+    page_uuids: list[str] = []
+
+    for rm_filename in old_manifest.get("rm_files", []):
+        rm_path = legacy_dir / rm_filename
+        if rm_path.exists():
+            page_uuid = rm_path.stem
+            page_uuids.append(page_uuid)
+            rm_files[page_uuid] = rm_path.read_bytes()
+            click.echo(f"  Found: {rm_filename}")
+
+    if not rm_files:
+        click.echo("No .rm files found")
+        return
+
+    # Find source markdown
+    source_md = legacy_dir / "markdown" / "ocr_baseline.md"
+    if not source_md.exists():
+        source_md = FIXTURES_DIR / "ocr_baseline.md"
+
+    if not source_md.exists():
+        click.echo("Source markdown not found")
+        return
+
+    # Create new format testdata
+    test_id = "ocr_handwriting_legacy"
+
+    # Generate a placeholder doc_uuid (we don't have the original)
+    doc_uuid = "legacy-" + page_uuids[0] if page_uuids else "legacy-unknown"
+
+    save_path = store.save_artifacts(
+        test_id=test_id,
+        doc_uuid=doc_uuid,
+        page_uuids=page_uuids,
+        rm_files=rm_files,
+        source_markdown=source_md,
+        description=old_manifest.get("description", "Migrated legacy testdata"),
+        metadata={
+            "migrated_from": "ocr_handwriting",
+            "original_created_at": old_manifest.get("created_at", "unknown"),
+            "test_cases": json.dumps(old_manifest.get("test_cases", [])),
+        },
+    )
+
+    click.echo(f"\nMigrated to: {save_path}")
+    click.echo(f"Test ID: {test_id}")
+    click.echo(f"\nTo replay:")
+    click.echo(f"  uv run pytest tests/device_bench/test_offline_replay.py -v")
+
+
+@cli.command()
+@click.pass_context
+def reset(ctx: click.Context) -> None:
+    """Reset workspace state.
+
+    Cleans up the workspace directory and cloud state.
+    """
+    device_folder = ctx.obj["device_folder"]
+    bench, workspace = setup_workspace(device_folder)
+    workspace.reset()
+    click.echo("Workspace reset complete")
+
+
+@cli.command()
+@click.pass_context
+def setup(ctx: click.Context) -> None:
+    """Setup workspace only.
+
+    Creates workspace directory and config without running tests.
+    """
+    device_folder = ctx.obj["device_folder"]
+    bench, workspace = setup_workspace(device_folder)
+    click.echo(f"Workspace ready at: {workspace.workspace_dir}")
 
 
 def main():
     """Main entry point."""
-    global _cleanup_on_exit
-
-    parser = argparse.ArgumentParser(description="Device Test Runner")
-    parser.add_argument(
-        "--test",
-        choices=list(TESTS_BY_NAME.keys()),
-        help="Run specific test",
-    )
-    parser.add_argument(
-        "--reset",
-        action="store_true",
-        help="Reset workspace state",
-    )
-    parser.add_argument(
-        "--setup",
-        action="store_true",
-        help="Setup workspace only",
-    )
-    parser.add_argument(
-        "--cleanup",
-        action="store_true",
-        help="Cleanup workspace on exit",
-    )
-    parser.add_argument(
-        "--no-cleanup",
-        action="store_true",
-        help="Don't cleanup workspace after test",
-    )
-    parser.add_argument(
-        "--extract-testdata",
-        action="store_true",
-        help="Extract .rm files with handwriting for automated testing",
-    )
-
-    args = parser.parse_args()
-    _cleanup_on_exit = args.cleanup
-
-    # Setup
-    bench, workspace = setup_workspace()
-
-    if args.reset:
-        workspace.reset()
-        sys.exit(0)
-
-    if args.setup:
-        sys.exit(0)
-
-    if args.extract_testdata:
-        success = extract_testdata(bench, workspace)
-        sys.exit(0 if success else 1)
-
-    if args.test:
-        cleanup = not args.no_cleanup
-        success = run_test(args.test, bench, workspace, cleanup)
-        sys.exit(0 if success else 1)
-
-    # Run all tests
-    cleanup = not args.no_cleanup
-    results = run_all_tests(bench, workspace, cleanup)
-    passed = sum(1 for _, s in results if s)
-    sys.exit(0 if passed == len(results) else 1)
+    cli()
 
 
 if __name__ == "__main__":
