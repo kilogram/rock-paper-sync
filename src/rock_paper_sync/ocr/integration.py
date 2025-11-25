@@ -54,6 +54,7 @@ from rock_paper_sync.parser import ContentBlock, parse_content
 if TYPE_CHECKING:
     from rock_paper_sync.config import OCRConfig
     from rock_paper_sync.state import StateManager
+    from rmscene.tagged_block_common import CrdtId
 
 logger = logging.getLogger("rock_paper_sync.ocr.integration")
 
@@ -88,6 +89,18 @@ class OCRProcessor:
         if self._service is None:
             self._service = create_ocr_service(self.config)
         return self._service
+
+    def cleanup(self) -> None:
+        """Clean up resources held by the processor.
+
+        Must be called when the processor is no longer needed to release
+        HTTP connections and other resources held by the OCR service.
+        """
+        if self._service is not None:
+            if hasattr(self._service, 'close'):
+                self._service.close()
+            self._service = None
+            logger.debug("OCR processor cleaned up")
 
     def process_annotations(
         self,
@@ -389,27 +402,37 @@ class OCRProcessor:
         if not annotations:
             return []
 
-        if len(annotations) == 1:
-            return [annotations]
-
         # Extract bounding boxes and calculate centers
+        # Filter out annotations without valid geometry to avoid corrupt clustering
         centers = []
+        valid_annotations = []
+
         for ann in annotations:
+            center = None
+
             if ann.type == AnnotationType.STROKE and ann.stroke:
                 bbox = ann.stroke.bounding_box
-                cx = bbox.x + bbox.w / 2
-                cy = bbox.y + bbox.h / 2
-                centers.append((cx, cy))
+                center = (bbox.x + bbox.w / 2, bbox.y + bbox.h / 2)
             elif ann.type == AnnotationType.HIGHLIGHT and ann.highlight:
                 if ann.highlight.rectangles:
                     rect = ann.highlight.rectangles[0]
-                    cx = rect.x + rect.w / 2
-                    cy = rect.y + rect.h / 2
-                    centers.append((cx, cy))
-                else:
-                    centers.append((0, 0))
+                    center = (rect.x + rect.w / 2, rect.y + rect.h / 2)
+
+            if center is not None:
+                centers.append(center)
+                valid_annotations.append(ann)
             else:
-                centers.append((0, 0))
+                logger.warning(
+                    f"Skipping annotation with no valid geometry: type={ann.type}"
+                )
+
+        # Use valid_annotations for the rest of clustering
+        annotations = valid_annotations
+        if not annotations:
+            return []
+
+        if len(annotations) == 1:
+            return [annotations]
 
         # Build adjacency graph using Euclidean distance
         n = len(annotations)

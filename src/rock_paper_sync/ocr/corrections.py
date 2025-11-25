@@ -140,6 +140,9 @@ class CorrectionManager:
     def store_annotation_image(self, image_data: bytes, annotation_uuid: str) -> str:
         """Store an annotation image for potential future corrections.
 
+        Uses atomic write via temp file to avoid TOCTOU race conditions
+        when multiple processes write the same image concurrently.
+
         Args:
             image_data: PNG image data
             annotation_uuid: UUID of the annotation
@@ -151,9 +154,20 @@ class CorrectionManager:
         image_path = self.images_dir / f"{image_hash}.png"
 
         if not image_path.exists():
-            with open(image_path, "wb") as f:
-                f.write(image_data)
-            logger.debug(f"Stored annotation image: {image_hash}")
+            # Use temp file + atomic rename to avoid race conditions
+            temp_path = image_path.with_suffix('.tmp')
+            try:
+                with open(temp_path, "wb") as f:
+                    f.write(image_data)
+                # Atomic rename (on POSIX systems)
+                temp_path.replace(image_path)
+                logger.debug(f"Stored annotation image: {image_hash}")
+            except FileExistsError:
+                # Another process beat us to it, that's fine
+                temp_path.unlink(missing_ok=True)
+            except Exception:
+                temp_path.unlink(missing_ok=True)
+                raise
 
         return image_hash
 

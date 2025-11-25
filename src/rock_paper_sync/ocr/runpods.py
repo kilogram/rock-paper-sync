@@ -31,6 +31,21 @@ class RunpodsOCRService:
     """OCR service implementation using Runpods serverless endpoints.
 
     Implements OCRServiceProtocol for cloud-based inference and training.
+
+    Resource Management:
+        This service holds HTTP connections that must be explicitly closed.
+        Use as a context manager or call close() when done:
+
+            # Option 1: Context manager (preferred)
+            with RunpodsOCRService(endpoint_id, api_key) as service:
+                results = service.recognize_batch(requests)
+
+            # Option 2: Explicit cleanup
+            service = RunpodsOCRService(endpoint_id, api_key)
+            try:
+                results = service.recognize_batch(requests)
+            finally:
+                service.close()
     """
 
     def __init__(
@@ -300,12 +315,15 @@ class RunpodsOCRService:
             logger.warning(f"Health check failed: {e}")
             return False
 
-    def _poll_job(self, job_id: str, poll_interval: float = 1.0) -> dict:
-        """Poll for job completion with exponential backoff.
+    def _poll_job(
+        self, job_id: str, poll_interval: float = 1.0, max_retries: int = 3
+    ) -> dict:
+        """Poll for job completion with exponential backoff and retry logic.
 
         Args:
             job_id: Job ID to poll
             poll_interval: Initial seconds between polls
+            max_retries: Max retries for transient network errors
 
         Returns:
             Job result data
@@ -317,27 +335,54 @@ class RunpodsOCRService:
         current_interval = poll_interval
         max_interval = 30.0
         backoff_factor = 1.5
+        retry_count = 0
 
         while True:
             if time.time() - start_time > self.timeout:
                 raise OCRServiceError(f"Job {job_id} timed out after {self.timeout}s")
 
-            response = self._client.get(f"/status/{job_id}")
-            response.raise_for_status()
-            data = response.json()
+            try:
+                response = self._client.get(f"/status/{job_id}")
+                response.raise_for_status()
+                data = response.json()
+                retry_count = 0  # Reset on success
 
-            status = data.get("status")
-            if status == "COMPLETED":
-                return data
-            elif status == "FAILED":
-                error = data.get("error", "Unknown error")
-                raise OCRServiceError(f"Job {job_id} failed: {error}")
-            elif status in ("IN_QUEUE", "IN_PROGRESS"):
-                time.sleep(current_interval)
-                # Exponential backoff to reduce API load
-                current_interval = min(current_interval * backoff_factor, max_interval)
-            else:
-                raise OCRServiceError(f"Unknown job status: {status}")
+                status = data.get("status")
+                if status == "COMPLETED":
+                    return data
+                elif status == "FAILED":
+                    error = data.get("error", "Unknown error")
+                    raise OCRServiceError(f"Job {job_id} failed: {error}")
+                elif status in ("IN_QUEUE", "IN_PROGRESS"):
+                    time.sleep(current_interval)
+                    # Exponential backoff to reduce API load
+                    current_interval = min(current_interval * backoff_factor, max_interval)
+                else:
+                    raise OCRServiceError(f"Unknown job status: {status}")
+
+            except httpx.HTTPStatusError as e:
+                # Retry on transient server errors
+                if e.response.status_code in (502, 503, 504) and retry_count < max_retries:
+                    retry_count += 1
+                    logger.warning(
+                        f"Transient error {e.response.status_code} polling job {job_id}, "
+                        f"retry {retry_count}/{max_retries}"
+                    )
+                    time.sleep(current_interval)
+                    continue
+                raise OCRServiceError(
+                    f"Job polling failed: {e.response.status_code} - {e.response.text}"
+                )
+            except httpx.RequestError as e:
+                # Retry on network errors
+                if retry_count < max_retries:
+                    retry_count += 1
+                    logger.warning(
+                        f"Network error polling job {job_id}, retry {retry_count}/{max_retries}: {e}"
+                    )
+                    time.sleep(current_interval)
+                    continue
+                raise OCRServiceError(f"Job polling failed after {max_retries} retries: {e}")
 
     def close(self) -> None:
         """Close the HTTP client."""
@@ -348,16 +393,3 @@ class RunpodsOCRService:
 
     def __exit__(self, *args) -> None:
         self.close()
-
-    def __del__(self) -> None:
-        """Ensure client is closed on garbage collection.
-
-        This prevents resource leaks if the service is instantiated
-        without using a context manager.
-        """
-        if hasattr(self, '_client'):
-            try:
-                self._client.close()
-            except Exception:
-                # Ignore errors during cleanup
-                pass

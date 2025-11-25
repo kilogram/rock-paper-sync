@@ -105,10 +105,11 @@ class TrainingJob:
     error_message: str | None = None
 
 
-class OCRServiceProtocol(Protocol):
-    """Protocol for OCR service implementations.
+class OCRInferenceProtocol(Protocol):
+    """Protocol for OCR inference operations.
 
-    All OCR providers (local Podman, Runpods) must implement this interface.
+    Providers that only support recognition (e.g., commercial APIs) should
+    implement this interface. Use this for read-only OCR operations.
     """
 
     def recognize(self, request: OCRRequest) -> OCRResult:
@@ -141,6 +142,22 @@ class OCRServiceProtocol(Protocol):
         """
         ...
 
+    def health_check(self) -> bool:
+        """Check if the service is available.
+
+        Returns:
+            True if service is healthy, False otherwise
+        """
+        ...
+
+
+class OCRTrainingProtocol(Protocol):
+    """Protocol for OCR training operations.
+
+    Providers that support fine-tuning (e.g., self-hosted) should implement
+    this interface in addition to OCRInferenceProtocol.
+    """
+
     def fine_tune(self, dataset_version: str) -> TrainingJob:
         """Initiate a fine-tuning job.
 
@@ -163,10 +180,15 @@ class OCRServiceProtocol(Protocol):
         """
         ...
 
-    def health_check(self) -> bool:
-        """Check if the service is available.
 
-        Returns:
-            True if service is healthy, False otherwise
-        """
-        ...
+class OCRServiceProtocol(OCRInferenceProtocol, OCRTrainingProtocol, Protocol):
+    """Full OCR service protocol combining inference and training.
+
+    All-in-one providers (local Podman, Runpods) that support both inference
+    and training should implement this interface. This maintains backwards
+    compatibility with existing code.
+
+    For inference-only providers (e.g., commercial APIs), implement only
+    OCRInferenceProtocol instead.
+    """
+    ...

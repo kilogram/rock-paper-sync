@@ -446,6 +446,14 @@ def validate_config(config: AppConfig) -> None:
                 f"Must be one of: {', '.join(valid_providers)}"
             )
 
+        if config.ocr.provider == "local":
+            # Local provider not yet implemented - fail fast at config time
+            raise ConfigError(
+                "Local Podman OCR provider is not yet implemented.\n"
+                "Please set provider='runpods' to use the Runpods cloud service,\n"
+                "or disable OCR by setting enabled=false."
+            )
+
         if config.ocr.provider == "runpods":
             # Runpods credentials can come from env vars, so just warn if not in config
             if not config.ocr.runpods_endpoint_id and not os.environ.get("RPS_RUNPODS_ENDPOINT_ID"):
