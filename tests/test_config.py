@@ -8,6 +8,7 @@ from rock_paper_sync.config import (
     AppConfig,
     ConfigError,
     LayoutConfig,
+    OCRConfig,
     SyncConfig,
     VaultConfig,
     expand_path,
@@ -202,6 +203,7 @@ class TestValidateConfig:
             layout=config.layout,
             log_level=config.log_level,
             log_file=config.log_file,
+            ocr=OCRConfig(),
         )
 
         with pytest.raises(ConfigError, match="directory does not exist"):
@@ -232,6 +234,7 @@ class TestValidateConfig:
             layout=config.layout,
             log_level=config.log_level,
             log_file=config.log_file,
+            ocr=OCRConfig(),
         )
 
         with pytest.raises(ConfigError, match="not a directory"):
@@ -253,6 +256,7 @@ class TestValidateConfig:
             layout=config.layout,
             log_level=config.log_level,
             log_file=config.log_file,
+            ocr=OCRConfig(),
         )
 
         # Should create directory
@@ -272,6 +276,7 @@ class TestValidateConfig:
             layout=config.layout,
             log_level=config.log_level,
             log_file=new_log_path,
+            ocr=OCRConfig(),
         )
 
         # Should create directory
@@ -292,6 +297,7 @@ class TestValidateConfig:
             layout=config.layout,
             log_level=config.log_level,
             log_file=config.log_file,
+            ocr=OCRConfig(),
         )
 
         with pytest.raises(ConfigError, match="debounce_seconds must be positive"):
@@ -312,6 +318,7 @@ class TestValidateConfig:
             ),
             log_level=config.log_level,
             log_file=config.log_file,
+            ocr=OCRConfig(),
         )
 
         with pytest.raises(ConfigError, match="lines_per_page must be positive"):
@@ -332,6 +339,7 @@ class TestValidateConfig:
             ),
             log_level=config.log_level,
             log_file=config.log_file,
+            ocr=OCRConfig(),
         )
 
         with pytest.raises(ConfigError, match="margin_top must be non-negative"):
@@ -346,6 +354,7 @@ class TestValidateConfig:
             layout=config.layout,
             log_level="invalid_level",
             log_file=config.log_file,
+            ocr=OCRConfig(),
         )
 
         with pytest.raises(ConfigError, match="Invalid log level"):
@@ -372,6 +381,7 @@ class TestValidateConfig:
             layout=config.layout,
             log_level=config.log_level,
             log_file=config.log_file,
+            ocr=OCRConfig(),
         )
 
         with pytest.raises(ConfigError, match="has no include_patterns"):
@@ -423,6 +433,7 @@ class TestValidateConfig:
             ),
             log_level=config.log_level,
             log_file=config.log_file,
+            ocr=OCRConfig(),
         )
 
         with pytest.raises(ConfigError, match="margin_bottom must be non-negative"):
@@ -443,6 +454,7 @@ class TestValidateConfig:
             ),
             log_level=config.log_level,
             log_file=config.log_file,
+            ocr=OCRConfig(),
         )
 
         with pytest.raises(ConfigError, match="margin_left must be non-negative"):
@@ -463,6 +475,7 @@ class TestValidateConfig:
             ),
             log_level=config.log_level,
             log_file=config.log_file,
+            ocr=OCRConfig(),
         )
 
         with pytest.raises(ConfigError, match="margin_right must be non-negative"):
@@ -484,6 +497,7 @@ class TestValidateConfig:
             layout=config.layout,
             log_level=config.log_level,
             log_file=config.log_file,
+            ocr=OCRConfig(),
         )
 
         # Mock mkdir to raise an exception
@@ -511,6 +525,7 @@ class TestValidateConfig:
             layout=config.layout,
             log_level=config.log_level,
             log_file=config.log_file,
+            ocr=OCRConfig(),
         )
 
         # Mock os.access to return False for write permission only for state db dir
@@ -536,6 +551,7 @@ class TestValidateConfig:
             layout=config.layout,
             log_level=config.log_level,
             log_file=bad_log,
+            ocr=OCRConfig(),
         )
 
         # Mock mkdir to raise an exception
@@ -559,6 +575,7 @@ class TestValidateConfig:
             layout=config.layout,
             log_level=config.log_level,
             log_file=log_path,
+            ocr=OCRConfig(),
         )
 
         # Mock os.access to return False for write permission only for log dir

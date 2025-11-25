@@ -605,5 +605,261 @@ def trigger_sync(ctx: click.Context) -> None:
         sys.exit(1)
 
 
+# OCR Commands
+
+
+@main.command("ocr-status")
+@click.pass_context
+def ocr_status(ctx: click.Context) -> None:
+    """Show OCR service status and statistics.
+
+    Displays information about:
+    - Service configuration and provider
+    - Active model version
+    - Correction counts
+    - Dataset and model counts
+    """
+    config: AppConfig = ctx.obj["config"]
+
+    if not config.ocr.enabled:
+        click.echo("OCR is not enabled in configuration")
+        click.echo("Set [ocr] enabled = true to enable OCR processing")
+        return
+
+    click.echo(f"OCR Configuration:")
+    click.echo(f"  Provider: {config.ocr.provider}")
+    click.echo(f"  Model version: {config.ocr.model_version}")
+    click.echo(f"  Cache directory: {config.ocr.cache_dir}")
+    click.echo()
+
+    # Get training stats
+    state = StateManager(config.sync.state_database)
+
+    from rock_paper_sync.ocr.training import TrainingPipeline
+    pipeline = TrainingPipeline(config.ocr, state)
+    stats = pipeline.get_stats()
+
+    click.echo("Corrections:")
+    click.echo(f"  Pending: {stats['corrections']['pending']}")
+    click.echo(f"  Total: {stats['corrections']['total']}")
+    click.echo(f"  In datasets: {stats['corrections']['datasets']}")
+    click.echo()
+
+    click.echo(f"Datasets: {stats['datasets']}")
+    click.echo(f"Models: {stats['models']}")
+
+    if stats["active_model"]:
+        click.echo(f"Active model: {stats['active_model']}")
+    else:
+        click.echo("Active model: base (not fine-tuned)")
+
+    # Check service health if using Runpods
+    if config.ocr.provider == "runpods":
+        try:
+            from rock_paper_sync.ocr.factory import create_ocr_service
+            service = create_ocr_service(config.ocr)
+            if service.health_check():
+                click.echo("\nService status: healthy")
+            else:
+                click.echo("\nService status: unavailable")
+        except Exception as e:
+            click.echo(f"\nService status: error - {e}")
+
+    state.close()
+
+
+@main.command("ocr-train")
+@click.option("--dataset", "-d", help="Dataset version to train on")
+@click.option("--output", "-o", help="Output model version")
+@click.option("--min-samples", default=100, help="Minimum samples for auto-dataset creation")
+@click.option("--use-dvc", is_flag=True, help="Use DVC pipeline for training")
+@click.pass_context
+def ocr_train(
+    ctx: click.Context,
+    dataset: str | None,
+    output: str | None,
+    min_samples: int,
+    use_dvc: bool,
+) -> None:
+    """Create dataset and train OCR model.
+
+    If --dataset is not specified, automatically creates a dataset from
+    pending corrections (if enough samples are available).
+
+    Training uses the container runtime specified in config (podman/docker).
+
+    Examples:
+        # Auto-create dataset and train
+        rock-paper-sync ocr-train
+
+        # Train on specific dataset
+        rock-paper-sync ocr-train --dataset v1
+
+        # Use DVC for reproducible training
+        rock-paper-sync ocr-train --use-dvc
+    """
+    config: AppConfig = ctx.obj["config"]
+
+    if not config.ocr.enabled:
+        click.echo("OCR is not enabled in configuration", err=True)
+        return
+
+    state = StateManager(config.sync.state_database)
+
+    from rock_paper_sync.ocr.training import TrainingPipeline
+    pipeline = TrainingPipeline(config.ocr, state)
+
+    # Create dataset if not specified
+    if not dataset:
+        click.echo("Creating dataset from pending corrections...")
+        dataset_version = pipeline.prepare_dataset()
+
+        if not dataset_version:
+            pending = state.get_ocr_correction_stats()["pending"]
+            click.echo(
+                f"Insufficient corrections: {pending}/{min_samples} required",
+                err=True
+            )
+            state.close()
+            return
+
+        dataset = dataset_version.version
+        click.echo(f"Created dataset {dataset} with {dataset_version.sample_count} samples")
+
+    # Run training
+    click.echo(f"Training on dataset {dataset}...")
+
+    try:
+        if use_dvc:
+            model = pipeline.run_dvc_pipeline(dataset)
+        else:
+            model = pipeline.train(dataset, output)
+
+        click.echo(f"\n✓ Training complete!")
+        click.echo(f"  Model version: {model.version}")
+        click.echo(f"  Checkpoint: {model.checkpoint_path}")
+
+        if model.metrics:
+            click.echo("  Metrics:")
+            for key, value in model.metrics.items():
+                click.echo(f"    {key}: {value}")
+
+    except Exception as e:
+        click.echo(f"✗ Training failed: {e}", err=True)
+        state.close()
+        sys.exit(1)
+
+    state.close()
+
+
+@main.command("ocr-models")
+@click.pass_context
+def ocr_models(ctx: click.Context) -> None:
+    """List available OCR model versions.
+
+    Shows all trained models with their metrics and indicates
+    which model is currently active.
+    """
+    config: AppConfig = ctx.obj["config"]
+
+    if not config.ocr.enabled:
+        click.echo("OCR is not enabled in configuration", err=True)
+        return
+
+    from rock_paper_sync.ocr.training import ModelRegistry
+    registry = ModelRegistry(config.ocr.cache_dir)
+
+    versions = registry.get_all_versions()
+
+    if not versions:
+        click.echo("No trained models available")
+        click.echo("Use 'ocr-train' to train a model")
+        return
+
+    click.echo("Available models:\n")
+
+    for model in versions:
+        status = " (active)" if model.is_active else ""
+        click.echo(f"{model.version}{status}")
+        click.echo(f"  Base: {model.base_model}")
+        click.echo(f"  Dataset: {model.dataset_version}")
+        click.echo(f"  Created: {model.created_at.strftime('%Y-%m-%d %H:%M')}")
+
+        if model.metrics:
+            metrics_str = ", ".join(f"{k}={v:.4f}" for k, v in model.metrics.items())
+            click.echo(f"  Metrics: {metrics_str}")
+
+        click.echo()
+
+
+@main.command("ocr-activate")
+@click.argument("version")
+@click.pass_context
+def ocr_activate(ctx: click.Context, version: str) -> None:
+    """Activate a specific model version.
+
+    The activated model will be used for all OCR inference.
+
+    Use 'ocr-models' to list available versions.
+    """
+    config: AppConfig = ctx.obj["config"]
+
+    if not config.ocr.enabled:
+        click.echo("OCR is not enabled in configuration", err=True)
+        return
+
+    from rock_paper_sync.ocr.training import ModelRegistry
+    registry = ModelRegistry(config.ocr.cache_dir)
+
+    try:
+        registry.activate(version)
+        click.echo(f"✓ Activated model version: {version}")
+    except ValueError as e:
+        click.echo(f"✗ {e}", err=True)
+        sys.exit(1)
+
+
+@main.command("ocr-prepare-dataset")
+@click.option("--version", "-v", help="Version string for dataset")
+@click.option("--min-samples", default=100, help="Minimum corrections required")
+@click.pass_context
+def ocr_prepare_dataset(
+    ctx: click.Context,
+    version: str | None,
+    min_samples: int,
+) -> None:
+    """Create a dataset from pending corrections.
+
+    Batches all pending corrections into a versioned dataset
+    for training. The dataset is stored in the XDG cache directory.
+
+    This command is typically called by DVC but can be run manually.
+    """
+    config: AppConfig = ctx.obj["config"]
+
+    if not config.ocr.enabled:
+        click.echo("OCR is not enabled in configuration", err=True)
+        return
+
+    state = StateManager(config.sync.state_database)
+
+    from rock_paper_sync.ocr.training import DatasetManager
+    manager = DatasetManager(config.ocr.cache_dir, state)
+
+    dataset = manager.create_dataset_version(min_samples)
+
+    if dataset:
+        click.echo(f"✓ Created dataset {dataset.version}")
+        click.echo(f"  Samples: {dataset.sample_count}")
+        click.echo(f"  Path: {dataset.parquet_path}")
+    else:
+        pending = state.get_ocr_correction_stats()["pending"]
+        click.echo(f"Insufficient corrections: {pending}/{min_samples}", err=True)
+        state.close()
+        sys.exit(1)
+
+    state.close()
+
+
 if __name__ == "__main__":
     main()

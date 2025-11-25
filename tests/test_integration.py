@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from rock_paper_sync.config import AppConfig, CloudConfig, LayoutConfig, SyncConfig, VaultConfig
+from rock_paper_sync.config import AppConfig, CloudConfig, LayoutConfig, OCRConfig, SyncConfig, VaultConfig
 from rock_paper_sync.parser import BlockType, FormatStyle, parse_markdown_file
 from rock_paper_sync.state import StateManager, SyncRecord
 
@@ -50,6 +50,7 @@ def integration_env(tmp_path: Path):
         ),
         log_level="debug",
         log_file=log_file,
+        ocr=OCRConfig(),
     )
 
     state = StateManager(db)
