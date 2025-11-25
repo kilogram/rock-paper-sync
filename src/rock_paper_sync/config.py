@@ -77,6 +77,45 @@ class CloudConfig:
 
 
 @dataclass(frozen=True)
+class OCRConfig:
+    """OCR processing configuration.
+
+    Attributes:
+        enabled: Whether OCR processing is enabled
+        provider: OCR provider ('local' or 'runpods')
+        model_version: Model version to use ('latest' or specific version)
+        confidence_threshold: Minimum confidence to accept OCR result
+        timeout: Request timeout in seconds
+        container_runtime: Container runtime for local ('podman' or 'docker')
+        local_image: Container image for local inference
+        local_gpu_device: GPU device for local inference ('cpu' or device index)
+        runpods_endpoint_id: Runpods endpoint ID (or from env var)
+        runpods_api_key: Runpods API key (or from env var)
+        cache_dir: XDG cache directory for OCR artifacts
+        min_corrections_for_dataset: Minimum corrections before creating dataset
+        auto_fine_tune: Automatically trigger fine-tuning when threshold reached
+        base_model: Base TrOCR model for fine-tuning
+        use_lora: Use LoRA for efficient fine-tuning
+    """
+
+    enabled: bool = False
+    provider: str = "runpods"
+    model_version: str = "latest"
+    confidence_threshold: float = 0.7
+    timeout: float = 120.0
+    container_runtime: str = "podman"
+    local_image: str = "rock-paper-sync/ocr:latest"
+    local_gpu_device: str = "0"
+    runpods_endpoint_id: Optional[str] = None
+    runpods_api_key: Optional[str] = None
+    cache_dir: Optional[Path] = None
+    min_corrections_for_dataset: int = 100
+    auto_fine_tune: bool = False
+    base_model: str = "microsoft/trocr-base-handwritten"
+    use_lora: bool = True
+
+
+@dataclass(frozen=True)
 class AppConfig:
     """Complete application configuration."""
 
@@ -85,6 +124,8 @@ class AppConfig:
     log_level: str
     log_file: Path
     cloud: CloudConfig
+    ocr: OCRConfig
+    cache_dir: Path  # General application cache directory (XDG standard)
 
 
 def expand_path(path_str: str) -> Path:
@@ -224,12 +265,55 @@ def load_config(config_path: Path) -> AppConfig:
 
         cloud_config = CloudConfig(base_url=base_url)
 
+        # Determine general application cache directory (XDG standard)
+        paths = config_dict.get("paths", {})
+        xdg_cache = os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache"))
+        default_cache = Path(xdg_cache) / "rock-paper-sync"
+
+        cache_dir_config = paths.get("cache_dir")
+        if cache_dir_config:
+            app_cache_dir = expand_path(cache_dir_config)
+        else:
+            app_cache_dir = default_cache
+
+        # Extract OCR section (optional)
+        ocr = config_dict.get("ocr", {})
+
+        # OCR cache is a subdirectory of general cache (unless explicitly overridden)
+        default_ocr_cache = app_cache_dir / "ocr"
+
+        ocr_cache_dir = ocr.get("cache_dir")
+        if ocr_cache_dir:
+            ocr_cache_path = expand_path(ocr_cache_dir)
+        else:
+            ocr_cache_path = default_ocr_cache
+
+        ocr_config = OCRConfig(
+            enabled=ocr.get("enabled", False),
+            provider=ocr.get("provider", "runpods"),
+            model_version=ocr.get("model_version", "latest"),
+            confidence_threshold=ocr.get("confidence_threshold", 0.7),
+            timeout=ocr.get("timeout", 120.0),
+            container_runtime=ocr.get("container_runtime", "podman"),
+            local_image=ocr.get("local_image", "rock-paper-sync/ocr:latest"),
+            local_gpu_device=str(ocr.get("local_gpu_device", "0")),
+            runpods_endpoint_id=ocr.get("runpods_endpoint_id"),
+            runpods_api_key=ocr.get("runpods_api_key"),
+            cache_dir=ocr_cache_path,
+            min_corrections_for_dataset=ocr.get("min_corrections_for_dataset", 100),
+            auto_fine_tune=ocr.get("auto_fine_tune", False),
+            base_model=ocr.get("base_model", "microsoft/trocr-base-handwritten"),
+            use_lora=ocr.get("use_lora", True),
+        )
+
         app_config = AppConfig(
             sync=sync_config,
             layout=layout_config,
             log_level=log_level,
             log_file=expand_path(log_file),
             cloud=cloud_config,
+            ocr=ocr_config,
+            cache_dir=app_cache_dir,
         )
 
         return app_config
@@ -352,4 +436,62 @@ def validate_config(config: AppConfig) -> None:
             f"Invalid log level: {config.log_level}\n"
             f"Must be one of: {', '.join(valid_log_levels)}"
         )
+
+    # Validate OCR configuration (if enabled)
+    if config.ocr.enabled:
+        valid_providers = ["local", "runpods"]
+        if config.ocr.provider not in valid_providers:
+            raise ConfigError(
+                f"Invalid OCR provider: {config.ocr.provider}\n"
+                f"Must be one of: {', '.join(valid_providers)}"
+            )
+
+        if config.ocr.provider == "runpods":
+            # Runpods credentials can come from env vars, so just warn if not in config
+            if not config.ocr.runpods_endpoint_id and not os.environ.get("RPS_RUNPODS_ENDPOINT_ID"):
+                raise ConfigError(
+                    "Runpods OCR requires endpoint_id. Set in config or RPS_RUNPODS_ENDPOINT_ID env var."
+                )
+
+        if not 0.0 <= config.ocr.confidence_threshold <= 1.0:
+            raise ConfigError(
+                f"OCR confidence_threshold must be between 0.0 and 1.0, got: {config.ocr.confidence_threshold}"
+            )
+
+        if config.ocr.timeout <= 0:
+            raise ConfigError(
+                f"OCR timeout must be positive, got: {config.ocr.timeout}"
+            )
+
+        valid_runtimes = ["podman", "docker"]
+        if config.ocr.container_runtime not in valid_runtimes:
+            raise ConfigError(
+                f"Invalid container_runtime: {config.ocr.container_runtime}\n"
+                f"Must be one of: {', '.join(valid_runtimes)}"
+            )
+
+        if config.ocr.min_corrections_for_dataset <= 0:
+            raise ConfigError(
+                f"min_corrections_for_dataset must be positive, got: {config.ocr.min_corrections_for_dataset}"
+            )
+
+        # Create general cache directory if it doesn't exist
+        if config.cache_dir and not config.cache_dir.exists():
+            try:
+                config.cache_dir.mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                raise ConfigError(
+                    f"Cannot create cache directory: {config.cache_dir}\n"
+                    f"Error: {e}"
+                )
+
+        # Create OCR cache directory if it doesn't exist
+        if config.ocr.cache_dir and not config.ocr.cache_dir.exists():
+            try:
+                config.ocr.cache_dir.mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                raise ConfigError(
+                    f"Cannot create OCR cache directory: {config.ocr.cache_dir}\n"
+                    f"Error: {e}"
+                )
 

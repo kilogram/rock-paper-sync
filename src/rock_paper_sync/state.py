@@ -37,7 +37,7 @@ class SyncRecord:
 class StateManager:
     """Manages sync state using SQLite database."""
 
-    SCHEMA_VERSION = 4
+    SCHEMA_VERSION = 5
 
     def __init__(self, db_path: Path) -> None:
         """Initialize state manager with database at given path.
@@ -111,8 +111,45 @@ class StateManager:
                     version INTEGER PRIMARY KEY
                 );
 
+                -- OCR results (schema v5)
+                CREATE TABLE IF NOT EXISTS ocr_results (
+                    vault_name TEXT NOT NULL,
+                    obsidian_path TEXT NOT NULL,
+                    annotation_uuid TEXT NOT NULL,
+                    paragraph_index INTEGER NOT NULL,
+                    ocr_text TEXT NOT NULL,
+                    ocr_text_hash TEXT NOT NULL,
+                    original_text_hash TEXT NOT NULL,
+                    image_hash TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    model_version TEXT NOT NULL,
+                    processed_time INTEGER NOT NULL,
+                    PRIMARY KEY (vault_name, obsidian_path, annotation_uuid)
+                );
+
+                -- OCR corrections for fine-tuning (schema v5)
+                CREATE TABLE IF NOT EXISTS ocr_corrections (
+                    id TEXT PRIMARY KEY,
+                    image_hash TEXT NOT NULL UNIQUE,
+                    image_path TEXT NOT NULL,
+                    original_text TEXT NOT NULL,
+                    corrected_text TEXT NOT NULL,
+                    paragraph_context TEXT,
+                    document_id TEXT NOT NULL,
+                    dataset_version TEXT,
+                    created_at INTEGER NOT NULL
+                );
+
+                -- Index for finding pending corrections
+                CREATE INDEX IF NOT EXISTS idx_corrections_pending
+                ON ocr_corrections(dataset_version) WHERE dataset_version IS NULL;
+
+                -- Index for finding OCR results by document
+                CREATE INDEX IF NOT EXISTS idx_ocr_results_document
+                ON ocr_results(vault_name, obsidian_path);
+
                 -- Insert schema version if not exists
-                INSERT OR IGNORE INTO schema_version (version) VALUES (4);
+                INSERT OR IGNORE INTO schema_version (version) VALUES (5);
                 """
             )
 
@@ -582,6 +619,266 @@ class StateManager:
                 (vault_name, obsidian_path),
             )
         logger.debug(f"Deleted paragraph states for {vault_name}:{obsidian_path}")
+
+    # OCR-related methods (schema v5)
+
+    def update_ocr_result(
+        self,
+        vault_name: str,
+        obsidian_path: str,
+        annotation_uuid: str,
+        paragraph_index: int,
+        ocr_text: str,
+        ocr_text_hash: str,
+        original_text_hash: str,
+        image_hash: str,
+        confidence: float,
+        model_version: str,
+    ) -> None:
+        """Store or update an OCR result.
+
+        Args:
+            vault_name: Name of the vault
+            obsidian_path: Relative path of file
+            annotation_uuid: UUID of the annotation
+            paragraph_index: Index of paragraph in document
+            ocr_text: Recognized text
+            ocr_text_hash: Hash of OCR text
+            original_text_hash: Hash of original paragraph text
+            image_hash: Hash of annotation image
+            confidence: OCR confidence score
+            model_version: Model version used
+        """
+        with self.conn:
+            self.conn.execute(
+                """
+                INSERT OR REPLACE INTO ocr_results
+                (vault_name, obsidian_path, annotation_uuid, paragraph_index,
+                 ocr_text, ocr_text_hash, original_text_hash, image_hash,
+                 confidence, model_version, processed_time)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    vault_name,
+                    obsidian_path,
+                    annotation_uuid,
+                    paragraph_index,
+                    ocr_text,
+                    ocr_text_hash,
+                    original_text_hash,
+                    image_hash,
+                    confidence,
+                    model_version,
+                    int(time.time()),
+                ),
+            )
+        logger.debug(f"Updated OCR result for {vault_name}:{obsidian_path}[{paragraph_index}]")
+
+    def get_ocr_result(
+        self, vault_name: str, obsidian_path: str, annotation_uuid: str
+    ) -> Optional[dict]:
+        """Get OCR result for an annotation.
+
+        Args:
+            vault_name: Name of the vault
+            obsidian_path: Relative path of file
+            annotation_uuid: UUID of the annotation
+
+        Returns:
+            Dictionary with OCR result or None
+        """
+        cursor = self.conn.execute(
+            """
+            SELECT paragraph_index, ocr_text, ocr_text_hash, original_text_hash,
+                   image_hash, confidence, model_version, processed_time
+            FROM ocr_results
+            WHERE vault_name = ? AND obsidian_path = ? AND annotation_uuid = ?
+            """,
+            (vault_name, obsidian_path, annotation_uuid),
+        )
+        row = cursor.fetchone()
+        if row:
+            return {
+                "paragraph_index": row[0],
+                "ocr_text": row[1],
+                "ocr_text_hash": row[2],
+                "original_text_hash": row[3],
+                "image_hash": row[4],
+                "confidence": row[5],
+                "model_version": row[6],
+                "processed_time": row[7],
+                "annotation_uuid": annotation_uuid,
+            }
+        return None
+
+    def get_all_ocr_results(
+        self, vault_name: str, obsidian_path: str
+    ) -> dict[int, dict]:
+        """Get all OCR results for a document.
+
+        Args:
+            vault_name: Name of the vault
+            obsidian_path: Relative path of file
+
+        Returns:
+            Dictionary mapping paragraph_index to OCR result dict
+        """
+        cursor = self.conn.execute(
+            """
+            SELECT annotation_uuid, paragraph_index, ocr_text, ocr_text_hash,
+                   original_text_hash, image_hash, confidence, model_version, processed_time
+            FROM ocr_results
+            WHERE vault_name = ? AND obsidian_path = ?
+            ORDER BY paragraph_index
+            """,
+            (vault_name, obsidian_path),
+        )
+        return {
+            row[1]: {
+                "annotation_uuid": row[0],
+                "paragraph_index": row[1],
+                "ocr_text": row[2],
+                "ocr_text_hash": row[3],
+                "original_text_hash": row[4],
+                "image_hash": row[5],
+                "confidence": row[6],
+                "model_version": row[7],
+                "processed_time": row[8],
+            }
+            for row in cursor.fetchall()
+        }
+
+    def delete_ocr_results(self, vault_name: str, obsidian_path: str) -> None:
+        """Delete all OCR results for a document.
+
+        Args:
+            vault_name: Name of the vault
+            obsidian_path: Relative path of file
+        """
+        with self.conn:
+            self.conn.execute(
+                "DELETE FROM ocr_results WHERE vault_name = ? AND obsidian_path = ?",
+                (vault_name, obsidian_path),
+            )
+        logger.debug(f"Deleted OCR results for {vault_name}:{obsidian_path}")
+
+    def add_ocr_correction(
+        self,
+        correction_id: str,
+        image_hash: str,
+        image_path: str,
+        original_text: str,
+        corrected_text: str,
+        paragraph_context: str,
+        document_id: str,
+    ) -> None:
+        """Add an OCR correction for fine-tuning.
+
+        Args:
+            correction_id: Unique correction ID
+            image_hash: Hash of annotation image
+            image_path: Path to annotation image
+            original_text: Original OCR text
+            corrected_text: User-corrected text
+            paragraph_context: Context paragraph text
+            document_id: Source document identifier
+        """
+        with self.conn:
+            self.conn.execute(
+                """
+                INSERT OR REPLACE INTO ocr_corrections
+                (id, image_hash, image_path, original_text, corrected_text,
+                 paragraph_context, document_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    correction_id,
+                    image_hash,
+                    image_path,
+                    original_text,
+                    corrected_text,
+                    paragraph_context,
+                    document_id,
+                    int(time.time()),
+                ),
+            )
+        logger.debug(f"Added OCR correction {correction_id}")
+
+    def get_pending_ocr_corrections(self) -> list[dict]:
+        """Get all corrections not yet assigned to a dataset.
+
+        Returns:
+            List of correction dictionaries
+        """
+        cursor = self.conn.execute(
+            """
+            SELECT id, image_hash, image_path, original_text, corrected_text,
+                   paragraph_context, document_id, created_at
+            FROM ocr_corrections
+            WHERE dataset_version IS NULL
+            ORDER BY created_at
+            """
+        )
+        return [
+            {
+                "id": row[0],
+                "image_hash": row[1],
+                "image_path": row[2],
+                "original_text": row[3],
+                "corrected_text": row[4],
+                "paragraph_context": row[5],
+                "document_id": row[6],
+                "created_at": row[7],
+            }
+            for row in cursor.fetchall()
+        ]
+
+    def assign_corrections_to_dataset(
+        self, correction_ids: list[str], dataset_version: str
+    ) -> None:
+        """Assign corrections to a dataset version.
+
+        Args:
+            correction_ids: List of correction IDs
+            dataset_version: Dataset version string
+        """
+        with self.conn:
+            self.conn.executemany(
+                "UPDATE ocr_corrections SET dataset_version = ? WHERE id = ?",
+                [(dataset_version, cid) for cid in correction_ids],
+            )
+        logger.info(f"Assigned {len(correction_ids)} corrections to dataset {dataset_version}")
+
+    def get_all_correction_image_hashes(self) -> list[str]:
+        """Get all image hashes referenced by corrections.
+
+        Returns:
+            List of image hash strings
+        """
+        cursor = self.conn.execute("SELECT DISTINCT image_hash FROM ocr_corrections")
+        return [row[0] for row in cursor.fetchall()]
+
+    def get_ocr_correction_stats(self) -> dict[str, int]:
+        """Get OCR correction statistics.
+
+        Returns:
+            Dictionary with counts: {'pending': N, 'total': M, 'datasets': K}
+        """
+        cursor = self.conn.execute(
+            """
+            SELECT
+                COUNT(*) as total,
+                SUM(CASE WHEN dataset_version IS NULL THEN 1 ELSE 0 END) as pending,
+                COUNT(DISTINCT dataset_version) as datasets
+            FROM ocr_corrections
+            """
+        )
+        row = cursor.fetchone()
+        return {
+            "total": row[0] or 0,
+            "pending": row[1] or 0,
+            "datasets": row[2] or 0,
+        }
 
     def close(self) -> None:
         """Close database connection.
