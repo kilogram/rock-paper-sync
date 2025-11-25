@@ -7,4 +7,8 @@ services:
       - STORAGE_URL=http://localhost:3001
       - JWT_SECRET_KEY=test-secret-key
       - LOGLEVEL=debug
+    volumes:
+      # Persist rmfakecloud data (users, devices, documents) across container restarts
+      # This directory can be committed to git for team-wide setup
+      - ./fixtures/rmfakecloud_data:/data
     network_mode: "slirp4netns:port_handler=slirp4netns"

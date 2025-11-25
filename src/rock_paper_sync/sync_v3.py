@@ -517,19 +517,27 @@ class SyncV3Client:
                 current_root_hash, current_generation = self.get_current_generation()
                 root_entries = self.get_root_documents()
 
+                # DEBUG: Log current root state
+                logger.debug(f"  Current root has {len(root_entries)} entries")
+                for entry in root_entries:
+                    logger.debug(f"    - {entry.entry_name}: {entry.subfiles} files")
+
                 # Remove the document from root
                 doc_found = False
                 new_entries = []
                 for entry in root_entries:
                     if entry.entry_name == doc_uuid:
                         doc_found = True
-                        logger.debug(f"  Removing document from root: {doc_uuid}")
+                        logger.debug(f"  Removing document from root: {doc_uuid} ({entry.subfiles} files)")
                     else:
                         new_entries.append(entry)
 
                 if not doc_found:
-                    logger.warning(f"Document {doc_uuid} not found in root")
+                    logger.warning(f"Document {doc_uuid} not found in root (has {len(root_entries)} entries)")
                     return
+
+                # DEBUG: Log new root state
+                logger.debug(f"  New root will have {len(new_entries)} entries")
 
                 # Create new root index and upload it
                 root_index_hash, _ = self.upload_index(new_entries)

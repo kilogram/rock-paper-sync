@@ -86,15 +86,15 @@ file = "{self.log_dir}/sync.log"
 lines_per_page = 28
 
 [ocr]
-enabled = true
-provider = "runpods"
+enabled = false
+provider = "none"
 confidence_threshold = 0.5
 
 [[vaults]]
 name = "device-bench"
 path = "{self.workspace_dir}"
 remarkable_folder = "{self.device_folder}"
-include_patterns = ["document.md"]
+include_patterns = ["**/*.md"]
 exclude_patterns = [".state/**", "logs/**", ".cache/**"]
 """
         self.config_file.write_text(config)

@@ -374,12 +374,19 @@ def rmfakecloud_service(request):
 
     # Start container (use full registry path for podman compatibility)
     image = "docker.io/ddvk/rmfakecloud:latest"
+
+    # Mount persistent volume for rmfakecloud data (users, devices, documents)
+    fixtures_dir = Path(__file__).parent / "fixtures"
+    data_dir = fixtures_dir / "rmfakecloud_data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+
     cmd = [
         runtime, "run", "-d",
         "--name", container_name,
         "-p", f"{port}:3000",
         "-e", f"STORAGE_URL=http://localhost:{port}",
         "-e", "JWT_SECRET_KEY=test-secret-key",
+        "-v", f"{data_dir}:/data:Z",  # Persistent volume
         image,
     ]
 
@@ -389,6 +396,71 @@ def rmfakecloud_service(request):
 
     # Wait for ready
     if not _wait_for_ready(url, timeout=30.0):
+        subprocess.run([runtime, "stop", container_name], capture_output=True)
+        subprocess.run([runtime, "rm", container_name], capture_output=True)
+        pytest.fail(f"rmfakecloud failed to become ready at {url}")
+
+    yield url
+
+    # Cleanup
+    subprocess.run([runtime, "stop", container_name], capture_output=True)
+    subprocess.run([runtime, "rm", container_name], capture_output=True)
+
+
+@pytest.fixture(scope="function")
+def isolated_rmfakecloud(request, tmp_path):
+    """Start rmfakecloud with isolated state for this test.
+
+    Creates a fresh copy of rmfakecloud_data in /tmp for test isolation.
+    Each test gets a clean rmfakecloud instance with the registered device.
+
+    Returns:
+        str: URL of the isolated rmfakecloud instance
+    """
+    import subprocess
+    import shutil
+
+    runtime, _ = _get_container_runtime()
+    if not runtime:
+        pytest.skip("No container runtime found (docker/podman)")
+
+    # Copy rmfakecloud_data to temp directory for isolation
+    fixtures_dir = Path(__file__).parent / "fixtures"
+    source_data = fixtures_dir / "rmfakecloud_data"
+
+    if not source_data.exists():
+        pytest.skip("rmfakecloud_data not found - run setup first")
+
+    # Create isolated copy in /tmp
+    isolated_data = tmp_path / "rmfakecloud_data"
+    shutil.copytree(source_data, isolated_data)
+
+    # Start container with isolated data
+    container_name = f"test_rmfakecloud_{request.node.name.replace('[', '_').replace(']', '_')}"
+    port = 3001
+    url = f"http://localhost:{port}"
+
+    # Remove any existing container with this name
+    subprocess.run([runtime, "rm", "-f", container_name], capture_output=True)
+
+    # Start container
+    image = "docker.io/ddvk/rmfakecloud:latest"
+    cmd = [
+        runtime, "run", "-d",
+        "--name", container_name,
+        "-p", f"{port}:3000",
+        "-e", "STORAGE_URL=http://localhost",
+        "-e", "JWT_SECRET_KEY=2vrOXKJWZ7zgEAf7CjN89rnPW/XOc0pH4naGClMRPxs=",
+        "-v", f"{isolated_data}:/data:Z",
+        image,
+    ]
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        pytest.fail(f"Failed to start rmfakecloud: {result.stderr}")
+
+    # Wait for ready
+    if not _wait_for_ready(url, timeout=10.0):
         subprocess.run([runtime, "stop", container_name], capture_output=True)
         subprocess.run([runtime, "rm", container_name], capture_output=True)
         pytest.fail(f"rmfakecloud failed to become ready at {url}")
