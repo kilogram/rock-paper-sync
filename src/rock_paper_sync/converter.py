@@ -63,6 +63,7 @@ from .audit import get_audit_logger
 from .config import AppConfig, VaultConfig
 from .generator import RemarkableGenerator
 from .hashing import compute_file_hash
+from .ocr.integration import OCRProcessor
 from .parser import parse_markdown_file, BlockType, MarkdownDocument
 from .rm_cloud_client import RmCloudClient
 from .rm_cloud_sync import RmCloudSync
@@ -174,6 +175,12 @@ class SyncEngine:
         self.state = state
         self.generator = generator or RemarkableGenerator(config.layout)
 
+        # Initialize OCR processor if enabled
+        self.ocr_processor: Optional[OCRProcessor] = None
+        if config.ocr and config.ocr.enabled:
+            self.ocr_processor = OCRProcessor(config.ocr, state)
+            logger.info(f"OCR processor initialized (provider: {config.ocr.provider})")
+
         # Initialize cloud sync (injected or created)
         if cloud_sync is not None:
             self.cloud_sync = cloud_sync
@@ -263,7 +270,7 @@ class SyncEngine:
                 if existing_uuid:
                     existing_page_uuids = self.cloud_sync.get_existing_page_uuids(existing_uuid)
                     if existing_page_uuids:
-                        temp_dir = Path(f".cache/annotations/{existing_uuid}")
+                        temp_dir = self.config.cache_dir / "annotations" / existing_uuid
                         existing_rm_files = self.cloud_sync.download_page_rm_files(
                             existing_uuid, existing_page_uuids, temp_dir
                         )
@@ -281,7 +288,8 @@ class SyncEngine:
                 if annotation_map:
                     logger.info(f"Updating annotation markers (content unchanged)")
                     self._update_annotation_markers(
-                        markdown_path, md_doc.content, annotation_map, vault.name, relative_path
+                        markdown_path, md_doc.content, annotation_map, vault.name, relative_path,
+                        rm_files=existing_rm_files if 'existing_rm_files' in locals() else []
                     )
                 else:
                     logger.debug(f"No annotations to update, skipping: {vault.name}:{relative_path}")
@@ -311,7 +319,7 @@ class SyncEngine:
                     logger.debug(f"Found {len(existing_page_uuids)} existing pages to reuse")
 
                     # Download existing .rm files to preserve annotations
-                    temp_dir = Path(f".cache/annotations/{existing_uuid}")
+                    temp_dir = self.config.cache_dir / "annotations" / existing_uuid
                     existing_rm_files = self.cloud_sync.download_page_rm_files(
                         existing_uuid, existing_page_uuids, temp_dir
                     )
@@ -640,12 +648,16 @@ class SyncEngine:
         annotation_map: dict[int, AnnotationInfo],
         vault_name: str,
         relative_path: str,
+        rm_files: list[Path] = None,
     ) -> None:
         """Update annotation markers in markdown file (automatic bi-directional sync).
 
         This method adds or updates HTML comment markers in the markdown file to
         indicate which paragraphs have annotations on the device. This is part of
         the automatic bi-directional sync - no user interaction required.
+
+        If OCR is enabled and rm_files are provided, also processes annotations
+        for handwriting recognition.
 
         Uses ContentBlock-aligned marker insertion to ensure markers appear at
         correct paragraph boundaries.
@@ -656,11 +668,30 @@ class SyncEngine:
             annotation_map: Dictionary mapping block index to annotation info
             vault_name: Name of vault
             relative_path: Relative path in vault
+            rm_files: Optional list of .rm files for OCR processing
         """
         logger.debug(f"Updating annotation markers for {len(annotation_map)} blocks")
 
         # Add markers using ContentBlock alignment
         marked_content = add_annotation_markers_aligned(content_blocks, annotation_map)
+
+        # Run OCR if enabled and rm_files available
+        if self.ocr_processor and rm_files:
+            logger.info(f"Running OCR on {len(rm_files)} .rm file(s)")
+
+            # Extract paragraph texts from content blocks
+            paragraph_texts = [block.text for block in content_blocks]
+
+            # Process annotations with OCR
+            marked_content = self.ocr_processor.process_annotations(
+                vault_name=vault_name,
+                obsidian_path=relative_path,
+                markdown_content=marked_content,
+                annotation_map=annotation_map,
+                rm_files=rm_files,
+                paragraph_texts=paragraph_texts,
+            )
+            logger.info(f"OCR processing complete for {vault_name}:{relative_path}")
 
         # Write marked content back to file
         with open(markdown_path, 'w', encoding='utf-8') as f:
