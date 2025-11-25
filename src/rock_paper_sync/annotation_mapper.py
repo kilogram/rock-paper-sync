@@ -163,6 +163,8 @@ def match_rm_block_to_paragraph(
 ) -> int | None:
     """Match an .rm text block to a markdown paragraph by content similarity.
 
+    This function delegates to the shared text matching utility with debug logging.
+
     Args:
         rm_block: Text block from .rm file
         markdown_blocks: List of markdown content blocks
@@ -170,31 +172,28 @@ def match_rm_block_to_paragraph(
     Returns:
         Index of best matching markdown block, or None if no good match
     """
-    # For now, use simple substring matching
-    # In the future, could use fuzzy matching (Levenshtein distance)
+    from rock_paper_sync.ocr.text_matching import match_rm_block_to_markdown as _match
 
     rm_text = rm_block.content.strip().lower()
+    logger.debug(f"Matching rm_block text: {rm_text[:100]!r}... (len={len(rm_text)})")
 
+    # Log each block for debugging
     for i, md_block in enumerate(markdown_blocks):
-        # Only match paragraph-like blocks
-        if md_block.type not in (BlockType.PARAGRAPH, BlockType.HEADER, BlockType.LIST_ITEM):
-            continue
+        if md_block.type not in (BlockType.PARAGRAPH, BlockType.HEADER, BlockType.LIST_ITEM, BlockType.BLOCKQUOTE):
+            logger.debug(f"  Block {i}: Skipping type={md_block.type}")
+        else:
+            md_text = md_block.text.strip().lower()
+            logger.debug(f"  Block {i}: md_text={md_text[:100]!r}... (len={len(md_text)})")
 
-        md_text = md_block.text.strip().lower()
+    # Use shared matching logic
+    result = _match(rm_block, markdown_blocks)
 
-        # Check if markdown text appears in .rm text or vice versa
-        # (.rm text might have line wrapping differences)
-        if md_text in rm_text or rm_text in md_text:
-            return i
+    if result is not None:
+        logger.debug(f"  ✓ Matched to block {result}")
+    else:
+        logger.debug(f"  ✗ No match found for rm_block")
 
-        # Check similarity (simple approach)
-        min_len = MIN_TEXT_LENGTH_FOR_PREFIX_MATCH
-        if len(md_text) > min_len and len(rm_text) > min_len:
-            # If first N chars match, consider it the same block
-            if md_text[:min_len] == rm_text[:min_len]:
-                return i
-
-    return None
+    return result
 
 
 def map_annotations_to_paragraphs(
