@@ -21,7 +21,7 @@ from rock_paper_sync.ocr.paragraph_mapper import SpatialOverlapMapper
 
 
 # Test data paths
-TESTDATA_DIR = Path(__file__).parent / "device_bench" / "fixtures" / "testdata" / "ocr_handwriting"
+TESTDATA_DIR = Path(__file__).parent / "testdata" / "record_replay" / "ocr_handwriting"
 MANIFEST_PATH = TESTDATA_DIR / "manifest.json"
 
 
@@ -37,8 +37,9 @@ def testdata_manifest():
 def rm_files(testdata_manifest):
     """Get list of .rm files from testdata."""
     files = []
+    rm_files_dir = TESTDATA_DIR / "rm_files"
     for filename in testdata_manifest["rm_files"]:
-        path = TESTDATA_DIR / filename
+        path = rm_files_dir / filename
         if path.exists():
             files.append(path)
     if not files:

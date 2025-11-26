@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 from .vault_manager import VaultInteractionManager
 
 if TYPE_CHECKING:
-    from .bench import Bench
+    from .logging import Bench
     from .testdata import TestdataStore
 
 

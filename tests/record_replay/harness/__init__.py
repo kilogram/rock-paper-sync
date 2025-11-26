@@ -33,8 +33,10 @@ from .base import (
     requires_ocr,
     SkipTest,
 )
-from .bench import Bench, Colors
+from .logging import Bench
+from .output import Colors
 from .offline import OfflineEmulator
+from .ocr_integration import OCRIntegrationMixin, OCRTestRecording
 from .online import OnlineDevice
 from .prompts import user_confirm, user_prompt
 from .protocol import DeviceProtocol, DeviceInteractionManager, DocumentState
@@ -72,4 +74,7 @@ __all__ = [
     "user_prompt",
     "user_confirm",
     "WorkspaceManager",
+    # OCR integration
+    "OCRIntegrationMixin",
+    "OCRTestRecording",
 ]

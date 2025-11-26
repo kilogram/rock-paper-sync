@@ -3,7 +3,7 @@
 Provides functions for prompting user actions during device tests.
 """
 
-from .bench import Colors
+from .output import Colors
 
 
 def user_prompt(

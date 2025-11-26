@@ -11,7 +11,7 @@ from .protocol import DeviceInteractionManager, DocumentState
 from .testdata import TestArtifacts, TestdataStore
 
 if TYPE_CHECKING:
-    from .bench import Bench
+    from .logging import Bench
     from .workspace import WorkspaceManager
 
 

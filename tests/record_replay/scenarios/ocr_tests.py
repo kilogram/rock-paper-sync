@@ -4,28 +4,52 @@ Tests for OCR integration:
 - Recognition: handwriting → OCR → verify text
 - Correction: OCR → user corrects → verify stored
 - Stability: OCR markers don't cause re-upload loops
+
+These tests support both:
+- Online mode: Real device + real (or mocked) OCR service
+- Offline mode: Pre-recorded testdata with mocked OCR service
+
+The OCRIntegrationMixin automatically:
+1. Mocks the OCR service for deterministic results
+2. Records all OCR requests and responses
+3. Verifies OCR output matches expectations
+4. Saves recordings to testdata directory
 """
 
 from pathlib import Path
 
 from ..harness.base import DeviceTestCase, device_test, requires_ocr
 from ..harness.prompts import user_prompt
-from ..harness.bench import Colors
+from ..harness.output import Colors
+from ..harness.ocr_integration import OCRIntegrationMixin
 
 
-class OCRRecognitionTest(DeviceTestCase):
-    """Basic OCR recognition test.
+class OCRRecognitionTest(OCRIntegrationMixin, DeviceTestCase):
+    """Basic OCR recognition test with mocked OCR service.
 
     Test flow:
     1. Sync document with OCR gaps
-    2. User writes specific text in gaps
-    3. Sync to run OCR
-    4. Verify OCR markers contain recognized text
+    2. User writes specific text in gaps (online) or use testdata (offline)
+    3. Sync to run OCR (mocked service)
+    4. Verify OCR markers contain expected recognized text
+    5. Record OCR results to testdata
+
+    In offline mode: Uses pre-recorded handwriting annotations and testdata
+    In online mode: Requires user to manually write on reMarkable device
     """
 
     name = "ocr-recognition"
     description = "OCR recognition: write text → sync → verify recognition"
     requires_ocr = True
+    ocr_record_results = True
+
+    # Expected OCR outputs - customize based on what user writes
+    # These are the texts that the mocked OCR service will return
+    ocr_expected_texts = {
+        "hello-annotation": "hello",
+        "number-annotation": "2025",
+        "phrase-annotation": "quick test",
+    }
 
     @device_test(requires_ocr=True, cleanup_on_success=True)
     def execute(self) -> bool:
@@ -95,20 +119,26 @@ class OCRRecognitionTest(DeviceTestCase):
                 print(f"  {Colors.CYAN}    {line.strip()}{Colors.END}")
 
 
-class OCRCorrectionTest(DeviceTestCase):
-    """OCR correction workflow test.
+class OCRCorrectionTest(OCRIntegrationMixin, DeviceTestCase):
+    """OCR correction workflow test with mocked OCR service.
 
     Test flow:
     1. Sync document with OCR gaps
-    2. User writes text
-    3. Sync (runs OCR)
+    2. User writes text (online) or use testdata (offline)
+    3. Sync (runs mocked OCR)
     4. User corrects OCR text in markdown
     5. Sync (captures correction)
+    6. Record OCR and correction data to testdata
     """
 
     name = "ocr-correction"
     description = "OCR correction workflow: OCR → user corrects → verify stored"
     requires_ocr = True
+    ocr_record_results = True
+
+    ocr_expected_texts = {
+        "typo-annotation": "handwriten note",  # Will be corrected by user
+    }
 
     @device_test(requires_ocr=True, cleanup_on_success=True)
     def execute(self) -> bool:
@@ -164,22 +194,28 @@ class OCRCorrectionTest(DeviceTestCase):
         return True
 
 
-class OCRStabilityTest(DeviceTestCase):
-    """OCR markers stability test.
+class OCRStabilityTest(OCRIntegrationMixin, DeviceTestCase):
+    """OCR markers stability test with mocked OCR service.
 
     Test flow:
     1. Sync document
-    2. User writes text
-    3. Sync (runs OCR, adds markers)
+    2. User writes text (online) or use testdata (offline)
+    3. Sync (runs mocked OCR, adds markers)
     4. Sync again - should skip (no re-upload)
     5. Sync third time - should still skip
 
-    Verifies OCR markers don't cause hash loops.
+    Verifies OCR markers don't cause hash loops or instability.
+    Records OCR results for comparison.
     """
 
     name = "ocr-stability"
     description = "Verify OCR markers don't cause re-upload loops"
     requires_ocr = True
+    ocr_record_results = True
+
+    ocr_expected_texts = {
+        "stability-annotation": "stable text output",
+    }
 
     @device_test(requires_ocr=True, cleanup_on_success=True)
     def execute(self) -> bool:

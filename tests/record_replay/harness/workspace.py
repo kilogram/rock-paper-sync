@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
-    from .bench import Bench
+    from .logging import Bench
     from .vault_manager import VaultInteractionManager
 
 

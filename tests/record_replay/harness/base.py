@@ -270,4 +270,4 @@ def requires_ocr(func: F) -> F:
 
 # Import workspace at end to avoid circular import
 from .workspace import WorkspaceManager  # noqa: E402
-from .bench import Bench  # noqa: E402
+from .logging import Bench  # noqa: E402

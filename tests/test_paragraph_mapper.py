@@ -231,7 +231,7 @@ class TestIntegrationWithRealData:
     @pytest.fixture
     def testdata_dir(self):
         """Get testdata directory path."""
-        return Path(__file__).parent / "record_replay" / "fixtures" / "testdata" / "ocr_handwriting"
+        return Path(__file__).parent / "testdata" / "record_replay" / "ocr_handwriting"
 
     @pytest.fixture
     def has_testdata(self, testdata_dir):
@@ -245,7 +245,7 @@ class TestIntegrationWithRealData:
     def test_cluster_mapping_with_real_annotations(self, testdata_dir, has_testdata):
         """Test paragraph mapping with real .rm files containing handwriting."""
         if not has_testdata:
-            pytest.skip("No testdata available - run: python bench.py --extract-testdata")
+            pytest.skip("No testdata available")
 
         from rock_paper_sync.annotations import read_annotations
         from rock_paper_sync.annotation_mapper import extract_text_blocks_from_rm
