@@ -276,9 +276,9 @@ def workspace(
     ws.setup()
 
     # Setup test fixtures and credentials depending on device mode
+    from tests.fixtures.rmfakecloud.helpers import get_credentials as get_rmfakecloud_credentials
+
     fixtures_dir = Path(__file__).parent / "fixtures"
-    # Credentials now at tests/fixtures/rmfakecloud.json
-    test_creds_file = fixtures_dir.parent / "fixtures" / "rmfakecloud.json"
     test_config_file = fixtures_dir / "config.toml"
     creds_dir = Path.home() / ".config" / "rock-paper-sync"
     creds_path = creds_dir / "device-credentials.json"
@@ -287,13 +287,16 @@ def workspace(
     original_creds_path = None
     original_creds_content = None
 
-    if device_mode == "offline" and test_creds_file.exists():
+    if device_mode == "offline":
         # Offline mode: Set up test credentials for rmfakecloud
         # This allows the sync command to authenticate with rmfakecloud
-        creds_data = json.loads(test_creds_file.read_text())
-        creds_dir.mkdir(parents=True, exist_ok=True)
-        creds_path.write_text(json.dumps(creds_data, indent=2))
-        bench.ok(f"Created test credentials at {creds_path} (offline mode)")
+        try:
+            creds_data = get_rmfakecloud_credentials()
+            creds_dir.mkdir(parents=True, exist_ok=True)
+            creds_path.write_text(json.dumps(creds_data, indent=2))
+            bench.ok(f"Created test credentials at {creds_path} (offline mode)")
+        except FileNotFoundError as e:
+            bench.warn(f"Test credentials not found: {e}")
 
         # Copy test config.toml to workspace
         if test_config_file.exists():
@@ -371,10 +374,10 @@ def workspace(
 
         if device_mode == "offline":
             # Clean up test credentials (offline mode only)
-            if creds_path.exists() and test_creds_file.exists():
+            if creds_path.exists():
                 try:
                     creds_data = json.loads(creds_path.read_text())
-                    test_data = json.loads(test_creds_file.read_text())
+                    test_data = get_rmfakecloud_credentials()
                     # Only delete if it's our test credentials (same device_token)
                     if creds_data.get("device_token") == test_data.get("device_token"):
                         creds_path.unlink()

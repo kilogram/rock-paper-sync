@@ -584,98 +584,41 @@ def rmscene_test_files(testdata_rmscene_dir) -> list[Path]:
 
 @pytest.fixture(scope="function")
 def rmfakecloud(request, tmp_path: Path):
-    """Start rmfakecloud with fresh state for each test.
+    """Start rmfakecloud container with fresh seed data.
 
-    Creates a new container with a copy of rmfakecloud seed data for each test.
-    This ensures complete isolation and clean state between tests.
-
-    The container is started on a dynamically allocated port to support
-    parallel test execution via pytest-xdist.
+    Provides an isolated rmfakecloud instance for testing.
+    Each test gets a fresh copy of seed data.
 
     Returns:
         str: URL of the rmfakecloud instance (http://localhost:<port>)
     """
-    import subprocess
-    import shutil
-    import time
-    import requests
+    from tests.fixtures.containerlib import get_container_runtime, stop_container
+    from tests.fixtures.rmfakecloud.helpers import (
+        allocate_port,
+        get_seed_path,
+        start_rmfakecloud_container,
+    )
 
-    def _get_container_runtime():
-        """Detect container runtime."""
-        if shutil.which("podman"):
-            return "podman"
-        if shutil.which("docker"):
-            return "docker"
-        return ""
-
-    def _wait_for_ready(url: str, timeout: float = 30.0, interval: float = 0.5) -> bool:
-        """Wait for service to become ready."""
-        start = time.time()
-        while time.time() - start < timeout:
-            try:
-                resp = requests.get(f"{url}/health", timeout=2)
-                if resp.status_code == 200:
-                    return True
-            except requests.RequestException:
-                pass
-            time.sleep(interval)
-        return False
-
-    runtime = _get_container_runtime()
+    runtime = get_container_runtime()
     if not runtime:
         pytest.skip("No container runtime found (docker/podman)")
 
-    # Use seeded rmfakecloud state
-    seed_data = Path(__file__).parent / "fixtures" / "rmfakecloud" / "seed"
+    seed_data = get_seed_path()
     if not seed_data.exists():
         pytest.skip(f"rmfakecloud seed data not found at {seed_data}")
 
-    # Create fresh copy for this test
-    test_data = tmp_path / "rmfakecloud"
-    shutil.copytree(seed_data, test_data)
+    port, container_name = allocate_port(request)
+    url, success = start_rmfakecloud_container(
+        runtime, container_name, port, seed_data, tmp_path
+    )
 
-    # Allocate port: check for pytest-xdist worker
-    worker_id = getattr(request.config, "workerinput", None)
-    if worker_id:
-        worker_index = int(worker_id["workerid"].replace("gw", ""))
-        port = 3001 + worker_index
-        container_name = f"test_rmfakecloud_worker{worker_index}"
-    else:
-        port = 3001
-        container_name = "test_rmfakecloud"
-
-    url = f"http://localhost:{port}"
-
-    # Clean up any existing container
-    subprocess.run([runtime, "rm", "-f", container_name], capture_output=True)
-
-    # Start container with fresh data
-    image = "docker.io/ddvk/rmfakecloud:latest"
-    cmd = [
-        runtime, "run", "-d",
-        "--name", container_name,
-        "-p", f"{port}:3000",
-        "-e", f"STORAGE_URL=http://localhost:{port}",
-        "-e", "JWT_SECRET_KEY=2vrOXKJWZ7zgEAf7CjN89rnPW/XOc0pH4naGClMRPxs=",
-        "-v", f"{test_data}:/data:Z",
-        image,
-    ]
-
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        pytest.fail(f"Failed to start rmfakecloud: {result.stderr}")
-
-    # Wait for ready
-    if not _wait_for_ready(url, timeout=30.0):
-        subprocess.run([runtime, "stop", container_name], capture_output=True)
-        subprocess.run([runtime, "rm", container_name], capture_output=True)
-        pytest.fail(f"rmfakecloud failed to become ready at {url}")
+    if not success:
+        pytest.fail(f"Failed to start rmfakecloud at {url}")
 
     yield url
 
-    # Cleanup after test
-    subprocess.run([runtime, "stop", container_name], capture_output=True)
-    subprocess.run([runtime, "rm", container_name], capture_output=True)
+    # Cleanup
+    stop_container(runtime, container_name)
 
 
 @pytest.fixture

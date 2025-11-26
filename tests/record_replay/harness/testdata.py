@@ -343,9 +343,14 @@ class TestdataStore:
                 if curated_path.exists():
                     return curated_path
 
+        # Try base directory directly (for legacy testdata organization)
+        base_path = self.base_dir / test_id
+        if base_path.exists():
+            return base_path
+
         raise FileNotFoundError(
             f"Test artifacts not found: {test_id}\n"
-            f"Searched in: {self.collected_dir}, {self.curated_dir}"
+            f"Searched in: {self.collected_dir}, {self.curated_dir}, {self.base_dir}"
         )
 
     def list_available_tests(self, include_curated: bool = True) -> list[TestManifest]:

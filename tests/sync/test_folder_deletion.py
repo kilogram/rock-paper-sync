@@ -18,11 +18,8 @@ from rock_paper_sync.rm_cloud_client import RmCloudClient
 from rock_paper_sync.rm_cloud_sync import RmCloudSync
 
 
-def get_test_credentials(fixtures_dir: Path) -> str:
+def get_test_credentials() -> str:
     """Get device token from test credentials.
-
-    Args:
-        fixtures_dir: Path to fixtures directory
 
     Returns:
         Device token (JWT)
@@ -30,18 +27,13 @@ def get_test_credentials(fixtures_dir: Path) -> str:
     Raises:
         pytest.skip: If credentials not found
     """
-    import json
+    from tests.fixtures.rmfakecloud.helpers import get_credentials
 
-    test_creds = fixtures_dir / "rmfakecloud_test_credentials.json"
-
-    if not test_creds.exists():
-        pytest.skip(
-            f"rmfakecloud test credentials not found at {test_creds}.\n"
-            f"Run setup script first to register device."
-        )
-
-    creds = json.loads(test_creds.read_text())
-    return creds["device_token"]
+    try:
+        creds = get_credentials()
+        return creds["device_token"]
+    except FileNotFoundError as e:
+        pytest.skip(f"rmfakecloud test credentials not found: {e}")
 
 
 @pytest.fixture
@@ -86,8 +78,7 @@ def rmfakecloud_config(tmp_path: Path, rmfakecloud: str):
     )
 
     # Get device token and create client
-    fixtures_dir = Path(__file__).parent / "record_replay" / "fixtures"
-    device_token = get_test_credentials(fixtures_dir)
+    device_token = get_test_credentials()
 
     # Create temp credentials file for RmCloudClient
     import tempfile
