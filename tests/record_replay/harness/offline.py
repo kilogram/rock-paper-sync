@@ -221,57 +221,37 @@ class OfflineEmulator(DeviceInteractionManager):
         Uses the Sync v3 protocol to upload files as if they came from
         the device. This involves:
         1. Creating zip blobs for each .rm file
-        2. Uploading blobs to cloud storage
+        2. Uploading blobs to cloud storage via Sync v3 API
         3. Updating document metadata
 
         Args:
             doc_uuid: Document UUID
             rm_files: Mapping of page_uuid -> .rm bytes
         """
-        import requests
+        from rock_paper_sync.sync_v3 import SyncV3Client
 
         self.bench.info(f"Injecting {len(rm_files)} .rm files into rmfakecloud...")
 
-        # Get auth token from config (rmfakecloud uses basic token)
-        # In test config, this should be pre-configured
-        token = self._get_auth_token()
+        # Get device token from workspace config
+        device_token = self._get_auth_token()
+
+        # Create sync client to use production blob upload logic
+        sync_client = SyncV3Client(self.cloud_url, device_token)
 
         for page_uuid, rm_data in rm_files.items():
-            # Create blob path: {doc_uuid}/{page_uuid}.rm
-            blob_path = f"{doc_uuid}/{page_uuid}.rm"
-
             # Create zip blob (sync v3 format)
             blob_data = self._create_zip_blob(f"{page_uuid}.rm", rm_data)
 
             # Calculate hash for sync v3
             blob_hash = hashlib.sha256(blob_data).hexdigest()
 
-            # Upload to rmfakecloud blob storage
-            upload_url = f"{self.cloud_url}/sync/v3/blob/{blob_hash}"
-
             try:
-                resp = requests.put(
-                    upload_url,
-                    data=blob_data,
-                    headers={
-                        "Authorization": f"Bearer {token}",
-                        "Content-Type": "application/octet-stream",
-                    },
-                    timeout=30,
-                )
-
-                if resp.status_code in (200, 201):
-                    self.bench.ok(f"  Uploaded: {page_uuid}.rm ({blob_hash[:8]}...)")
-                elif resp.status_code == 409:
-                    # Blob already exists, that's fine
-                    self.bench.info(f"  Already exists: {page_uuid}.rm")
-                else:
-                    self.bench.error(
-                        f"  Failed to upload {page_uuid}.rm: "
-                        f"{resp.status_code} {resp.text}"
-                    )
-            except requests.RequestException as e:
-                self.bench.error(f"  Upload error for {page_uuid}.rm: {e}")
+                # Use production sync_v3 client for blob upload
+                # This ensures we use the exact same API and error handling as real sync
+                sync_client.upload_blob(blob_hash, blob_data)
+                self.bench.ok(f"  Uploaded: {page_uuid}.rm ({blob_hash[:8]}...)")
+            except Exception as e:
+                self.bench.error(f"  Failed to upload {page_uuid}.rm: {e}")
                 raise RuntimeError(f"Failed to inject .rm files: {e}") from e
 
         # Update document root to reference new blobs
