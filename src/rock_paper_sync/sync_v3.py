@@ -135,6 +135,34 @@ class SyncV3Client:
         data = response.json()
         return data.get("hash"), data.get("generation", 0)
 
+    def get_root_state(self) -> tuple[list[BlobEntry], str, int]:
+        """
+        Get complete current cloud state (entries, hash, generation).
+
+        Reads the current cloud root state needed to initialize VirtualDeviceState
+        for atomic multi-step operations.
+
+        Returns:
+            Tuple of (root_entries, root_hash, generation)
+            - root_entries: List of document entries in root
+            - root_hash: Current root hash
+            - generation: Current generation number
+            If no root exists, returns ([], None, 0)
+
+        Raises:
+            requests.HTTPError: If request fails
+        """
+        root_hash, current_gen = self.get_current_generation()
+
+        if not root_hash:
+            logger.info("No root exists yet")
+            return [], None, 0
+
+        # Get entries from root
+        root_entries = self.get_root_documents()
+
+        return root_entries, root_hash, current_gen
+
     def download_blob(self, blob_hash: str) -> bytes:
         """
         Download a blob from storage.
@@ -625,3 +653,68 @@ class SyncV3Client:
             broadcast=broadcast,
             max_retries=max_retries,
         )
+
+    def stage_document_deletion(
+        self, doc_uuid: str, max_retries: int | None = None
+    ) -> None:
+        """Stage a document deletion without broadcasting to device.
+
+        Equivalent to delete_document() but with broadcast=False.
+        Multiple deletions can be staged, then finalized together.
+
+        Args:
+            doc_uuid: Document UUID to delete
+            max_retries: Maximum number of retry attempts on conflicts
+
+        Raises:
+            requests.HTTPError: If deletion fails
+            GenerationConflictError: If max retries exceeded
+        """
+        self.delete_document(doc_uuid, broadcast=False, max_retries=max_retries)
+
+    def stage_documents_batch_deletion(
+        self, doc_uuids: list[str], max_retries: int | None = None
+    ) -> None:
+        """Stage multiple document deletions without broadcasting.
+
+        More efficient than multiple stage_document_deletion() calls.
+        Multiple batches can be staged, then finalized together.
+
+        Args:
+            doc_uuids: List of document UUIDs to delete
+            max_retries: Maximum number of retry attempts on conflicts
+
+        Raises:
+            requests.HTTPError: If deletion fails
+            GenerationConflictError: If max retries exceeded
+        """
+        self.delete_documents_batch(doc_uuids, broadcast=False, max_retries=max_retries)
+
+    def finalize_sync(self) -> None:
+        """Trigger broadcast notification after staged operations.
+
+        Notifies device of all accumulated changes from staged operations.
+        Call this after a batch of stage_* operations completes.
+
+        This method fetches the current root state and triggers a broadcast
+        notification without making any modifications to the root data itself.
+
+        Raises:
+            Exception: If broadcast fails (logged as warning, non-fatal)
+        """
+        try:
+            root_hash, current_gen = self.get_current_generation()
+            if root_hash:
+                # Trigger broadcast by updating root with same hash.
+                # This is a no-op mutation but triggers WebSocket notification.
+                logger.info(f"Finalizing sync: triggering broadcast (gen {current_gen})")
+                self.update_root(root_hash, current_gen, broadcast=True)
+                logger.debug(f"Sync finalized: broadcast triggered (gen {current_gen})")
+            else:
+                logger.warning("Cannot finalize sync: no root exists yet")
+        except Exception as e:
+            logger.warning(
+                f"Sync finalization broadcast failed: {e}. "
+                "Changes are saved but device may not sync until manual refresh."
+            )
+            # Non-fatal - changes are already persisted to cloud

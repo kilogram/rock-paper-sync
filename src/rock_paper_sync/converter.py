@@ -68,8 +68,44 @@ from .parser import parse_markdown_file, BlockType, MarkdownDocument
 from .rm_cloud_client import RmCloudClient
 from .rm_cloud_sync import RmCloudSync
 from .state import StateManager, SyncRecord
+from .virtual_state import VirtualDeviceState
 
 logger = logging.getLogger("rock_paper_sync.converter")
+
+# Retry configuration constants
+DEFAULT_MAX_RETRIES = 3
+DEFAULT_RETRY_BASE_DELAY = 1.0
+RETRY_BACKOFF_MULTIPLIER = 2
+
+# Batch operation constants
+MAX_BATCH_DELETION_SIZE = 100
+
+
+class ResyncRequired(Exception):
+    """Exception raised when generation conflict requires resync.
+
+    Indicates that the local state is out of sync with cloud due to
+    concurrent modifications. The operation should be retried after
+    re-reading cloud state.
+
+    Attributes:
+        vault_name: Name of vault requiring resync
+        reason: Human-readable reason for resync requirement
+        conflict_error: Original GenerationConflictError that triggered this
+    """
+
+    def __init__(
+        self,
+        vault_name: str,
+        reason: str,
+        conflict_error: Exception | None = None,
+    ):
+        self.vault_name = vault_name
+        self.reason = reason
+        self.conflict_error = conflict_error
+        super().__init__(
+            f"Resync required for vault '{vault_name}': {reason}"
+        )
 
 
 @dataclass
@@ -203,7 +239,13 @@ class SyncEngine:
 
         logger.debug("Sync engine initialized")
 
-    def sync_file(self, vault: VaultConfig, markdown_path: Path) -> SyncResult:
+    def sync_file(
+        self,
+        vault: VaultConfig,
+        markdown_path: Path,
+        broadcast: bool = True,
+        correlation_id: str = "",
+    ) -> SyncResult:
         """Sync a single markdown file to reMarkable format.
 
         Full pipeline for one file:
@@ -217,6 +259,8 @@ class SyncEngine:
         Args:
             vault: Vault configuration
             markdown_path: Absolute path to markdown file
+            broadcast: Whether to broadcast to device (default True)
+            correlation_id: Optional correlation ID for operation tracking
 
         Returns:
             SyncResult indicating success or failure
@@ -240,7 +284,7 @@ class SyncEngine:
                 )
 
             # Parse markdown
-            logger.info(f"Parsing {markdown_path}")
+            logger.info(f"[{correlation_id}] Parsing {markdown_path}" if correlation_id else f"Parsing {markdown_path}")
             md_doc = parse_markdown_file(markdown_path)
 
             # Get relative path for state tracking
@@ -375,6 +419,7 @@ class SyncEngine:
                 document_name=rm_doc.visible_name,
                 pages=pages_with_data,  # List of (page_uuid, rm_binary_data) tuples
                 parent_uuid=parent_uuid,
+                broadcast=broadcast,
             )
 
             # Add annotation markers to file if we have annotations
@@ -485,8 +530,75 @@ class SyncEngine:
             )
             return False
 
+    def _retry_with_backoff(
+        self,
+        operation,
+        operation_name: str,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+        base_delay: float = DEFAULT_RETRY_BASE_DELAY,
+    ) -> None:
+        """Retry an operation with exponential backoff.
+
+        Used for non-concurrency failures (network errors, timeouts).
+        Concurrency failures should trigger resync instead.
+
+        Args:
+            operation: Callable that performs the operation
+            operation_name: Human-readable operation name for logging
+            max_retries: Maximum number of retry attempts (default 3)
+            base_delay: Base delay in seconds, doubled each retry (default 1.0)
+
+        Raises:
+            GenerationConflictError: Re-raised immediately (triggers resync)
+            Exception: After max retries exhausted
+        """
+        from .sync_v3 import GenerationConflictError
+
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                operation()
+                if attempt > 0:
+                    logger.info(f"{operation_name} succeeded on retry {attempt + 1}")
+                return
+
+            except GenerationConflictError:
+                # Don't retry concurrency errors - trigger resync instead
+                raise
+
+            except Exception as e:
+                last_error = e
+                if attempt < max_retries - 1:
+                    delay = base_delay * (RETRY_BACKOFF_MULTIPLIER ** attempt)
+                    logger.warning(
+                        f"{operation_name} failed (attempt {attempt + 1}/{max_retries}): {e}. "
+                        f"Retrying in {delay}s..."
+                    )
+                    time.sleep(delay)
+                else:
+                    logger.error(
+                        f"{operation_name} failed after {max_retries} attempts: {e}",
+                        exc_info=True
+                    )
+
+        raise last_error
+
     def sync_vault(self, vault: VaultConfig) -> list[SyncResult]:
         """Sync all changed files in a specific vault.
+
+        Uses VirtualDeviceState pattern for atomic multi-step sync:
+        1. Find deleted and changed files (local discovery)
+        2. Read current cloud state (Phase 1)
+        3. Stage deletions in virtual state (Phase 2a)
+        4. Upload changed files (individual operations)
+        5. Single atomic root update (Phase 3)
+        6. Update local state (Phase 4)
+
+        ATOMICITY SEMANTICS:
+        - File deletions are atomic: either all delete or none do (via root update)
+        - File uploads are non-atomic (one per file), but deletions are batched atomically
+        - Generation conflicts (409) trigger ResyncRequired (no automatic retry)
+        - State updates deferred until after atomic cloud operation succeeds
 
         Args:
             vault: Vault configuration
@@ -494,17 +606,15 @@ class SyncEngine:
         Returns:
             List of SyncResults for all processed files in this vault
         """
-        logger.info(f"Syncing vault '{vault.name}' at {vault.path}")
+        from .sync_v3 import GenerationConflictError
 
-        # Handle deletions first
+        # Generate correlation ID for tracking this operation
+        correlation_id = str(uuid_module.uuid4())[:8]
+
+        logger.info(f"[{correlation_id}] Syncing vault '{vault.name}' at {vault.path}")
+
+        # Discover deleted and changed files locally
         deleted_files = self.state.find_deleted_files(vault.name, vault.path)
-
-        if deleted_files:
-            logger.info(f"Processing {len(deleted_files)} deleted file(s) in '{vault.name}'")
-            for relative_path, uuid in deleted_files:
-                self.delete_file(vault.name, relative_path, uuid)
-
-        # Then handle changed/new files
         changed_files = self.state.find_changed_files(
             vault.name,
             vault.path,
@@ -512,16 +622,126 @@ class SyncEngine:
             vault.exclude_patterns,
         )
 
-        logger.info(f"Found {len(changed_files)} file(s) to sync in '{vault.name}'")
+        if not deleted_files and not changed_files:
+            logger.info(f"[{correlation_id}] No changes to sync for vault '{vault.name}'")
+            return []
 
+        # If only uploads and no deletions, handle simple case (no atomic update needed)
+        if not deleted_files:
+            logger.info(f"[{correlation_id}] Syncing {len(changed_files)} new/changed files (no deletions)")
+            results = []
+            for file_path in changed_files:
+                try:
+                    # For uploads only, can broadcast per file
+                    result = self.sync_file(vault, file_path, broadcast=True, correlation_id=correlation_id)
+                    results.append(result)
+
+                except GenerationConflictError as e:
+                    logger.warning(
+                        f"[{correlation_id}] Generation conflict uploading {file_path.name}: {e}"
+                    )
+                    raise ResyncRequired(
+                        vault_name=vault.name,
+                        reason=f"generation conflict uploading {file_path.name}",
+                        conflict_error=e,
+                    )
+
+            success_count = sum(1 for r in results if r.success)
+            logger.info(
+                f"[{correlation_id}] Vault '{vault.name}' sync complete: {success_count}/{len(results)} succeeded"
+            )
+            return results
+
+        # PHASE 1: Read current cloud state
+        try:
+            current_entries, current_hash, current_gen = self.cloud_sync.get_root_state()
+            hash_str = current_hash[:8] if current_hash else "None"
+            logger.debug(
+                f"[{correlation_id}] Phase 1 (Read): {len(current_entries)} entries, "
+                f"hash={hash_str}, gen={current_gen}"
+            )
+        except Exception as e:
+            logger.error(f"[{correlation_id}] Failed to read cloud state: {e}")
+            raise
+
+        # Initialize virtual state with current cloud state
+        virtual_state = VirtualDeviceState(current_entries, current_hash, current_gen)
+
+        # PHASE 2: Stage deletions in virtual state (no cloud calls yet)
+        deleted_count = 0
+        for relative_path, uuid in deleted_files:
+            if virtual_state.delete_document(uuid):
+                deleted_count += 1
+
+        logger.debug(
+            f"[{correlation_id}] Phase 2 (Stage): Staged {deleted_count} deletions in virtual state"
+        )
+
+        # Upload changed files (individual operations)
         results = []
+        if changed_files:
+            logger.info(f"[{correlation_id}] Uploading {len(changed_files)} changed file(s)")
+
         for file_path in changed_files:
-            result = self.sync_file(vault, file_path)
-            results.append(result)
+            try:
+                # Upload without broadcasting (will broadcast once in atomic update)
+                result = self.sync_file(vault, file_path, broadcast=False, correlation_id=correlation_id)
+                results.append(result)
+
+            except GenerationConflictError as e:
+                logger.warning(f"[{correlation_id}] Generation conflict uploading {file_path.name}: {e}")
+                raise ResyncRequired(
+                    vault_name=vault.name,
+                    reason=f"generation conflict uploading {file_path.name}",
+                    conflict_error=e,
+                )
+
+        # PHASE 3: Single atomic root update (for deletions)
+        if virtual_state.has_changes():
+            final_root_hash = virtual_state.compute_final_hash()
+            logger.info(
+                f"[{correlation_id}] Phase 3 (Atomic Update): Applying deletion of {deleted_count} files "
+                f"(gen {current_gen} → final hash {final_root_hash[:8]})"
+            )
+
+            try:
+                # Single atomic root update
+                self.cloud_sync.update_root(
+                    root_hash=final_root_hash,
+                    generation=current_gen,
+                    broadcast=True,  # Single broadcast for all deletions + uploads
+                )
+                logger.info(f"[{correlation_id}] Root updated atomically")
+
+            except GenerationConflictError as e:
+                logger.warning(
+                    f"[{correlation_id}] Generation conflict during atomic update: {e}. "
+                    "Concurrent cloud modification detected. Triggering resync..."
+                )
+                raise ResyncRequired(
+                    vault_name=vault.name,
+                    reason="generation conflict during sync",
+                    conflict_error=e,
+                )
+        else:
+            # No deletions, but uploads might have happened
+            if results:
+                logger.info(f"[{correlation_id}] Uploads complete (no deletions to apply)")
+
+        # PHASE 4: Update local state (only after Phase 3 succeeds if there were deletions)
+        logger.info(f"[{correlation_id}] Phase 4 (Update Local State)")
+
+        for relative_path, uuid in deleted_files:
+            self.state.delete_file_state(vault.name, relative_path)
+            self.state.log_sync_action(
+                vault.name, relative_path, "deleted",
+                f"Removed from cloud (batch of {len(deleted_files)})"
+            )
 
         success_count = sum(1 for r in results if r.success)
         logger.info(
-            f"Vault '{vault.name}' sync complete: {success_count}/{len(results)} succeeded"
+            f"[{correlation_id}] Vault '{vault.name}' sync complete: "
+            f"{len(deleted_files)} deletions, {success_count}/{len(results)} uploads succeeded"
         )
 
         return results
@@ -724,6 +944,19 @@ class SyncEngine:
     ) -> tuple[int, int]:
         """Remove sync state for all files in a vault.
 
+        Uses VirtualDeviceState pattern for atomic multi-step deletion:
+        1. Read current cloud state (Phase 1)
+        2. Stage all deletions in virtual state (Phase 2)
+        3. Single atomic root update (Phase 3)
+        4. Update local state (Phase 4)
+
+        ATOMICITY SEMANTICS:
+        - Cloud operations are truly atomic: either all deletions apply or none do
+        - Single root update with optimistic concurrency control (generation number)
+        - State updates deferred until after atomic cloud operation succeeds
+        - Generation conflicts (409) trigger ResyncRequired (no automatic retry)
+        - Achieves 1 generation increment per unsync operation (not 1 per deletion)
+
         Args:
             vault_name: Name of vault to unsync
             delete_from_cloud: If True, also delete files from reMarkable cloud
@@ -733,7 +966,13 @@ class SyncEngine:
 
         Raises:
             ValueError: If vault_name not found in configuration
+            ResyncRequired: If generation conflict during cloud operations
         """
+        from .sync_v3 import GenerationConflictError
+
+        # Generate correlation ID for tracking this operation
+        correlation_id = str(uuid_module.uuid4())[:8]
+
         # Find the vault config
         vault_config = next(
             (v for v in self.config.sync.vaults if v.name == vault_name), None
@@ -742,86 +981,141 @@ class SyncEngine:
             raise ValueError(f"Vault '{vault_name}' not found in configuration")
 
         logger.info(
-            f"Unsyncing vault '{vault_name}' (delete_from_cloud={delete_from_cloud})"
+            f"[{correlation_id}] Unsyncing vault '{vault_name}' (delete_from_cloud={delete_from_cloud})"
         )
 
         # Get all synced files for this vault
         synced_files = self.state.get_all_synced_files(vault_name=vault_name)
+        folders = self.state.get_all_folders(vault_name)
 
         files_removed = 0
         files_deleted = 0
 
-        for record in synced_files:
-            # Delete from cloud if requested
-            if delete_from_cloud:
-                try:
-                    logger.info(
-                        f"Deleting from cloud: {vault_name}:{record.obsidian_path} "
-                        f"(UUID: {record.remarkable_uuid})"
-                    )
-                    self.cloud_sync.delete_document(record.remarkable_uuid)
-                    files_deleted += 1
-                    self.state.log_sync_action(
-                        vault_name,
-                        record.obsidian_path,
-                        "deleted",
-                        "Removed from cloud via unsync",
-                    )
-                except Exception as e:
-                    logger.error(
-                        f"Failed to delete {vault_name}:{record.obsidian_path} "
-                        f"from cloud: {e}",
-                        exc_info=True,
-                    )
-                    self.state.log_sync_action(
-                        vault_name,
-                        record.obsidian_path,
-                        "error",
-                        f"Delete failed during unsync: {e}",
-                    )
+        # If not deleting from cloud, just update local state
+        if not delete_from_cloud:
+            logger.info(f"[{correlation_id}] Removing local state only (not deleting from cloud)")
 
-            # Remove from state database
+            # Remove synced files from state
+            for record in synced_files:
+                self.state.delete_file_state(vault_name, record.obsidian_path)
+                files_removed += 1
+
+            # Remove folder mappings from state
+            for folder_path, _ in folders:
+                self.state.delete_folder_mapping(vault_name, folder_path)
+
+            logger.info(
+                f"[{correlation_id}] Vault '{vault_name}' local state cleared: {files_removed} files"
+            )
+
+            # AUDIT: Log unsync operation
+            audit = get_audit_logger()
+            audit.log_unsync(
+                vault_name=vault_name,
+                files_removed=files_removed,
+                files_deleted_from_cloud=0,
+                delete_from_cloud=False,
+            )
+
+            return files_removed, 0
+
+        # If no files or folders to delete, nothing to do
+        if not synced_files and not folders:
+            logger.info(f"[{correlation_id}] No files or folders to delete for vault '{vault_name}'")
+            return 0, 0
+
+        # PHASE 1: Read current cloud state
+        try:
+            current_entries, current_hash, current_gen = self.cloud_sync.get_root_state()
+            hash_str = current_hash[:8] if current_hash else "None"
+            logger.debug(
+                f"[{correlation_id}] Phase 1 (Read): {len(current_entries)} entries, "
+                f"hash={hash_str}, gen={current_gen}"
+            )
+        except Exception as e:
+            logger.error(f"[{correlation_id}] Failed to read cloud state: {e}")
+            raise
+
+        # Initialize virtual state with current cloud state
+        virtual_state = VirtualDeviceState(current_entries, current_hash, current_gen)
+
+        # PHASE 2: Stage all deletions in virtual state (no cloud calls yet)
+        deleted_count = 0
+        all_uuids = (
+            [record.remarkable_uuid for record in synced_files] +
+            [folder_uuid for _, folder_uuid in folders]
+        )
+
+        for uuid in all_uuids:
+            if virtual_state.delete_document(uuid):
+                deleted_count += 1
+
+        logger.debug(
+            f"[{correlation_id}] Phase 2 (Stage): Staged {deleted_count} deletions in virtual state"
+        )
+
+        # PHASE 3: Single atomic root update
+        if not virtual_state.has_changes():
+            logger.info(
+                f"[{correlation_id}] No changes to apply (all items already absent from cloud)"
+            )
+            # Still update local state since we want to unsync
+            for record in synced_files:
+                self.state.delete_file_state(vault_name, record.obsidian_path)
+                files_removed += 1
+            for folder_path, _ in folders:
+                self.state.delete_folder_mapping(vault_name, folder_path)
+            return files_removed, 0
+
+        # Compute final root hash from virtual state
+        final_root_hash = virtual_state.compute_final_hash()
+        logger.info(
+            f"[{correlation_id}] Phase 3 (Atomic Update): Applying deletion of {deleted_count} items "
+            f"(gen {current_gen} → final hash {final_root_hash[:8]})"
+        )
+
+        try:
+            # Single atomic root update with optimistic concurrency control
+            self.cloud_sync.update_root(
+                root_hash=final_root_hash,
+                generation=current_gen,
+                broadcast=True,
+            )
+            logger.info(f"[{correlation_id}] Root updated atomically")
+
+        except GenerationConflictError as e:
+            logger.warning(
+                f"[{correlation_id}] Generation conflict during atomic update: {e}. "
+                "Concurrent cloud modification detected. Triggering resync..."
+            )
+            raise ResyncRequired(
+                vault_name=vault_name,
+                reason="generation conflict during unsync",
+                conflict_error=e,
+            )
+
+        # PHASE 4: Update local state (only after Phase 3 succeeds)
+        logger.info(f"[{correlation_id}] Phase 4 (Update Local State)")
+
+        # Remove synced files from state
+        for record in synced_files:
             self.state.delete_file_state(vault_name, record.obsidian_path)
+            self.state.log_sync_action(
+                vault_name, record.obsidian_path, "deleted",
+                f"Removed from cloud via unsync (atomic, {deleted_count} total)"
+            )
             files_removed += 1
 
-        # Delete folders (if delete_from_cloud is True)
-        # Use batch deletion to avoid device sync issues when deleting nested folders.
-        # The device receives one notification showing the final state instead of
-        # intermediate states that might orphan child folders.
-        folders_deleted = 0
-        if delete_from_cloud:
-            folders = self.state.get_all_folders(vault_name)
-            logger.info(f"Found {len(folders)} folders to delete for vault '{vault_name}'")
-
-            if folders:
-                # Extract folder UUIDs for batch deletion
-                # Folders are already ordered by depth (deepest first) from state.get_all_folders()
-                folder_uuids = [folder_uuid for _, folder_uuid in folders]
-
-                try:
-                    logger.info(
-                        f"Deleting {len(folders)} folders from cloud in batch for vault '{vault_name}'"
-                    )
-                    for folder_path, folder_uuid in folders:
-                        logger.debug(f"  Will delete: {vault_name}:{folder_path} (UUID: {folder_uuid})")
-
-                    self.cloud_sync.delete_documents_batch(folder_uuids)
-                    folders_deleted = len(folders)
-                    logger.info(f"Successfully deleted {folders_deleted} folders in batch")
-                except Exception as e:
-                    logger.error(
-                        f"Failed to delete folders from cloud for vault '{vault_name}': {e}",
-                        exc_info=True,
-                    )
-
-        # Remove all folder mappings from state (regardless of delete_from_cloud)
-        folders = self.state.get_all_folders(vault_name)
+        # Remove folder mappings from state
         for folder_path, _ in folders:
             self.state.delete_folder_mapping(vault_name, folder_path)
 
+        # Track deleted count for return value
+        files_deleted = len(synced_files)
+
         logger.info(
-            f"Vault '{vault_name}' unsynced: {files_removed} files removed from state, "
-            f"{files_deleted} files + {folders_deleted} folders deleted from cloud"
+            f"[{correlation_id}] Vault '{vault_name}' unsynced atomically: "
+            f"{files_removed} files removed from state, {files_deleted} deleted from cloud"
         )
 
         # AUDIT: Log unsync operation with complete details
@@ -830,7 +1124,7 @@ class SyncEngine:
             vault_name=vault_name,
             files_removed=files_removed,
             files_deleted_from_cloud=files_deleted,
-            delete_from_cloud=delete_from_cloud,
+            delete_from_cloud=True,
         )
 
         return files_removed, files_deleted

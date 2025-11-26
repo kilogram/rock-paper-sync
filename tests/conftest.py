@@ -341,6 +341,10 @@ def mock_cloud_sync():
     mock_sync.get_existing_page_uuids = MagicMock(return_value=[])
     mock_sync.delete_document = MagicMock()
     mock_sync.is_sync_enabled = MagicMock(return_value=True)
+    # Mock get_root_state to return empty cloud state (entries, hash, generation)
+    mock_sync.get_root_state = MagicMock(return_value=([], None, 0))
+    # Mock update_root for atomic operations
+    mock_sync.update_root = MagicMock(return_value=1)
     return mock_sync
 
 
@@ -700,3 +704,44 @@ def runpods_credentials():
         "api_key": api_key,
         "endpoint_id": endpoint_id,
     }
+
+
+@pytest.fixture
+def integration_config(temp_vault: Path, temp_state_db: Path, tmp_path: Path):
+    """Create a test config for integration/e2e tests."""
+    from rock_paper_sync.config import (
+        AppConfig, SyncConfig, CloudConfig, LayoutConfig, OCRConfig, VaultConfig
+    )
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir(exist_ok=True)
+
+    vault_config = VaultConfig(
+        name="test-vault",
+        path=temp_vault,
+        remarkable_folder="Test",
+        include_patterns=["**/*.md"],
+        exclude_patterns=[".obsidian/**"],
+    )
+
+    sync_config = SyncConfig(
+        vaults=[vault_config],
+        state_database=temp_state_db,
+        debounce_seconds=1
+    )
+
+    return AppConfig(
+        sync=sync_config,
+        cloud=CloudConfig(base_url="http://localhost:3000"),
+        layout=LayoutConfig(
+            lines_per_page=45,
+            margin_top=50,
+            margin_bottom=50,
+            margin_left=50,
+            margin_right=50,
+        ),
+        log_level="debug",
+        log_file=tmp_path / "test.log",
+        ocr=OCRConfig(enabled=False),
+        cache_dir=cache_dir,
+    )

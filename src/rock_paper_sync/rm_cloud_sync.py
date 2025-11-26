@@ -224,6 +224,7 @@ class RmCloudSync:
         document_name: str,
         pages: list,
         parent_uuid: str = "",
+        broadcast: bool = True,
     ) -> None:
         """
         Upload a document using Sync v3 protocol.
@@ -233,6 +234,7 @@ class RmCloudSync:
             document_name: Display name for the document
             pages: List of page data (tuples of page_uuid, rm_data)
             parent_uuid: Parent folder UUID (empty for root)
+            broadcast: Whether to trigger device sync notification (default True)
 
         Raises:
             Exception: If upload fails
@@ -271,7 +273,7 @@ class RmCloudSync:
         self.sync_client.upload_document(
             doc_uuid=doc_uuid,
             files=files,
-            broadcast=True,  # Always trigger sync notification
+            broadcast=broadcast,
         )
 
         logger.info(f"Document uploaded successfully: {doc_uuid}")
@@ -282,12 +284,72 @@ class RmCloudSync:
             doc_uuid=doc_uuid,
             file_count=len(files),
             total_size=total_size,
-            broadcast=True,
+            broadcast=broadcast,
         )
+
+    def stage_document_upload(
+        self,
+        doc_uuid: str,
+        document_name: str,
+        pages: list,
+        parent_uuid: str = "",
+    ) -> None:
+        """Stage document upload without broadcasting to device.
+
+        Equivalent to upload_document() but with broadcast=False.
+        Multiple uploads can be staged, then finalized together.
+
+        Args:
+            doc_uuid: Document UUID
+            document_name: Display name for the document
+            pages: List of page data (tuples of page_uuid, rm_data)
+            parent_uuid: Parent folder UUID (empty for root)
+        """
+        self.upload_document(
+            doc_uuid=doc_uuid,
+            document_name=document_name,
+            pages=pages,
+            parent_uuid=parent_uuid,
+            broadcast=False,
+        )
+
+    def stage_documents_batch_deletion(self, doc_uuids: list[str]) -> None:
+        """Stage multiple document deletions without broadcasting.
+
+        Equivalent to delete_documents_batch() but with broadcast=False.
+        Multiple batches can be staged, then finalized together.
+
+        Args:
+            doc_uuids: List of document UUIDs to delete
+        """
+        self.sync_client.stage_documents_batch_deletion(doc_uuids)
+
+    def finalize_sync(self) -> None:
+        """Finalize staged operations and broadcast to device.
+
+        Triggers broadcast notification after staged operations.
+        Call this after a batch of stage_* operations completes.
+
+        Non-fatal if broadcast fails - changes are already persisted to cloud.
+        """
+        self.sync_client.finalize_sync()
 
     def is_sync_enabled(self) -> bool:
         """Check if sync is enabled (device registered)."""
         return self.client.is_registered()
+
+    def get_root_state(self) -> tuple[list, str, int]:
+        """
+        Get complete current cloud state for virtual device state initialization.
+
+        Returns:
+            Tuple of (root_entries, root_hash, generation)
+            - root_entries: List of document entries in root
+            - root_hash: Current root hash
+            - generation: Current generation number
+            If no root exists, returns ([], None, 0)
+        """
+        return self.sync_client.get_root_state()
 
     def get_existing_page_uuids(self, doc_uuid: str) -> list[str]:
         """

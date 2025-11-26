@@ -492,7 +492,9 @@ class TestUnsyncCommand:
 
         assert result.exit_code == 0
         assert "deleted from cloud" in result.output
-        assert mock_cloud_sync.delete_document.called
+        # New behavior: uses batch deletion with staging pattern
+        assert mock_cloud_sync.stage_documents_batch_deletion.called
+        assert mock_cloud_sync.finalize_sync.called
 
     def test_unsync_all_vaults(
         self, runner: CliRunner, config_file: Path, temp_vault: Path, mock_cloud_sync

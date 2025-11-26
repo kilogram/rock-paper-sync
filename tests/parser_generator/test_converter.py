@@ -467,11 +467,11 @@ class TestUnsync:
         assert removed == 2
         assert deleted == 2
         assert len(state_manager.get_all_synced_files("test-vault")) == 0
-        # Verify cloud delete WAS called:
-        # - 2 files deleted individually via delete_document
-        # - 1 folder deleted via delete_documents_batch (batched)
-        assert mock_cloud_sync.delete_document.call_count == 2
-        assert mock_cloud_sync.delete_documents_batch.call_count == 1
+        # Verify atomic deletion was applied (VirtualDeviceState pattern):
+        # - get_root_state is called to read current cloud state
+        # - update_root is called with computed final hash (atomic operation)
+        assert mock_cloud_sync.get_root_state.called
+        assert mock_cloud_sync.update_root.called
 
     def test_unsync_vault_invalid_name(
         self,
@@ -493,7 +493,7 @@ class TestUnsync:
         test_vault_config: VaultConfig,
         mock_cloud_sync,
     ) -> None:
-        """Test unsync continues after cloud delete errors."""
+        """Test unsync raises ResyncRequired on generation conflicts."""
         # Sync a file first
         file1 = temp_vault / "test1.md"
         file1.write_text("# Test 1")
@@ -501,15 +501,16 @@ class TestUnsync:
         engine = SyncEngine(sample_config, state_manager, cloud_sync=mock_cloud_sync)
         engine.sync_file(test_vault_config, file1)
 
-        # Make delete raise an error
-        mock_cloud_sync.delete_document.side_effect = RuntimeError("Cloud delete failed")
+        # Make atomic update raise a generation conflict (concurrent cloud modification)
+        from rock_paper_sync.sync_v3 import GenerationConflictError
+        mock_cloud_sync.update_root.side_effect = GenerationConflictError(
+            expected=0, actual=1
+        )
 
-        # Unsync with deletion should handle error gracefully
-        removed, deleted = engine.unsync_vault("test-vault", delete_from_cloud=True)
-
-        assert removed == 1  # State still removed
-        assert deleted == 0  # But cloud delete failed
-        assert len(state_manager.get_all_synced_files("test-vault")) == 0
+        # Unsync with deletion should raise ResyncRequired for generation conflicts
+        from rock_paper_sync.converter import ResyncRequired
+        with pytest.raises(ResyncRequired, match="generation conflict"):
+            engine.unsync_vault("test-vault", delete_from_cloud=True)
 
     def test_unsync_all_vaults(
         self,
