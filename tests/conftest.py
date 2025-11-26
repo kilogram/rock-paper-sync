@@ -7,6 +7,14 @@ import tempfile
 from unittest.mock import MagicMock
 
 
+def pytest_configure(config):
+    """Register custom pytest markers."""
+    config.addinivalue_line(
+        "markers",
+        "offline: marks tests that run in offline mode with pre-recorded testdata"
+    )
+
+
 @pytest.fixture
 def sample_markdown_dir() -> Path:
     """Path to sample markdown fixtures"""
@@ -543,3 +551,93 @@ def rmscene_test_files(testdata_rmscene_dir) -> list[Path]:
     if not testdata_rmscene_dir.exists():
         return []
     return list(testdata_rmscene_dir.glob("*.rm"))
+
+
+@pytest.fixture(scope="function")
+def isolated_rmfakecloud(request, tmp_path: Path):
+    """Start rmfakecloud with fresh state for each test.
+
+    Creates a new container with a copy of rmfakecloud_data for each test.
+    This ensures complete isolation and clean state between tests.
+
+    Returns:
+        str: URL of the rmfakecloud instance
+    """
+    import subprocess
+    import shutil
+
+    def _get_container_runtime():
+        """Detect container runtime."""
+        import shutil
+
+        if shutil.which("podman"):
+            return "podman"
+        if shutil.which("docker"):
+            return "docker"
+        return ""
+
+    def _wait_for_ready(url: str, timeout: float = 30.0, interval: float = 0.5) -> bool:
+        """Wait for service to become ready."""
+        import time
+        import requests
+
+        start = time.time()
+        while time.time() - start < timeout:
+            try:
+                resp = requests.get(f"{url}/health", timeout=2)
+                if resp.status_code == 200:
+                    return True
+            except requests.RequestException:
+                pass
+            time.sleep(interval)
+        return False
+
+    runtime = _get_container_runtime()
+    if not runtime:
+        pytest.skip("No container runtime found (docker/podman)")
+
+    # Copy rmfakecloud_data to temp directory for this test
+    source_data = Path(__file__).parent / "testdata" / "rmfakecloud_init" / "rmfakecloud_data"
+
+    if not source_data.exists():
+        pytest.skip("rmfakecloud_data not found - run setup first")
+
+    # Create fresh copy for this test
+    test_data = tmp_path / "rmfakecloud_data"
+    shutil.copytree(source_data, test_data)
+
+    # Use a single container name that gets recreated per test
+    container_name = "test_rmfakecloud_isolated"
+    port = 3001
+    url = f"http://localhost:{port}"
+
+    # Clean up any existing container
+    subprocess.run([runtime, "rm", "-f", container_name], capture_output=True)
+
+    # Start container with fresh data
+    image = "docker.io/ddvk/rmfakecloud:latest"
+    cmd = [
+        runtime, "run", "-d",
+        "--name", container_name,
+        "-p", f"{port}:3000",
+        "-e", "STORAGE_URL=http://localhost",
+        "-e", "JWT_SECRET_KEY=2vrOXKJWZ7zgEAf7CjN89rnPW/XOc0pH4naGClMRPxs=",
+        "-v", f"{test_data}:/data:Z",
+        image,
+    ]
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        pytest.fail(f"Failed to start rmfakecloud: {result.stderr}")
+
+    # Wait for ready
+    if not _wait_for_ready(url, timeout=30.0):
+        subprocess.run([runtime, "stop", container_name], capture_output=True)
+        subprocess.run([runtime, "rm", container_name], capture_output=True)
+        pytest.fail(f"rmfakecloud failed to become ready at {url}")
+
+    yield url
+
+    # Cleanup after test
+    subprocess.run([runtime, "stop", container_name], capture_output=True)
+    subprocess.run([runtime, "rm", container_name], capture_output=True)
