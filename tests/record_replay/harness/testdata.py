@@ -489,3 +489,54 @@ class TestdataStore:
             Path to snapshot directory
         """
         return self.collected_dir / test_id / "vault_snapshots" / snapshot_name
+
+    def save_golden_vault(self, test_id: str, vault_dir: Path) -> Path:
+        """Save final vault state as golden reference during recording.
+
+        Golden vault captures the expected final state after a successful sync.
+        Stored in goldens/{test_id}_golden_vault/ directory.
+
+        Args:
+            test_id: Test identifier
+            vault_dir: Path to vault directory after sync
+
+        Returns:
+            Path to golden vault directory
+        """
+        golden_dir = self.collected_dir / test_id / "goldens" / f"{test_id}_golden_vault"
+        golden_dir.parent.mkdir(parents=True, exist_ok=True)
+
+        # Remove existing golden if present
+        if golden_dir.exists():
+            shutil.rmtree(golden_dir)
+
+        # Copy vault files, excluding system directories
+        shutil.copytree(
+            vault_dir,
+            golden_dir,
+            ignore=shutil.ignore_patterns(".state", ".cache", "logs", "*.db", "config.toml"),
+        )
+
+        return golden_dir
+
+    def load_golden_vault(self, test_id: str) -> Path:
+        """Load golden vault reference for replay test.
+
+        Args:
+            test_id: Test identifier
+
+        Returns:
+            Path to golden vault directory
+
+        Raises:
+            FileNotFoundError: If golden vault not found
+        """
+        golden_dir = self.collected_dir / test_id / "goldens" / f"{test_id}_golden_vault"
+
+        if not golden_dir.exists():
+            raise FileNotFoundError(
+                f"Golden vault not found for test '{test_id}'. "
+                f"Expected at {golden_dir}"
+            )
+
+        return golden_dir

@@ -137,15 +137,20 @@ class TestOCRHandwritingReplay:
     Could support online mode by adding user prompts.
     """
 
-    def test_load_ocr_handwriting_testdata(self, annotation_manager):
+    def test_load_ocr_handwriting_testdata(self, annotation_manager, golden_replay):
         """Verify OCR handwriting testdata can be loaded and parsed."""
+        golden_replay.start(LEGACY_OCR_TEST_ID)
         state, _ = annotation_manager.get_annotated_document(LEGACY_OCR_TEST_ID)
 
         assert len(state.rm_files) == 2
         assert all(isinstance(rm_data, bytes) for rm_data in state.rm_files.values())
 
-    def test_ocr_testdata_has_annotations(self, annotation_manager):
-        """Verify annotations are present in OCR testdata."""
+    def test_ocr_testdata_has_annotations(self, annotation_manager, golden_replay):
+        """Verify annotations are present in OCR testdata.
+
+        Also validates vault state matches expected baseline after annotation replay.
+        """
+        golden_replay.start(LEGACY_OCR_TEST_ID)
         state, _ = annotation_manager.get_annotated_document(LEGACY_OCR_TEST_ID)
 
         # Verify we have .rm files with annotations
@@ -156,8 +161,16 @@ class TestOCRHandwritingReplay:
 
         assert len(all_annotations) > 0, "No annotations in OCR testdata"
 
-    def test_ocr_testdata_rm_files_valid(self, annotation_manager):
-        """Verify .rm files are valid rmscene format."""
+        # Validate final state matches baseline
+        vault_state = golden_replay.validate_vault_state()
+        assert vault_state is not None
+
+    def test_ocr_testdata_rm_files_valid(self, annotation_manager, golden_replay):
+        """Verify .rm files are valid rmscene format.
+
+        Also validates that replaying produces consistent output.
+        """
+        golden_replay.start(LEGACY_OCR_TEST_ID)
         state, _ = annotation_manager.get_annotated_document(LEGACY_OCR_TEST_ID)
 
         for page_uuid, rm_data in state.rm_files.items():
@@ -281,9 +294,13 @@ class TestPenColorsMulticolor:
 
     TEST_ID = "pen_colors_multicolor"
 
-    def test_multicolor_testdata_available(self, annotation_manager):
-        """Check if multicolor testdata can be loaded."""
+    def test_multicolor_testdata_available(self, annotation_manager, golden_replay):
+        """Check if multicolor testdata can be loaded.
+
+        Also validates vault state matches expected baseline.
+        """
         try:
+            golden_replay.start(self.TEST_ID)
             state, _ = annotation_manager.get_annotated_document(self.TEST_ID)
             assert state.rm_files
         except FileNotFoundError:

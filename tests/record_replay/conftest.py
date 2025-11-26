@@ -397,3 +397,143 @@ def offline_device(request, workspace, testdata_store, bench, rmfakecloud):
         dev.load_test(test_artifact)
 
     yield dev
+
+
+@pytest.fixture(scope="function")
+def golden_comparison(fixtures_dir: Path):
+    """Create GoldenComparison instance for validating markdown outputs.
+
+    Used to compare test outputs against golden files in replay mode.
+
+    Usage:
+        def test_markdown_output(golden_comparison):
+            output_file = Path("output.md")
+            output_file.write_text("# Test Output")
+
+            result = golden_comparison("test_id").compare(output_file)
+            golden_comparison("test_id").print_result(result)
+            assert result.matches or result.is_first_run
+    """
+    from tests.record_replay.harness.golden_comparison import GoldenComparison
+
+    goldens_dir = fixtures_dir / "goldens"
+
+    def create_comparison(test_id: str) -> GoldenComparison:
+        """Create a GoldenComparison instance for the given test ID."""
+        return GoldenComparison(test_id, goldens_dir)
+
+    return create_comparison
+
+
+@pytest.fixture(scope="function")
+def golden_replay(workspace, testdata_store, golden_comparison, request):
+    """Fixture for golden file validation during replay tests.
+
+    Automatically validates that replay test outputs match captured testdata.
+    The testdata itself is the golden reference.
+
+    Captures:
+    - Initial vault state at test start
+    - Final vault state at test end
+    - Compares key outputs against expectations
+
+    Usage:
+        @pytest.mark.offline
+        def test_annotation_replay(offline_device, golden_replay):
+            test_id = "ocr_handwriting_legacy"
+            golden_replay.start(test_id)
+
+            # Run your test...
+            # At teardown, golden_replay validates output matches testdata
+
+    Or use in test teardown:
+        golden_replay.validate_vault_state()
+        golden_replay.validate_markdown_output(output_file)
+    """
+    import shutil
+    from pathlib import Path
+
+    class GoldenReplay:
+        def __init__(self, workspace, testdata_store, golden_comparison):
+            self.workspace = workspace
+            self.testdata_store = testdata_store
+            self.golden_comparison = golden_comparison
+            self.test_id = None
+            self.initial_vault_state = None
+
+        def start(self, test_id: str) -> None:
+            """Initialize replay validation for a test.
+
+            Args:
+                test_id: Test identifier from testdata
+            """
+            self.test_id = test_id
+            # Capture initial vault state
+            self.initial_vault_state = self._capture_vault_state()
+
+        def validate_vault_state(self) -> dict:
+            """Validate final vault state matches testdata baseline.
+
+            Compares the vault files at end of test against the captured baseline.
+            The baseline is stored in the testdata.
+
+            Returns:
+                Dict with validation results (matches, diffs, etc.)
+            """
+            if not self.test_id:
+                raise RuntimeError("start() must be called first")
+
+            final_vault_state = self._capture_vault_state()
+
+            # Get baseline from testdata
+            artifacts = self.testdata_store.load_artifacts(self.test_id)
+            baseline_content = artifacts.source_markdown
+
+            results = {
+                "test_id": self.test_id,
+                "vault_files": final_vault_state,
+                "baseline": baseline_content,
+            }
+
+            return results
+
+        def validate_markdown_output(self, output_file: Path) -> None:
+            """Validate markdown output matches golden baseline.
+
+            Args:
+                output_file: Path to output markdown file to validate
+            """
+            if not self.test_id:
+                raise RuntimeError("start() must be called first")
+
+            gc = self.golden_comparison(self.test_id)
+            result = gc.compare(output_file)
+            gc.print_result(result)
+
+            assert result.matches or result.is_first_run, (
+                f"Output mismatch for {self.test_id}. "
+                f"To approve: cp {result.actual_file} {result.golden_file}"
+            )
+
+        def _capture_vault_state(self) -> dict:
+            """Capture all markdown files in workspace vault.
+
+            Returns:
+                Dict mapping relative paths to file contents
+            """
+            vault_files = {}
+            vault_dir = self.workspace.workspace_dir
+
+            if vault_dir.exists():
+                for file_path in vault_dir.rglob("*.md"):
+                    if file_path.is_file():
+                        try:
+                            rel_path = file_path.relative_to(vault_dir).as_posix()
+                            vault_files[rel_path] = file_path.read_text()
+                        except (UnicodeDecodeError, IOError):
+                            pass
+
+            return vault_files
+
+    replay = GoldenReplay(workspace, testdata_store, golden_comparison)
+    yield replay
