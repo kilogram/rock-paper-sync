@@ -15,7 +15,7 @@ services:
 
   ocr-minimal:
     build:
-      context: ../../docker/ocr-minimal
+      context: ../docker/ocr-minimal
       dockerfile: Containerfile
     image: rock-paper-sync-ocr-minimal:latest
     container_name: rock-paper-sync-ocr-minimal

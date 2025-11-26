@@ -537,3 +537,101 @@ def golden_replay(workspace, testdata_store, golden_comparison, request):
 
     replay = GoldenReplay(workspace, testdata_store, golden_comparison)
     yield replay
+
+
+# =============================================================================
+# OCR Service fixtures (supports local minimal OCR via docker-compose)
+# =============================================================================
+
+
+@pytest.fixture(scope="function")
+def ocr_service():
+    """Provide a LocalOCRService connected to the minimal OCR container.
+
+    This fixture automatically starts the ocr-minimal service via podman-compose
+    and provides a connected OCRService client.
+
+    The minimal OCR service is lightweight and returns deterministic dummy results.
+    It's suitable for testing but not for production use.
+
+    Usage:
+        def test_ocr_integration(ocr_service):
+            from rock_paper_sync.ocr.protocol import OCRRequest, BoundingBox, ParagraphContext
+            import base64
+            from PIL import Image
+            import io
+
+            # Create a test image
+            img = Image.new('RGB', (100, 100), color='white')
+            img_bytes = io.BytesIO()
+            img.save(img_bytes, format='PNG')
+
+            request = OCRRequest(
+                image=img_bytes.getvalue(),
+                annotation_uuid="test-1",
+                bounding_box=BoundingBox(x=10, y=10, width=80, height=80),
+                context=ParagraphContext(
+                    document_id="doc-1",
+                    page_number=1,
+                    paragraph_index=0,
+                    paragraph_text="test text"
+                )
+            )
+
+            result = ocr_service.recognize(request)
+            assert result.text is not None
+            assert result.confidence > 0
+    """
+    import subprocess
+    import time
+    from rock_paper_sync.ocr.local import LocalOCRService
+
+    # Start OCR minimal service using podman-compose
+    compose_dir = Path(__file__).parent
+
+    # Start the service
+    result = subprocess.run(
+        ["podman-compose", "-f", str(compose_dir / "docker-compose.yml"), "up", "-d", "ocr-minimal"],
+        cwd=compose_dir,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"Failed to start OCR service: {result.stderr}")
+
+    # Wait for service to be healthy
+    service = None
+    max_retries = 30
+    try:
+        for i in range(max_retries):
+            try:
+                service = LocalOCRService(container_url="http://localhost:8000", timeout=5.0)
+                if service.health_check():
+                    yield service
+                    return
+            except Exception:
+                pass
+
+            time.sleep(0.5)
+
+        # If we get here, service failed to start
+        raise RuntimeError("OCR minimal service failed to start after 15 seconds")
+
+    finally:
+        # Always cleanup the service
+        if service is not None:
+            try:
+                service.close()
+            except Exception:
+                pass
+
+        # Stop the container
+        try:
+            subprocess.run(
+                ["podman-compose", "-f", str(compose_dir / "docker-compose.yml"), "down"],
+                cwd=compose_dir,
+                capture_output=True,
+                timeout=10,
+            )
+        except Exception:
+            pass

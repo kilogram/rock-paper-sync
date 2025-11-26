@@ -39,10 +39,12 @@ def create_ocr_service(config: "OCRConfig") -> OCRServiceProtocol:
         )
 
     elif provider == "local":
-        # Local Podman provider not yet implemented
-        raise OCRServiceError(
-            "Local Podman OCR service not yet implemented. "
-            "Use provider='runpods' for now, or contribute the local implementation!"
+        from rock_paper_sync.ocr.local import LocalOCRService
+
+        logger.info("Creating local OCR service")
+        return LocalOCRService(
+            container_url=getattr(config, "local_container_url", "http://localhost:8000"),
+            timeout=config.timeout,
         )
 
     else:

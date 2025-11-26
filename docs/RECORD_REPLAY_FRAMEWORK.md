@@ -324,6 +324,57 @@ diff <(jq '.results | sort_by(.annotation_uuid)' v1.json) \
      <(jq '.results | sort_by(.annotation_uuid)' v2.json)
 ```
 
+## Using Local OCR Service
+
+Tests can use a real minimal OCR service instead of mocking:
+
+```python
+def test_ocr_with_real_service(ocr_service):
+    """Use actual OCR service for integration testing."""
+    from rock_paper_sync.ocr.protocol import OCRRequest, BoundingBox, ParagraphContext
+    from PIL import Image
+    import io
+
+    # Create test image
+    img = Image.new('RGB', (100, 100), color='white')
+    img_bytes = io.BytesIO()
+    img.save(img_bytes, format='PNG')
+
+    # Process with OCR
+    request = OCRRequest(
+        image=img_bytes.getvalue(),
+        annotation_uuid="test-1",
+        bounding_box=BoundingBox(x=0, y=0, width=100, height=100),
+        context=ParagraphContext(
+            document_id="doc-1",
+            page_number=1,
+            paragraph_index=0,
+            paragraph_text="test"
+        ),
+    )
+
+    result = ocr_service.recognize(request)
+    assert result.text is not None
+```
+
+**The `ocr_service` fixture:**
+- Auto-starts minimal OCR container via podman-compose
+- Returns deterministic dummy results (lightweight, no GPU needed)
+- Cleans up after test
+- Fast startup (~5 seconds per test)
+
+**When to use:**
+- Integration tests needing real OCR behavior
+- Tests verifying OCR result processing
+- When mocking is insufficient
+
+**When to use OCRIntegrationMixin instead:**
+- Record/replay device tests
+- Unit tests of OCR integration
+- When you need to verify specific expected texts
+
+See `docker/ocr-minimal/README.md` for container details.
+
 ## Running Tests
 
 ### Online Mode (Real Device)

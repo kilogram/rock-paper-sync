@@ -1,0 +1,31 @@
+# Minimal OCR Service Container for Testing
+# Lightweight implementation without GPU or model downloads
+# Returns dummy OCR results for testing purposes
+
+FROM python:3.12-slim
+
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+# Create app directory
+WORKDIR /app
+
+# No system dependencies needed for minimal OCR service
+
+# Copy requirements
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy service code
+COPY src/ocr_service /app/ocr_service
+
+# Expose port for FastAPI
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=10s --timeout=5s --start-period=5s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)" || exit 1
+
+# Entry point
+ENTRYPOINT ["python", "-m", "ocr_service"]
