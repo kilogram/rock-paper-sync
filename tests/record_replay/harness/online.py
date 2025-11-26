@@ -309,27 +309,24 @@ class OnlineDevice(DeviceInteractionManager):
         """
         return []
 
-    def end_test(self, test_id: str, success: bool) -> None:
+    def end_test(self, test_id: str) -> None:
         """Finalize test recording.
 
         Saves manifest and completes testdata capture.
+        Assumes test succeeded (failed tests raise exceptions before reaching here).
 
         Args:
             test_id: Test identifier
-            success: Whether test passed
         """
         if not self._current_test_id:
             return
 
-        if success:
-            # Save manifest with all phases
-            self._save_manifest()
-            self.bench.ok(
-                f"Recording complete: {test_id} "
-                f"({len(self._phases)} phases)"
-            )
-        else:
-            self.bench.warn(f"Test failed: {test_id}")
+        # Save manifest with all phases
+        self._save_manifest()
+        self.bench.ok(
+            f"Recording complete: {test_id} "
+            f"({len(self._phases)} phases)"
+        )
 
         self._current_test_id = None
         self._current_description = None

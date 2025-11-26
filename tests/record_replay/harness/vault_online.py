@@ -68,14 +68,15 @@ class OnlineVault(VaultInteractionManager):
         self._operations.clear()
         self.bench.info(f"Started vault recording: {test_id}")
 
-    def end_test(self, test_id: str, success: bool) -> None:
+    def end_test(self, test_id: str) -> None:
         """End test and finalize operation capture.
+
+        Assumes test succeeded (failed tests raise exceptions before reaching here).
 
         Args:
             test_id: Test identifier (should match start_test)
-            success: Whether the test passed
         """
-        if success and self._current_test_id == test_id:
+        if self._current_test_id == test_id:
             self.bench.ok(f"Vault test {test_id} completed, operations recorded")
         self._current_test_id = None
         self._operations.clear()

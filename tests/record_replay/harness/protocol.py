@@ -2,9 +2,12 @@
 
 Defines the abstract interface for device interaction that works both
 with real devices (online mode) and emulated replay (offline mode).
+
+Uses typing.Protocol for structural subtyping to ensure all implementations
+(OnlineDevice, OfflineEmulator) adhere to the same interface contract.
 """
 
-from abc import ABC, abstractmethod
+from typing import Protocol, runtime_checkable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -26,10 +29,11 @@ class DocumentState:
     has_annotations: bool = False
 
 
-class DeviceInteractionManager(ABC):
-    """Abstract interface for device interaction.
+@runtime_checkable
+class DeviceInteractionProtocol(Protocol):
+    """Protocol for device interaction in online and offline modes.
 
-    This protocol abstracts the interaction with a reMarkable device,
+    This protocol defines the interface for interacting with a reMarkable device,
     allowing the same test code to work in two modes:
 
     1. **Online Mode**: Real device connected, user prompted for actions.
@@ -38,17 +42,23 @@ class DeviceInteractionManager(ABC):
     2. **Offline Mode**: No device needed, pre-recorded .rm files are
        injected into rmfakecloud to simulate device sync.
 
+    Implementations:
+        - OnlineDevice: Records real device interactions
+        - OfflineEmulator: Replays pre-recorded testdata
+
+    Type Safety:
+        This is a typing.Protocol, so type checkers will verify that
+        implementations match this interface at static analysis time.
+        The @runtime_checkable decorator also enables isinstance() checks.
+
     Example:
-        class MyTest(DeviceTestCase):
-            def execute(self) -> bool:
-                # Works identically in online and offline mode
-                doc_uuid = self.device.upload_document(self.workspace.test_doc)
-                state = self.device.wait_for_annotations(doc_uuid)
-                assert state.has_annotations
-                return True
+        def test_annotations(device: DeviceInteractionProtocol):
+            # Works identically in online and offline mode
+            doc_uuid = device.upload_document(workspace.test_doc)
+            state = device.wait_for_annotations(doc_uuid)
+            assert state.has_annotations
     """
 
-    @abstractmethod
     def upload_document(self, markdown_path: Path) -> str:
         """Upload a markdown document to the cloud.
 
@@ -63,7 +73,6 @@ class DeviceInteractionManager(ABC):
         """
         ...
 
-    @abstractmethod
     def wait_for_annotations(
         self, doc_uuid: str, timeout: float = 300.0
     ) -> DocumentState:
@@ -81,7 +90,6 @@ class DeviceInteractionManager(ABC):
         """
         ...
 
-    @abstractmethod
     def trigger_sync(self) -> None:
         """Trigger a sync operation.
 
@@ -90,7 +98,6 @@ class DeviceInteractionManager(ABC):
         """
         ...
 
-    @abstractmethod
     def get_document_state(self, doc_uuid: str) -> DocumentState:
         """Get current state of a document from the cloud.
 
@@ -102,7 +109,6 @@ class DeviceInteractionManager(ABC):
         """
         ...
 
-    @abstractmethod
     def unsync_vault(self, vault_name: str | None = None) -> tuple[int, int]:
         """Unsync entire vault from cloud.
 
@@ -123,7 +129,6 @@ class DeviceInteractionManager(ABC):
         """
         ...
 
-    @abstractmethod
     def get_remaining_folders(self, vault_name: str | None = None) -> list[tuple[str, str]]:
         """Get folders still tracked in state after operations.
 
@@ -137,29 +142,30 @@ class DeviceInteractionManager(ABC):
         """
         ...
 
-    # Test lifecycle methods
-
-    def start_test(self, test_id: str) -> None:
+    def start_test(self, test_id: str, description: str = "") -> None:
         """Begin a test, enabling artifact capture.
 
         Called by test harness at the start of each test.
 
         Args:
             test_id: Unique identifier for this test run
+            description: Human-readable test description (used in online mode)
         """
-        pass  # Default no-op, online mode overrides
+        ...
 
-    def end_test(self, test_id: str, success: bool) -> None:
+    def end_test(self, test_id: str) -> None:
         """End a test, finalizing artifact capture.
 
         Called by test harness at the end of each test.
+        If this method is called, the test is assumed to have succeeded.
+        Failed tests will raise exceptions before reaching this point.
 
         Args:
             test_id: Test identifier (same as start_test)
-            success: Whether the test passed
         """
-        pass  # Default no-op, online mode overrides
+        ...
 
 
-# Backward compatibility alias
-DeviceProtocol = DeviceInteractionManager
+# Backward compatibility aliases
+DeviceProtocol = DeviceInteractionProtocol
+DeviceInteractionManager = DeviceInteractionProtocol

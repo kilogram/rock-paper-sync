@@ -174,14 +174,14 @@ class VaultInteractionManager(ABC):
         """
         pass  # Default no-op, online mode overrides
 
-    def end_test(self, test_id: str, success: bool) -> None:
+    def end_test(self, test_id: str) -> None:
         """End a test session.
 
         Called by test harness at the end. Online mode uses this to finalize
         artifact capture and save operations.
+        Assumes test succeeded (failed tests raise exceptions before reaching here).
 
         Args:
             test_id: Test identifier (same as start_test)
-            success: Whether the test passed
         """
         pass  # Default no-op, online mode overrides

@@ -21,12 +21,16 @@ Usage:
 
 import os
 import time
+from typing import TYPE_CHECKING
 
 import pytest
 from pathlib import Path
 
 # Make sure json is available at module level
 import json
+
+if TYPE_CHECKING:
+    from tests.record_replay.harness import DeviceInteractionProtocol
 
 
 # Import lazily to avoid import issues when running from different directories
@@ -175,10 +179,8 @@ def pytest_collection_modifyitems(config, items):
     online = config.getoption("--online")
 
     for item in items:
-        # Skip device tests unless --online is explicitly passed
-        if "device" in item.keywords and not online:
-            item.add_marker(pytest.mark.skip(reason="Device tests require --online flag"))
-        elif online and "offline_only" in item.keywords:
+        # Only skip tests that are explicitly marked as mode-specific
+        if online and "offline_only" in item.keywords:
             item.add_marker(pytest.mark.skip(reason="Test requires offline mode"))
         elif not online and "online_only" in item.keywords:
             item.add_marker(pytest.mark.skip(reason="Test requires --online flag"))
@@ -397,14 +399,21 @@ def testdata_store(fixtures_dir: Path):
 
 
 @pytest.fixture(scope="function")
-def device(request, workspace, testdata_store, bench, rmfakecloud):
+def device(request, workspace, testdata_store, bench, rmfakecloud) -> "DeviceInteractionProtocol":
     """Create device instance based on --online flag.
 
-    In online mode (--online): OnlineDevice with real device interaction
-    In offline mode (no --online): OfflineEmulator with pre-recorded testdata
+    Returns a DeviceInteractionProtocol implementation:
+    - In online mode (--online): OnlineDevice with real device interaction
+    - In offline mode (no --online): OfflineEmulator with pre-recorded testdata
+
+    The Protocol ensures type safety - both implementations must satisfy
+    the same interface contract, catching signature mismatches at type-check time.
+
+    Returns:
+        DeviceInteractionProtocol: Device implementation (OnlineDevice or OfflineEmulator)
 
     Usage in tests:
-        def test_annotation(device, workspace):
+        def test_annotation(device: DeviceInteractionProtocol, workspace):
             doc_uuid = device.upload_document(workspace.test_doc)
             state = device.wait_for_annotations(doc_uuid)
             assert state.has_annotations
@@ -469,19 +478,26 @@ def has_testdata(testdata_dir: Path) -> bool:
 
 
 @pytest.fixture(scope="function")
-def offline_device(request, workspace, testdata_store, bench, rmfakecloud):
+def offline_device(request, workspace, testdata_store, bench, rmfakecloud) -> "DeviceInteractionProtocol":
     """Create OfflineEmulator connected to containerized rmfakecloud.
 
     This fixture automatically starts rmfakecloud (Docker or Podman) and
     configures the emulator to use it. Use this for offline tests that
     should run automatically in CI.
 
+    Returns:
+        DeviceInteractionProtocol: OfflineEmulator instance
+
     Note: You must call `offline_device.load_test(test_id)` before using
     methods that require testdata (like wait_for_annotations).
 
     Usage:
         @pytest.mark.offline
-        def test_annotation_replay(offline_device, workspace, testdata_store):
+        def test_annotation_replay(
+            offline_device: DeviceInteractionProtocol,
+            workspace,
+            testdata_store
+        ):
             # Get available testdata
             available = testdata_store.list_available_tests()
             if not available:

@@ -39,7 +39,12 @@ from .offline import OfflineEmulator
 from .ocr_integration import OCRIntegrationMixin, OCRTestRecording
 from .online import OnlineDevice
 from .prompts import user_confirm, user_prompt
-from .protocol import DeviceProtocol, DeviceInteractionManager, DocumentState
+from .protocol import (
+    DeviceInteractionProtocol,
+    DeviceProtocol,  # Backward compatibility
+    DeviceInteractionManager,  # Backward compatibility
+    DocumentState,
+)
 from .testdata import TestArtifacts, TestdataStore, TestManifest
 from .vault_manager import VaultInteractionManager, VaultOperation
 from .vault_online import OnlineVault
@@ -54,8 +59,9 @@ __all__ = [
     "requires_ocr",
     "SkipTest",
     # Device protocol and implementations
+    "DeviceInteractionProtocol",  # Primary protocol
     "DeviceProtocol",  # Backward compatibility alias
-    "DeviceInteractionManager",  # New name
+    "DeviceInteractionManager",  # Backward compatibility alias
     "DocumentState",
     "OnlineDevice",
     "OfflineEmulator",

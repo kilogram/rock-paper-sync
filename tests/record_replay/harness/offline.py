@@ -114,27 +114,28 @@ class OfflineEmulator(DeviceInteractionManager):
                 f"({len(self._current_artifacts.rm_files)} .rm files)"
             )
 
-    def start_test(self, test_id: str) -> None:
+    def start_test(self, test_id: str, description: str = "") -> None:
         """Begin test with the specified test_id.
 
         Loads artifacts if not already loaded.
 
         Args:
             test_id: Test identifier
+            description: Test description (ignored in offline mode)
         """
         if self._current_test_id != test_id:
             self.load_test(test_id)
         self.bench.info(f"Started offline test: {test_id}")
 
-    def end_test(self, test_id: str, success: bool) -> None:
+    def end_test(self, test_id: str) -> None:
         """End test.
+
+        Assumes test succeeded (failed tests raise exceptions before reaching here).
 
         Args:
             test_id: Test identifier
-            success: Whether test passed
         """
-        if success:
-            self.bench.ok(f"Offline test {test_id} completed successfully")
+        self.bench.ok(f"Offline test {test_id} completed successfully")
         self._current_artifacts = None
         self._current_test_id = None
         self._current_phase = 0
@@ -289,7 +290,12 @@ class OfflineEmulator(DeviceInteractionManager):
         if self._phases:
             self._advance_phase()
 
-        return self.get_document_state(doc_uuid)
+        state = self.get_document_state(doc_uuid)
+
+        # Validate testdata integrity automatically in offline mode
+        self._validate_testdata(state)
+
+        return state
 
     def trigger_sync(self) -> None:
         """Run sync command."""
@@ -426,3 +432,51 @@ class OfflineEmulator(DeviceInteractionManager):
         else:
             # Default: no folders remaining after unsync
             return []
+
+    def _validate_testdata(self, state: DocumentState) -> None:
+        """Validate testdata integrity automatically during replay.
+
+        Performs generic sanity checks on replayed testdata:
+        - .rm files contain valid rmscene blocks
+        - Annotations can be extracted from .rm files
+        - Basic data structure integrity
+
+        Test-specific assertions (colors, widths, etc.) remain in test code.
+
+        Args:
+            state: Document state to validate
+
+        Raises:
+            AssertionError: If validation fails
+        """
+        import io
+        from rmscene import read_blocks
+        from rock_paper_sync.annotations import read_annotations
+
+        if not state.has_annotations:
+            # No annotations to validate
+            return
+
+        # Validate .rm files contain valid blocks
+        for page_uuid, rm_data in state.rm_files.items():
+            blocks = list(read_blocks(io.BytesIO(rm_data)))
+            assert len(blocks) > 0, (
+                f"Testdata validation failed: No blocks in {page_uuid}.rm. "
+                f"The .rm file may be corrupted or empty."
+            )
+
+        # Validate annotations can be extracted
+        total_annotations = 0
+        for page_uuid, rm_data in state.rm_files.items():
+            annotations = read_annotations(io.BytesIO(rm_data))
+            total_annotations += len(annotations)
+
+        assert total_annotations > 0, (
+            f"Testdata validation failed: No annotations extracted from {len(state.rm_files)} .rm file(s). "
+            f"Annotations may not have been properly captured during recording."
+        )
+
+        self.bench.ok(
+            f"Testdata validation passed: {len(state.rm_files)} .rm file(s), "
+            f"{total_annotations} annotation(s)"
+        )

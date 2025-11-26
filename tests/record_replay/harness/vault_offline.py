@@ -74,15 +74,15 @@ class OfflineVault(VaultInteractionManager):
             self.load_test(test_id)
         self.bench.info(f"Started offline vault test: {test_id}")
 
-    def end_test(self, test_id: str, success: bool) -> None:
+    def end_test(self, test_id: str) -> None:
         """End offline test.
+
+        Assumes test succeeded (failed tests raise exceptions before reaching here).
 
         Args:
             test_id: Test identifier
-            success: Whether test passed
         """
-        if success:
-            self.bench.ok(f"Offline vault test {test_id} completed")
+        self.bench.ok(f"Offline vault test {test_id} completed")
         self._current_test_id = None
 
     def create_file(self, rel_path: str, content: str) -> Path:
