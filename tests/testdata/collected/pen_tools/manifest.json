@@ -1,0 +1,47 @@
+{
+  "test_id": "pen_tools",
+  "created_at": "2025-11-26T11:53:45.891885",
+  "doc_uuid": "0e714a85-5bfe-4dd1-a2e9-036308bb7cd2",
+  "page_uuids": [
+    "3455c8b8-3af1-4544-9e04-51edaf2e62e0",
+    "c0bd3e53-f6e1-482f-b94c-3eefcd5e2e99"
+  ],
+  "description": "Annotations using different pen tools",
+  "annotations_count": 2,
+  "source_document": "source.md",
+  "phases": [
+    {
+      "phase_number": 0,
+      "phase_name": "initial",
+      "action": "setup",
+      "vault_files": [
+        "document.md"
+      ],
+      "device_state": {
+        "doc_uuid": null,
+        "page_uuids": [],
+        "rm_files_count": 0,
+        "has_annotations": false
+      },
+      "has_rm_files": false
+    },
+    {
+      "phase_number": 1,
+      "phase_name": "phase_1",
+      "action": "annotation_download",
+      "vault_files": [
+        "document.md"
+      ],
+      "device_state": {
+        "doc_uuid": "0e714a85-5bfe-4dd1-a2e9-036308bb7cd2",
+        "page_uuids": [
+          "3455c8b8-3af1-4544-9e04-51edaf2e62e0",
+          "c0bd3e53-f6e1-482f-b94c-3eefcd5e2e99"
+        ],
+        "rm_files_count": 2,
+        "has_annotations": true
+      },
+      "has_rm_files": true
+    }
+  ]
+}

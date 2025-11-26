@@ -1,0 +1,47 @@
+{
+  "test_id": "pen_colors",
+  "created_at": "2025-11-26T11:51:49.869841",
+  "doc_uuid": "80d9b35c-d3d3-4435-9f29-8db621f7046f",
+  "page_uuids": [
+    "311ff7cc-3923-4ee2-b4cc-bbb0e6132527",
+    "e8982fea-9014-43b5-ab00-89f6369c5902"
+  ],
+  "description": "Annotations with multiple pen colors",
+  "annotations_count": 2,
+  "source_document": "source.md",
+  "phases": [
+    {
+      "phase_number": 0,
+      "phase_name": "initial",
+      "action": "setup",
+      "vault_files": [
+        "document.md"
+      ],
+      "device_state": {
+        "doc_uuid": null,
+        "page_uuids": [],
+        "rm_files_count": 0,
+        "has_annotations": false
+      },
+      "has_rm_files": false
+    },
+    {
+      "phase_number": 1,
+      "phase_name": "phase_1",
+      "action": "annotation_download",
+      "vault_files": [
+        "document.md"
+      ],
+      "device_state": {
+        "doc_uuid": "80d9b35c-d3d3-4435-9f29-8db621f7046f",
+        "page_uuids": [
+          "311ff7cc-3923-4ee2-b4cc-bbb0e6132527",
+          "e8982fea-9014-43b5-ab00-89f6369c5902"
+        ],
+        "rm_files_count": 2,
+        "has_annotations": true
+      },
+      "has_rm_files": true
+    }
+  ]
+}

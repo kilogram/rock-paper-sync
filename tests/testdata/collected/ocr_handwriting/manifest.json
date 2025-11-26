@@ -1,0 +1,47 @@
+{
+  "test_id": "ocr_handwriting",
+  "created_at": "2025-11-26T11:50:10.558922",
+  "doc_uuid": "fee9fced-42c1-4cdb-9652-69c95ea321e9",
+  "page_uuids": [
+    "a35cc75a-5ebe-460c-b186-ac469b174975",
+    "ef03ba74-5bf2-44d7-91e7-38e911dbaa82"
+  ],
+  "description": "OCR handwriting samples",
+  "annotations_count": 2,
+  "source_document": "source.md",
+  "phases": [
+    {
+      "phase_number": 0,
+      "phase_name": "initial",
+      "action": "setup",
+      "vault_files": [
+        "document.md"
+      ],
+      "device_state": {
+        "doc_uuid": null,
+        "page_uuids": [],
+        "rm_files_count": 0,
+        "has_annotations": false
+      },
+      "has_rm_files": false
+    },
+    {
+      "phase_number": 1,
+      "phase_name": "phase_1",
+      "action": "annotation_download",
+      "vault_files": [
+        "document.md"
+      ],
+      "device_state": {
+        "doc_uuid": "fee9fced-42c1-4cdb-9652-69c95ea321e9",
+        "page_uuids": [
+          "a35cc75a-5ebe-460c-b186-ac469b174975",
+          "ef03ba74-5bf2-44d7-91e7-38e911dbaa82"
+        ],
+        "rm_files_count": 2,
+        "has_annotations": true
+      },
+      "has_rm_files": true
+    }
+  ]
+}

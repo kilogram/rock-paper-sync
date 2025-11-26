@@ -1,0 +1,9 @@
+{
+  "phase_number": 1,
+  "phase_name": "phase_1",
+  "timestamp": "2025-11-26T11:50:10.556841",
+  "action": "annotation_download",
+  "vault_files": [
+    "document.md"
+  ]
+}
