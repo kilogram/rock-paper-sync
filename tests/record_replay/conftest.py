@@ -277,7 +277,8 @@ def workspace(
 
     # Setup test fixtures and credentials depending on device mode
     fixtures_dir = Path(__file__).parent / "fixtures"
-    test_creds_file = fixtures_dir / "rmfakecloud_test_credentials.json"
+    # Credentials now at tests/fixtures/rmfakecloud.json
+    test_creds_file = fixtures_dir.parent / "fixtures" / "rmfakecloud.json"
     test_config_file = fixtures_dir / "config.toml"
     creds_dir = Path.home() / ".config" / "rock-paper-sync"
     creds_path = creds_dir / "device-credentials.json"
@@ -387,8 +388,8 @@ def workspace(
 def testdata_store(fixtures_dir: Path):
     """Create TestdataStore instance for test session."""
     TestdataStore = _get_testdata_store()
-    # Testdata is now at tests/testdata/ (moved from fixtures/testdata/)
-    testdata_dir = fixtures_dir.parent.parent / "testdata"
+    # Testdata is now at tests/record_replay/testdata/
+    testdata_dir = fixtures_dir.parent / "testdata"
     return TestdataStore(testdata_dir)
 
 
@@ -443,8 +444,8 @@ def device_mode(request) -> str:
 @pytest.fixture
 def testdata_dir(fixtures_dir: Path) -> Path:
     """Get OCR handwriting testdata directory."""
-    # Testdata is now at tests/testdata/ (moved from fixtures/testdata/)
-    return fixtures_dir.parent.parent / "testdata" / "record_replay" / "ocr_handwriting"
+    # Testdata is now at tests/record_replay/testdata/
+    return fixtures_dir.parent / "testdata" / "ocr_handwriting"
 
 
 @pytest.fixture

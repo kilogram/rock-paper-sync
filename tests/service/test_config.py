@@ -17,7 +17,7 @@ from rock_paper_sync.config import (
     validate_config,
 )
 
-from .config_helpers import make_app_config, make_vault_config, with_sync, with_layout, with_vault
+from ..config_helpers import make_app_config, make_vault_config, with_sync, with_layout, with_vault
 
 
 class TestExpandPath:

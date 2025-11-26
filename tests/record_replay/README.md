@@ -1,226 +1,231 @@
-# Device Test Bench
+# Record/Replay Test Framework
 
-On-device testing for rock-paper-sync annotation and OCR features.
+This guide explains the record/replay test system for validating annotation and OCR features on reMarkable devices.
 
 ## Overview
 
-This test bench validates the complete annotation sync workflow and OCR integration on a real reMarkable Paper Pro device. Each test is self-contained and end-to-end.
+Tests are organized by feature, each with:
+- **Test file**: `test_[feature].py` (e.g., `test_highlights.py`)
+- **Fixture document**: `fixtures/test_[feature].md` (e.g., `fixtures/test_highlights.md`)
+- **Testdata**: `testdata/[feature]/` (e.g., `testdata/highlights/`)
 
-## Prerequisites
+| Feature | Test | Fixture | Testdata |
+|---------|------|---------|----------|
+| Highlights | `test_highlights.py` | `test_highlights.md` | `testdata/highlights/` |
+| OCR Handwriting | `test_ocr_handwriting.py` | `test_ocr_handwriting.md` | `testdata/ocr_handwriting/` |
+| Pen Colors | `test_pen_colors.py` | `test_pen_colors.md` | `testdata/pen_colors/` |
+| Pen Widths | `test_pen_widths.py` | `test_pen_widths.md` | `testdata/pen_widths/` |
+| Pen Tools | `test_pen_tools.py` | `test_pen_tools.md` | `testdata/pen_tools/` |
 
-1. **reMarkable Device**
-   - Connected and accessible
-   - Cloud sync enabled
+## Quick Start
 
-2. **Local Cloud Server**
-   - Running at `http://localhost:3000`
-   - See main README for setup instructions
-
-3. **OCR Configuration** (for OCR tests only)
-   - OCR is automatically enabled in the generated test config
-   - **Required**: Set environment variables for Runpods:
-     ```bash
-     export RUNPODS_API_KEY="your-key"
-     export RPS_RUNPODS_ENDPOINT_ID="your-endpoint-id"
-     ```
-   - Or create `secrets.env` in project root with these values
-
-## Test Categories
-
-### Annotation Tests
-
-Tests for the marker-based annotation sync system:
-
-- **annotation-roundtrip**: Sync clean doc → user annotates → verify markers appear
-- **no-hash-loop**: Verify annotation markers don't cause infinite sync loops
-- **content-edit**: Edit marked content → verify document re-syncs correctly
-
-### OCR Tests
-
-Tests for handwriting recognition and correction:
-
-- **ocr-recognition**: Write text by hand → OCR → verify recognized text appears
-- **ocr-correction**: OCR recognizes text → user corrects → verify correction stored
-- **ocr-stability**: Verify OCR markers don't cause infinite sync loops
-
-## Usage
-
-### Run All Tests
+### Running Tests (Offline Mode - No Device Needed)
 
 ```bash
-cd tests/device_bench
-uv run python bench.py --cleanup
+# Run all offline tests with pre-recorded testdata
+uv run pytest tests/record_replay/ --device-mode=offline
+
+# Run specific test
+uv run pytest tests/record_replay/test_highlights.py::TestHighlightsReplay --device-mode=offline
+
+# List available testdata artifacts
+uv run pytest tests/record_replay/ --list-tests
 ```
 
-The `--cleanup` flag automatically removes test state after completion.
-
-### Run Specific Test
+### Recording Tests (Online Mode - Real Device)
 
 ```bash
-# Annotation test
-uv run python bench.py --test annotation-roundtrip --cleanup
+# Record highlights with your device
+uv run pytest tests/record_replay/test_highlights.py::TestHighlightsRecording::test_record_highlights \
+    --device-mode=online --online -s
 
-# OCR test
-uv run python bench.py --test ocr-recognition --cleanup
+# After recording, replay offline
+uv run pytest tests/record_replay/test_highlights.py::TestHighlightsReplay --device-mode=offline
 ```
 
-### Manual State Management
+## Recording Instructions
+
+### Prerequisites
+
+**Offline Recording (rmfakecloud)**:
+1. Start rmfakecloud: `podman run -d -p 3000:3000 ddvk/rmfakecloud:latest`
+2. Credentials: `tests/fixtures/rmfakecloud.json`
+
+**Online Recording (Real Device)**:
+1. Configure device: `uv run rock-paper-sync init`
+2. Device credentials: `~/.config/rock-paper-sync/device-credentials.json`
+3. Test vault in `~/.config/rock-paper-sync/config.toml` (to avoid polluting production vaults)
+
+### Recording Highlights
 
 ```bash
-# Setup workspace
-uv run python bench.py --setup
-
-# Reset state between tests
-uv run python bench.py --reset
-
-# Run test without cleanup
-uv run python bench.py --test ocr-recognition
+uv run pytest tests/record_replay/test_highlights.py::TestHighlightsRecording::test_record_highlights \
+    --device-mode=online --online -s
 ```
 
-## Test Workflow
+**On Device**:
+1. Open document
+2. Select Highlight tool
+3. Highlight text (try multiple colors: Yellow, Green, Pink, Blue)
+4. Create overlapping highlights
+5. Press Enter to continue
 
-Each test follows this pattern:
+### Recording OCR Handwriting
 
-1. **Setup**: Create test workspace and config
-2. **Initial Sync**: Upload document to device
-3. **User Action**: Prompt user to perform action on device
-4. **Verification**: Download changes and verify results
-5. **Cleanup**: Remove test artifacts
-
-## Test Documents
-
-### Annotation Baseline (`fixtures/baseline.md`)
-
-Standard document for annotation testing with:
-- Multiple paragraphs
-- Target text for highlighting
-- Various formatting styles
-
-### OCR Baseline (`fixtures/ocr_baseline.md`)
-
-Document designed for OCR testing with:
-- **Gaps for handwriting**: Multiple newlines create space for handwritten text
-- **Specific prompts**: Clear instructions on what to write
-- **Test cases**: Simple words, numbers, short phrases, mixed content
-
-Example gap structure:
-```markdown
-## Test 1: Simple Words
-
-Write the word "hello" in the gap below:
-
-
-
-The gap above should contain your handwriting.
+```bash
+uv run pytest tests/record_replay/test_ocr_handwriting.py::TestOCRHandwritingRecording::test_record_ocr_handwriting \
+    --device-mode=online --online -s
 ```
 
-The empty lines create space on the reMarkable where you can write by hand.
+**On Device**:
+1. Select Ballpoint Pen tool
+2. Write in the provided gaps:
+   - Section 1: `hello`
+   - Section 2: `2025`
+   - Section 3: `quick test`
+   - Section 4: `Code 42`
+   - Section 5: `The quick brown fox`
+3. Write clearly (improves OCR accuracy)
+4. Press Enter to continue
+
+### Recording Pen Colors
+
+```bash
+uv run pytest tests/record_replay/test_pen_colors.py::TestPenColorsRecording::test_record_pen_colors \
+    --device-mode=online --online -s
+```
+
+**On Device**:
+1. Switch between pen colors (Black, Red, Blue, Green, Yellow, Pink)
+2. Write the color name in that color
+3. Use at least 3-4 different colors
+4. Press Enter to continue
+
+### Recording Pen Widths
+
+```bash
+uv run pytest tests/record_replay/test_pen_widths.py::TestPenWidthsRecording::test_record_pen_widths \
+    --device-mode=online --online -s
+```
+
+**On Device**:
+1. Select Ballpoint Pen
+2. Draw lines with varying pressure:
+   - Light pressure (thin)
+   - Normal pressure (medium)
+   - Heavy pressure (thick)
+   - Variable pressure (thin → thick → thin)
+3. Draw multiple parallel strokes
+4. Press Enter to continue
+
+### Recording Pen Tools
+
+```bash
+uv run pytest tests/record_replay/test_pen_tools.py::TestPenToolsRecording::test_record_pen_tools \
+    --device-mode=online --online -s
+```
+
+**On Device**:
+1. Select each tool and write with it:
+   - Ballpoint
+   - Fineliner
+   - Marker
+   - Pencil
+   - Mechanical Pencil
+   - Calligraphy
+2. Write the tool name with that tool
+3. Try to use all 6 tools
+4. Press Enter to continue
+
+## Testdata Structure
+
+After recording, testdata is stored at `tests/record_replay/testdata/[feature]/`:
+
+```
+testdata/[feature]/
+├── manifest.json              # Test metadata
+├── source.md                  # Original markdown
+└── phases/
+    ├── phase_0_initial/       # Initial vault state
+    │   ├── vault_snapshot/
+    │   │   └── source.md
+    │   └── phase_info.json
+    └── phase_1_final/         # After annotations
+        ├── vault_snapshot/
+        │   └── source.md
+        ├── device_state.json
+        ├── phase_info.json
+        └── rm_files/
+            └── [page_uuid].rm
+```
 
 ## Expected Results
 
-### Annotation Tests
+After syncing annotations/OCR, you should see markers in the markdown:
 
-After annotation sync, you should see markers like:
+**Highlights** (preserve color, position, overlaps):
 ```markdown
-**Important**: This text should be <!-- ANNOTATED: uuid=abc123 hash=def456 -->annotated<!-- /ANNOTATED --> correctly.
+The <!-- ANNOTATED: uuid=abc123 -->highlighted<!-- /ANNOTATED --> text
 ```
 
-### OCR Tests
-
-After OCR processing, you should see markers like:
+**OCR** (preserve recognized text, confidence, original content):
 ```markdown
-## Test 1: Simple Words
-
-Write the word "hello" in the gap below:
-
-<!-- OCR: uuid=abc123 confidence=0.95 model=base hash=def456 original_hash=ghi789 -->
+<!-- OCR: uuid=abc123 confidence=0.95 -->
 hello
 <!-- /OCR -->
-
-The gap above should contain your handwriting.
 ```
-
-## Verification
-
-Tests verify:
-- ✓ Markers appear in correct locations
-- ✓ Hash stability (no re-upload loops)
-- ✓ Content edits trigger re-sync
-- ✓ OCR recognizes handwritten text
-- ✓ OCR corrections are stored
-- ✓ Pattern matching (e.g., "hello", "2025")
 
 ## Troubleshooting
 
-### "No markers found"
+### "Testdata not available"
+Run the recording test first with `--device-mode=online --online -s`
 
-- Ensure you added annotations on device
-- Wait for cloud sync to complete
-- Check device folder matches config (`DeviceBench`)
+### "Sync fails"
+Check:
+1. rmfakecloud health: `curl http://localhost:3000/health`
+2. Credentials exist: `tests/fixtures/rmfakecloud.json`
+3. Device is responsive
 
-### "No OCR markers found"
-
-- Verify OCR is enabled in config
-- Check OCR provider credentials
-- Use highlighter to mark gaps where you wrote
-- Review logs at `workspace/logs/sync.log`
-
-### "Command failed"
-
-- Verify cloud server is running at `http://localhost:3000`
-- Check device connectivity
-- Review error messages in output
+### "Test hangs waiting for input"
+Press Enter to continue, or Ctrl+C to abort
 
 ### "Re-uploaded" errors
+Indicates hash instability - OCR/annotation markers should not trigger re-uploads.
+Check the sync logs at `workspace/logs/sync.log`
 
-- Indicates hash instability bug
-- OCR/annotation markers should not cause re-uploads
-- File a bug report with test logs
+## CI Integration
 
-## Test Logs
+Tests adapt to available resources:
 
-Results are saved to `workspace/logs/`:
-- `{test-name}_{timestamp}.json` - Detailed test results
-- `sync.log` - Sync operation logs
+```bash
+# CI: Offline mode (no device needed)
+uv run pytest tests/record_replay/ --device-mode=offline
 
-## Development
+# Dev: Online mode (real device)
+uv run pytest tests/record_replay/ --device-mode=online --online -s
+```
 
-### Adding New Tests
+## Adding New Tests
 
-1. Create test function in `bench.py`:
-   ```python
-   def test_new_feature():
-       bench = Bench()
-       bench.start_time = time.time()
-       bench.header("TEST: New Feature")
-       # ... test logic ...
-       bench.save_result("new-feature", True)
-       return True
-   ```
+1. Create fixture: `tests/record_replay/fixtures/test_[name].md`
+2. Create test file: `tests/record_replay/test_[name].py`
+3. Record testdata: `--device-mode=online --online -s`
+4. Verify testdata: Check `tests/record_replay/testdata/[test_id]/`
+5. Verify replay: `--device-mode=offline`
 
-2. Add to `TESTS` dict:
-   ```python
-   TESTS = {
-       # ...
-       'new-feature': test_new_feature,
-   }
-   ```
+## Architecture
 
-3. Update docstring and `run_suite()` description
+```
+Recording (Online):
+Device → Sync → rmfakecloud → .rm files → OnlineDevice → Testdata (tests/record_replay/testdata/)
 
-### Creating Test Fixtures
+Replay (Offline):
+Testdata → .rm files → OfflineEmulator → rmfakecloud → Test Assertions
+```
 
-Add fixture files to `fixtures/`:
-- Use `.md` extension
-- Include clear instructions for manual steps
-- Use gaps (multiple newlines) for handwriting areas
-- Consider UTF-8 whitespace for special spacing needs
+## References
 
-## Best Practices
-
-- Always use `--cleanup` for repeatable tests
-- Wait for device cloud sync between steps
-- Use highlighter to mark handwritten areas for OCR
-- Write clearly and follow test instructions
-- Run tests individually when debugging
-- Check logs for detailed error information
+- `tests/record_replay/harness/online.py` - OnlineDevice recording
+- `tests/record_replay/harness/offline.py` - OfflineEmulator replay
+- `tests/record_replay/conftest.py` - Test fixtures
+- `tests/record_replay/harness/testdata.py` - Testdata loading/storage
