@@ -7,12 +7,37 @@ import tempfile
 from unittest.mock import MagicMock
 
 
+def pytest_addoption(parser):
+    """Add custom pytest command line options."""
+    parser.addoption(
+        "--run-manual",
+        action="store_true",
+        default=False,
+        help="Run manual tests (e.g., tests requiring external services)",
+    )
+
+
 def pytest_configure(config):
     """Register custom pytest markers."""
     config.addinivalue_line(
         "markers",
         "offline: marks tests that run in offline mode with pre-recorded testdata"
     )
+    config.addinivalue_line(
+        "markers",
+        "manual: marks tests as manual (require external services, credentials, or setup). Run with --run-manual"
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    """Skip manual tests unless --run-manual flag is set."""
+    if config.getoption("--run-manual"):
+        return
+
+    skip_manual = pytest.mark.skip(reason="Manual test. Use --run-manual to run")
+    for item in items:
+        if "manual" in item.keywords:
+            item.add_marker(skip_manual)
 
 
 @pytest.fixture
@@ -554,22 +579,25 @@ def rmscene_test_files(testdata_rmscene_dir) -> list[Path]:
 
 
 @pytest.fixture(scope="function")
-def isolated_rmfakecloud(request, tmp_path: Path):
+def rmfakecloud(request, tmp_path: Path):
     """Start rmfakecloud with fresh state for each test.
 
-    Creates a new container with a copy of rmfakecloud_data for each test.
+    Creates a new container with a copy of rmfakecloud seed data for each test.
     This ensures complete isolation and clean state between tests.
 
+    The container is started on a dynamically allocated port to support
+    parallel test execution via pytest-xdist.
+
     Returns:
-        str: URL of the rmfakecloud instance
+        str: URL of the rmfakecloud instance (http://localhost:<port>)
     """
     import subprocess
     import shutil
+    import time
+    import requests
 
     def _get_container_runtime():
         """Detect container runtime."""
-        import shutil
-
         if shutil.which("podman"):
             return "podman"
         if shutil.which("docker"):
@@ -578,9 +606,6 @@ def isolated_rmfakecloud(request, tmp_path: Path):
 
     def _wait_for_ready(url: str, timeout: float = 30.0, interval: float = 0.5) -> bool:
         """Wait for service to become ready."""
-        import time
-        import requests
-
         start = time.time()
         while time.time() - start < timeout:
             try:
@@ -596,19 +621,25 @@ def isolated_rmfakecloud(request, tmp_path: Path):
     if not runtime:
         pytest.skip("No container runtime found (docker/podman)")
 
-    # Copy rmfakecloud_data to temp directory for this test
-    source_data = Path(__file__).parent / "testdata" / "rmfakecloud_init" / "rmfakecloud_data"
-
-    if not source_data.exists():
-        pytest.skip("rmfakecloud_data not found - run setup first")
+    # Use seeded rmfakecloud state
+    seed_data = Path(__file__).parent / "testdata" / "rmfakecloud" / "seed"
+    if not seed_data.exists():
+        pytest.skip(f"rmfakecloud seed data not found at {seed_data}")
 
     # Create fresh copy for this test
-    test_data = tmp_path / "rmfakecloud_data"
-    shutil.copytree(source_data, test_data)
+    test_data = tmp_path / "rmfakecloud"
+    shutil.copytree(seed_data, test_data)
 
-    # Use a single container name that gets recreated per test
-    container_name = "test_rmfakecloud_isolated"
-    port = 3001
+    # Allocate port: check for pytest-xdist worker
+    worker_id = getattr(request.config, "workerinput", None)
+    if worker_id:
+        worker_index = int(worker_id["workerid"].replace("gw", ""))
+        port = 3001 + worker_index
+        container_name = f"test_rmfakecloud_worker{worker_index}"
+    else:
+        port = 3001
+        container_name = "test_rmfakecloud"
+
     url = f"http://localhost:{port}"
 
     # Clean up any existing container
@@ -620,7 +651,7 @@ def isolated_rmfakecloud(request, tmp_path: Path):
         runtime, "run", "-d",
         "--name", container_name,
         "-p", f"{port}:3000",
-        "-e", "STORAGE_URL=http://localhost",
+        "-e", f"STORAGE_URL=http://localhost:{port}",
         "-e", "JWT_SECRET_KEY=2vrOXKJWZ7zgEAf7CjN89rnPW/XOc0pH4naGClMRPxs=",
         "-v", f"{test_data}:/data:Z",
         image,
@@ -641,3 +672,31 @@ def isolated_rmfakecloud(request, tmp_path: Path):
     # Cleanup after test
     subprocess.run([runtime, "stop", container_name], capture_output=True)
     subprocess.run([runtime, "rm", container_name], capture_output=True)
+
+
+@pytest.fixture
+def runpods_credentials():
+    """Fixture that ensures Runpods credentials are available.
+
+    Skips the test if required environment variables are not set:
+    - RUNPODS_API_KEY
+    - RPS_RUNPODS_ENDPOINT_ID
+    """
+    import os
+
+    api_key = os.environ.get("RUNPODS_API_KEY")
+    endpoint_id = os.environ.get("RPS_RUNPODS_ENDPOINT_ID")
+
+    missing = []
+    if not api_key:
+        missing.append("RUNPODS_API_KEY")
+    if not endpoint_id:
+        missing.append("RPS_RUNPODS_ENDPOINT_ID")
+
+    if missing:
+        pytest.skip(f"Requires environment variables: {', '.join(missing)}")
+
+    return {
+        "api_key": api_key,
+        "endpoint_id": endpoint_id,
+    }

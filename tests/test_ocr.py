@@ -1264,15 +1264,8 @@ class TestAnnotationImageRendering:
 class TestIntegrationWithCredentials:
     """Integration tests that require real credentials (skipped without them)."""
 
-    @pytest.mark.skipif(
-        not os.environ.get("RUNPODS_API_KEY"),
-        reason="Requires RUNPODS_API_KEY environment variable",
-    )
-    @pytest.mark.skipif(
-        not os.environ.get("RPS_RUNPODS_ENDPOINT_ID"),
-        reason="Requires RPS_RUNPODS_ENDPOINT_ID environment variable",
-    )
-    def test_real_health_check(self):
+    @pytest.mark.manual
+    def test_real_health_check(self, runpods_credentials):
         """Test actual Runpods health endpoint."""
         from rock_paper_sync.ocr.runpods import RunpodsOCRService
 
@@ -1281,15 +1274,8 @@ class TestIntegrationWithCredentials:
             # May be True or False depending on endpoint status
             assert isinstance(result, bool)
 
-    @pytest.mark.skipif(
-        not os.environ.get("RUNPODS_API_KEY"),
-        reason="Requires RUNPODS_API_KEY environment variable",
-    )
-    @pytest.mark.skipif(
-        not os.environ.get("RPS_RUNPODS_ENDPOINT_ID"),
-        reason="Requires RPS_RUNPODS_ENDPOINT_ID environment variable",
-    )
-    def test_real_model_info(self):
+    @pytest.mark.manual
+    def test_real_model_info(self, runpods_credentials):
         """Test fetching real model info."""
         from rock_paper_sync.ocr.runpods import RunpodsOCRService
 

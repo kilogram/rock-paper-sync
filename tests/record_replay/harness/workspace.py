@@ -48,6 +48,7 @@ class WorkspaceManager:
         bench: "Bench",
         vault_manager: Optional["VaultInteractionManager"] = None,
         device_folder: str | None = None,
+        cloud_url: str | None = None,
     ) -> None:
         """Initialize workspace manager.
 
@@ -57,12 +58,14 @@ class WorkspaceManager:
             bench: Bench utilities for logging and commands
             vault_manager: Vault interaction manager for file operations (optional)
             device_folder: Folder name on reMarkable device
+            cloud_url: Cloud service URL (for tests, defaults to localhost:3000)
         """
         self.workspace_dir = workspace_dir
         self.repo_root = repo_root
         self.bench = bench
         self.vault = vault_manager  # Delegate vault operations to manager
         self.device_folder = device_folder or self.DEFAULT_DEVICE_FOLDER
+        self.cloud_url = cloud_url or "http://localhost:3000"
 
         # Derived paths
         self.config_file = workspace_dir / "config.toml"
@@ -83,7 +86,7 @@ class WorkspaceManager:
         """Write test configuration file."""
         config = f"""# Auto-generated test config
 [cloud]
-base_url = "http://localhost:3000"
+base_url = "{self.cloud_url}"
 
 [paths]
 state_database = "{self.state_dir}/state.db"

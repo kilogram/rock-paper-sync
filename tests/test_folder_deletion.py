@@ -45,7 +45,7 @@ def get_test_credentials(fixtures_dir: Path) -> str:
 
 
 @pytest.fixture
-def rmfakecloud_config(tmp_path: Path, isolated_rmfakecloud: str):
+def rmfakecloud_config(tmp_path: Path, rmfakecloud: str):
     """Create test config for rmfakecloud integration tests with isolated state."""
     vault = tmp_path / "vault"
     vault.mkdir()
@@ -70,7 +70,7 @@ def rmfakecloud_config(tmp_path: Path, isolated_rmfakecloud: str):
             debounce_seconds=1,
         ),
         cloud=CloudConfig(
-            base_url=isolated_rmfakecloud
+            base_url=rmfakecloud
         ),
         layout=LayoutConfig(
             lines_per_page=45,
@@ -86,7 +86,7 @@ def rmfakecloud_config(tmp_path: Path, isolated_rmfakecloud: str):
     )
 
     # Get device token and create client
-    fixtures_dir = Path(__file__).parent / "device_bench" / "fixtures"
+    fixtures_dir = Path(__file__).parent / "record_replay" / "fixtures"
     device_token = get_test_credentials(fixtures_dir)
 
     # Create temp credentials file for RmCloudClient
@@ -96,10 +96,10 @@ def rmfakecloud_config(tmp_path: Path, isolated_rmfakecloud: str):
         json.dump({"device_token": device_token, "device_id": "rock-paper-sync-test-001", "user_id": ""}, f)
         temp_creds_path = Path(f.name)
 
-    rm_client = RmCloudClient(base_url=isolated_rmfakecloud, credentials_path=temp_creds_path)
+    rm_client = RmCloudClient(base_url=rmfakecloud, credentials_path=temp_creds_path)
 
     # Create cloud sync with proper client
-    cloud_sync = RmCloudSync(base_url=isolated_rmfakecloud, client=rm_client)
+    cloud_sync = RmCloudSync(base_url=rmfakecloud, client=rm_client)
 
     return {
         "config": config,

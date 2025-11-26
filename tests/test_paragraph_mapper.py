@@ -231,12 +231,16 @@ class TestIntegrationWithRealData:
     @pytest.fixture
     def testdata_dir(self):
         """Get testdata directory path."""
-        return Path(__file__).parent / "device_bench" / "fixtures" / "testdata" / "ocr_handwriting"
+        return Path(__file__).parent / "record_replay" / "fixtures" / "testdata" / "ocr_handwriting"
 
     @pytest.fixture
     def has_testdata(self, testdata_dir):
         """Check if testdata exists."""
-        return testdata_dir.exists() and list(testdata_dir.glob("*.rm"))
+        rm_files_dir = testdata_dir / "rm_files"
+        return testdata_dir.exists() and (
+            list(testdata_dir.glob("*.rm")) or
+            list(rm_files_dir.glob("*.rm"))
+        )
 
     def test_cluster_mapping_with_real_annotations(self, testdata_dir, has_testdata):
         """Test paragraph mapping with real .rm files containing handwriting."""
@@ -264,7 +268,10 @@ class TestIntegrationWithRealData:
 
         # Test each .rm file
         for rm_filename in manifest["rm_files"]:
+            # .rm files can be in root or in rm_files/ subdirectory
             rm_file = testdata_dir / rm_filename
+            if not rm_file.exists():
+                rm_file = testdata_dir / "rm_files" / rm_filename
 
             # Read annotations and text blocks
             annotations = read_annotations(rm_file)

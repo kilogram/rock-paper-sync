@@ -218,16 +218,21 @@ def workspace(
     bench,
     request,
     testdata_store,
+    rmfakecloud,
 ):
     """Create WorkspaceManager instance for test.
 
     Handles setup and optional cleanup based on --no-cleanup flag.
     Creates vault manager based on device mode (online/offline).
+    Sets up test device credentials for rmfakecloud authentication.
     """
+    import json
+
     WorkspaceManager = _get_workspace_manager()
     device_folder = request.config.getoption("--device-folder")
     no_cleanup = request.config.getoption("--no-cleanup")
     device_mode = request.config.getoption("--device-mode")
+    cloud_url = rmfakecloud
 
     # Create appropriate vault manager for the device mode
     if device_mode == "offline":
@@ -237,8 +242,22 @@ def workspace(
         OnlineVault = _get_online_vault()
         vault = OnlineVault(workspace_dir, bench, testdata_store)
 
-    ws = WorkspaceManager(workspace_dir, repo_root, bench, vault, device_folder)
+    ws = WorkspaceManager(workspace_dir, repo_root, bench, vault, device_folder, cloud_url)
     ws.setup()
+
+    # Setup test device credentials for sync CLI authentication
+    # This allows the sync command to authenticate with rmfakecloud
+    fixtures_dir = Path(__file__).parent / "fixtures"
+    test_creds_file = fixtures_dir / "rmfakecloud_test_credentials.json"
+
+    if test_creds_file.exists():
+        # Create credentials file in config directory for sync CLI to find
+        creds_data = json.loads(test_creds_file.read_text())
+        creds_dir = Path.home() / ".config" / "rock-paper-sync"
+        creds_dir.mkdir(parents=True, exist_ok=True)
+        creds_path = creds_dir / "device-credentials.json"
+        creds_path.write_text(json.dumps(creds_data, indent=2))
+        bench.ok(f"Created test credentials at {creds_path}")
 
     yield ws
 
@@ -246,16 +265,31 @@ def workspace(
     if not no_cleanup:
         ws.cleanup()
 
+        # Clean up test credentials
+        creds_path = Path.home() / ".config" / "rock-paper-sync" / "device-credentials.json"
+        if creds_path.exists() and test_creds_file.exists():
+            try:
+                creds_data = json.loads(creds_path.read_text())
+                test_data = json.loads(test_creds_file.read_text())
+                # Only delete if it's our test credentials (same device_token)
+                if creds_data.get("device_token") == test_data.get("device_token"):
+                    creds_path.unlink()
+                    bench.ok("Cleaned up test credentials")
+            except Exception as e:
+                bench.warn(f"Failed to clean up test credentials: {e}")
+
 
 @pytest.fixture(scope="session")
 def testdata_store(fixtures_dir: Path):
     """Create TestdataStore instance for test session."""
     TestdataStore = _get_testdata_store()
-    return TestdataStore(fixtures_dir / "testdata")
+    # Testdata is now at tests/testdata/ (moved from fixtures/testdata/)
+    testdata_dir = fixtures_dir.parent.parent / "testdata"
+    return TestdataStore(testdata_dir)
 
 
 @pytest.fixture(scope="function")
-def device(request, workspace, testdata_store, bench, rmfakecloud_service):
+def device(request, workspace, testdata_store, bench, rmfakecloud):
     """Create device instance based on --device-mode.
 
     In online mode: OnlineDevice with real device interaction
@@ -277,7 +311,7 @@ def device(request, workspace, testdata_store, bench, rmfakecloud_service):
         OfflineEmulator = _get_offline_emulator()
         # Use dynamically allocated rmfakecloud URL (handles parallel execution)
         dev = OfflineEmulator(
-            workspace, testdata_store, bench, cloud_url=rmfakecloud_service
+            workspace, testdata_store, bench, cloud_url=rmfakecloud
         )
 
         # Load specific test artifact if provided
@@ -302,14 +336,20 @@ def device_mode(request) -> str:
 @pytest.fixture
 def testdata_dir(fixtures_dir: Path) -> Path:
     """Get OCR handwriting testdata directory."""
-    return fixtures_dir / "testdata" / "ocr_handwriting"
+    # Testdata is now at tests/testdata/ (moved from fixtures/testdata/)
+    return fixtures_dir.parent.parent / "testdata" / "record_replay" / "ocr_handwriting"
 
 
 @pytest.fixture
 def has_testdata(testdata_dir: Path) -> bool:
     """Check if OCR handwriting testdata exists."""
     manifest = testdata_dir / "manifest.json"
-    return manifest.exists() and list(testdata_dir.glob("*.rm"))
+    rm_files_dir = testdata_dir / "rm_files"
+    # Check manifest exists and .rm files are either in root or rm_files/ subdirectory
+    return manifest.exists() and (
+        list(testdata_dir.glob("*.rm")) or
+        list(rm_files_dir.glob("*.rm"))
+    )
 
 
 # =============================================================================
@@ -317,140 +357,8 @@ def has_testdata(testdata_dir: Path) -> bool:
 # =============================================================================
 
 
-def _get_container_runtime() -> tuple[str, str]:
-    """Detect container runtime and compose tool.
-
-    Returns:
-        Tuple of (runtime, compose_command) e.g., ("podman", "podman-compose")
-    """
-    import shutil
-
-    # Check for podman first
-    if shutil.which("podman"):
-        if shutil.which("podman-compose"):
-            return ("podman", "podman-compose")
-        # podman can also run docker-compose files directly
-        return ("podman", "podman compose")
-
-    # Fall back to docker
-    if shutil.which("docker"):
-        if shutil.which("docker-compose"):
-            return ("docker", "docker-compose")
-        return ("docker", "docker compose")
-
-    return ("", "")
-
-
-def is_rmfakecloud_ready(url: str) -> bool:
-    """Check if rmfakecloud is ready to accept connections."""
-    import requests
-
-    try:
-        resp = requests.get(f"{url}/health", timeout=2)
-        return resp.status_code == 200
-    except requests.RequestException:
-        return False
-
-
-def _wait_for_ready(url: str, timeout: float = 30.0, interval: float = 0.5) -> bool:
-    """Wait for service to become ready."""
-    import time
-
-    start = time.time()
-    while time.time() - start < timeout:
-        if is_rmfakecloud_ready(url):
-            return True
-        time.sleep(interval)
-    return False
-
-
-@pytest.fixture(scope="session")
-def rmfakecloud_service(request):
-    """Start rmfakecloud container and wait for it to be ready.
-
-    Works with both serial and parallel (pytest-xdist) execution:
-    - Serial: Single container on port 3001
-    - Parallel: Each worker gets unique port (3001 + worker_index)
-
-    Works with both Docker and Podman.
-
-    Returns:
-        str: The URL of the rmfakecloud service
-    """
-    import subprocess
-
-    runtime, _ = _get_container_runtime()
-    if not runtime:
-        pytest.skip("No container runtime found (docker/podman)")
-
-    # Check if running with pytest-xdist (parallel workers)
-    worker_id = getattr(request.config, "workerinput", None)
-    if worker_id:
-        # Running in parallel - extract worker index
-        worker_index = int(worker_id["workerid"].replace("gw", ""))
-        port = 3001 + worker_index  # Each worker gets unique port
-        container_name = f"device_bench_rmfakecloud_worker{worker_index}"
-    else:
-        # Serial execution
-        port = 3001
-        container_name = "device_bench_rmfakecloud"
-
-    url = f"http://localhost:{port}"
-
-    # Check if our test container is already running
-    result = subprocess.run(
-        [runtime, "ps", "-q", "-f", f"name={container_name}"],
-        capture_output=True,
-        text=True,
-    )
-    if result.stdout.strip():
-        # Our test container is running, check if ready
-        if is_rmfakecloud_ready(url):
-            yield url
-            return
-
-    # Remove any existing stopped container
-    subprocess.run(
-        [runtime, "rm", "-f", container_name],
-        capture_output=True,
-    )
-
-    # Start container (use full registry path for podman compatibility)
-    image = "docker.io/ddvk/rmfakecloud:latest"
-
-    # Mount persistent volume for rmfakecloud data (users, devices, documents)
-    data_dir = Path(__file__).parent.parent / "testdata" / "rmfakecloud_init" / "rmfakecloud_data"
-    data_dir.mkdir(parents=True, exist_ok=True)
-
-    cmd = [
-        runtime, "run", "-d",
-        "--name", container_name,
-        "-p", f"{port}:3000",
-        "-e", f"STORAGE_URL=http://localhost:{port}",
-        "-e", "JWT_SECRET_KEY=2vrOXKJWZ7zgEAf7CjN89rnPW/XOc0pH4naGClMRPxs=",
-        "-v", f"{data_dir}:/data:Z",  # Persistent volume
-        image,
-    ]
-
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        pytest.fail(f"Failed to start rmfakecloud on port {port}: {result.stderr}")
-
-    # Wait for ready
-    if not _wait_for_ready(url, timeout=30.0):
-        subprocess.run([runtime, "stop", container_name], capture_output=True)
-        subprocess.run([runtime, "rm", container_name], capture_output=True)
-        pytest.fail(f"rmfakecloud failed to become ready at {url}")
-
-    yield url
-
-    # Cleanup
-    subprocess.run([runtime, "stop", container_name], capture_output=True)
-    subprocess.run([runtime, "rm", container_name], capture_output=True)
-
-
 @pytest.fixture(scope="function")
-def offline_device(request, workspace, testdata_store, bench, rmfakecloud_service):
+def offline_device(request, workspace, testdata_store, bench, rmfakecloud):
     """Create OfflineEmulator connected to containerized rmfakecloud.
 
     This fixture automatically starts rmfakecloud (Docker or Podman) and
@@ -480,7 +388,7 @@ def offline_device(request, workspace, testdata_store, bench, rmfakecloud_servic
         workspace=workspace,
         testdata_store=testdata_store,
         bench=bench,
-        cloud_url=rmfakecloud_service,
+        cloud_url=rmfakecloud,
     )
 
     # Load test artifact if specified via CLI

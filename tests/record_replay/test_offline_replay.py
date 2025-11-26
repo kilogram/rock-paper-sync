@@ -70,9 +70,15 @@ def annotation_manager(offline_device, workspace, testdata_store, request):
             if self.device_mode == "offline":
                 # In offline mode, must have testdata
                 try:
-                    self.device.load_test(test_id)
+                    artifacts = self.testdata_store.load_artifacts(test_id)
                 except FileNotFoundError:
                     raise FileNotFoundError(f"Testdata '{test_id}' not found")
+
+                # Set up workspace with source markdown from testdata
+                self.workspace.test_doc.write_text(artifacts.source_markdown)
+                self.device.load_test(test_id)
+            else:
+                self.testdata_store.load_artifacts(test_id)
 
             # Setup test (online: prepare for capture, offline: use loaded testdata)
             self.device.start_test(test_id)
