@@ -103,11 +103,11 @@ def annotation_manager(offline_device, workspace, testdata_store, request):
 class TestOfflineInfrastructure:
     """Tests for offline infrastructure (rmfakecloud, testdata store)."""
 
-    def test_rmfakecloud_connection(self, rmfakecloud_service):
+    def test_rmfakecloud_connection(self, rmfakecloud):
         """Verify rmfakecloud is running and accessible."""
         import requests
 
-        resp = requests.get(f"{rmfakecloud_service}/health")
+        resp = requests.get(f"{rmfakecloud}/health")
         assert resp.status_code == 200
 
     def test_testdata_store_accessible(self, testdata_store):
