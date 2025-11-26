@@ -4,9 +4,6 @@ Replays pre-recorded testdata by injecting .rm files into rmfakecloud,
 simulating device annotation sync without requiring a real reMarkable.
 """
 
-import hashlib
-import io
-import zipfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -218,124 +215,42 @@ class OfflineEmulator(DeviceInteractionManager):
     ) -> None:
         """Inject .rm files into rmfakecloud.
 
-        Uses the Sync v3 protocol to upload files as if they came from
-        the device. This involves:
-        1. Creating zip blobs for each .rm file
-        2. Uploading blobs to cloud storage via Sync v3 API
-        3. Updating document metadata
+        Uses production RmCloudSync to upload documents via Sync v3 protocol.
+        This ensures annotations are properly integrated with the document.
 
         Args:
             doc_uuid: Document UUID
             rm_files: Mapping of page_uuid -> .rm bytes
         """
-        from rock_paper_sync.sync_v3 import SyncV3Client
+        from rock_paper_sync.rm_cloud_client import RmCloudClient
+        from rock_paper_sync.rm_cloud_sync import RmCloudSync
 
         self.bench.info(f"Injecting {len(rm_files)} .rm files into rmfakecloud...")
 
-        # Get device token from workspace config
-        device_token = self._get_auth_token()
+        # Create cloud client (loads credentials from ~/.config/rock-paper-sync/device-credentials.json)
+        client = RmCloudClient(base_url=self.cloud_url)
 
-        # Create sync client to use production blob upload logic
-        sync_client = SyncV3Client(self.cloud_url, device_token)
+        # Create sync instance using production code
+        sync = RmCloudSync(base_url=self.cloud_url, client=client)
 
-        for page_uuid, rm_data in rm_files.items():
-            # Create zip blob (sync v3 format)
-            blob_data = self._create_zip_blob(f"{page_uuid}.rm", rm_data)
+        # Convert rm_files dict to list of (page_uuid, rm_data) tuples
+        pages = [(page_uuid, rm_data) for page_uuid, rm_data in rm_files.items()]
 
-            # Calculate hash for sync v3
-            blob_hash = hashlib.sha256(blob_data).hexdigest()
-
-            try:
-                # Use production sync_v3 client for blob upload
-                # This ensures we use the exact same API and error handling as real sync
-                sync_client.upload_blob(blob_hash, blob_data)
-                self.bench.ok(f"  Uploaded: {page_uuid}.rm ({blob_hash[:8]}...)")
-            except Exception as e:
-                self.bench.error(f"  Failed to upload {page_uuid}.rm: {e}")
-                raise RuntimeError(f"Failed to inject .rm files: {e}") from e
-
-        # Update document root to reference new blobs
-        self._update_document_root(doc_uuid, rm_files)
-
-    def _create_zip_blob(self, filename: str, data: bytes) -> bytes:
-        """Create a zip blob for sync v3.
-
-        Sync v3 wraps each file in a small zip archive.
-
-        Args:
-            filename: Name of file within zip
-            data: File content
-
-        Returns:
-            Zip archive bytes
-        """
-        buffer = io.BytesIO()
-        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr(filename, data)
-        return buffer.getvalue()
-
-    def _get_auth_token(self) -> str:
-        """Get authentication token from workspace config.
-
-        Returns:
-            Auth token string
-
-        Raises:
-            RuntimeError: If token not found
-        """
-        # Read token from config file
-        config_text = self.workspace.config_file.read_text()
-
-        # Parse TOML to find token (simple extraction)
-        for line in config_text.split("\n"):
-            if "=" in line and "token" in line.lower():
-                # Extract quoted value
-                parts = line.split("=", 1)
-                if len(parts) == 2:
-                    value = parts[1].strip().strip('"').strip("'")
-                    if value:
-                        return value
-
-        # For rmfakecloud, try default test token
-        # rmfakecloud accepts any token when in dev mode
-        return "test-token"
-
-    def _update_document_root(
-        self, doc_uuid: str, rm_files: dict[str, bytes]
-    ) -> None:
-        """Update document root metadata with new file references.
-
-        This tells the cloud that the document has new .rm files,
-        allowing the next sync to download them.
-
-        Args:
-            doc_uuid: Document UUID
-            rm_files: Mapping of page_uuid -> .rm bytes
-        """
-        import requests
-
-        # Build file entries for root update
-        file_entries = []
-        for page_uuid, rm_data in rm_files.items():
-            blob_data = self._create_zip_blob(f"{page_uuid}.rm", rm_data)
-            blob_hash = hashlib.sha256(blob_data).hexdigest()
-
-            file_entries.append({
-                "hash": blob_hash,
-                "documentId": doc_uuid,
-                "type": "DocumentType",
-                "subfiles": [
-                    {
-                        "path": f"{page_uuid}.rm",
-                        "hash": blob_hash,
-                        "size": len(blob_data),
-                    }
-                ],
-            })
-
-        # Note: Full root update implementation depends on rmfakecloud API
-        # For now, we rely on the blob uploads being picked up on next sync
-        self.bench.info("Updated document root metadata")
+        # Use production upload_document which handles everything:
+        # - Creates .metadata, .content, .local files
+        # - Uploads all files via Sync v3
+        # - Updates document root with new pages
+        try:
+            sync.upload_document(
+                doc_uuid=doc_uuid,
+                document_name=f"Document {doc_uuid[:8]}",
+                pages=pages,
+                parent_uuid="",
+            )
+            self.bench.ok(f"Injected {len(rm_files)} .rm files into document")
+        except Exception as e:
+            self.bench.error(f"Failed to inject .rm files: {e}")
+            raise RuntimeError(f"Failed to inject .rm files: {e}") from e
 
     def unsync_vault(self, vault_name: str | None = None) -> tuple[int, int]:
         """Simulate unsync in offline mode.
