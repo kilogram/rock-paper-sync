@@ -2,13 +2,19 @@
 
 Replays pre-recorded testdata by injecting .rm files into rmfakecloud,
 simulating device annotation sync without requiring a real reMarkable.
+
+Multi-Phase Support:
+    - Loads phases from testdata (initial, post_sync, final)
+    - Restores vault state at each phase
+    - Advances through phases as sync operations complete
 """
 
+import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .protocol import DeviceInteractionManager, DocumentState
-from .testdata import TestArtifacts, TestdataStore
+from .testdata import TestArtifacts, TestdataStore, PhaseData
 
 if TYPE_CHECKING:
     from .logging import Bench
@@ -67,10 +73,15 @@ class OfflineEmulator(DeviceInteractionManager):
         self._current_artifacts: TestArtifacts | None = None
         self._current_test_id: str | None = None
 
-    def load_test(self, test_id: str) -> None:
-        """Load artifacts for a specific test.
+        # Multi-phase support
+        self._current_phase: int = 0
+        self._phases: list[PhaseData] = []
 
-        Must be called before running the test.
+    def load_test(self, test_id: str) -> None:
+        """Load artifacts and phases for a specific test.
+
+        Must be called before running the test. Automatically restores vault
+        to initial phase state if multi-phase testdata is available.
 
         Args:
             test_id: Test identifier to load
@@ -80,10 +91,28 @@ class OfflineEmulator(DeviceInteractionManager):
         """
         self._current_artifacts = self.testdata_store.load_artifacts(test_id)
         self._current_test_id = test_id
-        self.bench.ok(
-            f"Loaded test artifacts: {test_id} "
-            f"({len(self._current_artifacts.rm_files)} .rm files)"
-        )
+        self._current_phase = 0
+
+        # Load multi-phase data if available
+        try:
+            self._phases = self.testdata_store.load_phases(test_id)
+            self.bench.ok(
+                f"Loaded test artifacts: {test_id} "
+                f"({len(self._phases)} phases, "
+                f"{len(self._current_artifacts.rm_files)} .rm files)"
+            )
+
+            # Restore initial vault state from phase 0
+            if self._phases:
+                self._restore_phase(0)
+        except Exception as e:
+            # Fallback to legacy single-phase behavior
+            self.bench.warn(f"Could not load phases: {e}. Using legacy mode.")
+            self._phases = []
+            self.bench.ok(
+                f"Loaded test artifacts: {test_id} "
+                f"({len(self._current_artifacts.rm_files)} .rm files)"
+            )
 
     def start_test(self, test_id: str) -> None:
         """Begin test with the specified test_id.
@@ -108,9 +137,68 @@ class OfflineEmulator(DeviceInteractionManager):
             self.bench.ok(f"Offline test {test_id} completed successfully")
         self._current_artifacts = None
         self._current_test_id = None
+        self._current_phase = 0
+        self._phases = []
+
+    def _restore_phase(self, phase_num: int) -> None:
+        """Restore vault to a specific phase state.
+
+        Clears the workspace and restores files from the phase's vault snapshot.
+
+        Args:
+            phase_num: Phase number to restore
+
+        Raises:
+            ValueError: If phase not found
+        """
+        if phase_num >= len(self._phases):
+            raise ValueError(
+                f"Phase {phase_num} not found (have {len(self._phases)} phases)"
+            )
+
+        phase = self._phases[phase_num]
+        vault_snapshot = phase.vault_snapshot_path
+
+        if not vault_snapshot.exists():
+            self.bench.warn(f"Phase {phase_num} vault snapshot not found")
+            return
+
+        # Clear workspace (preserve .state, .cache, logs, config)
+        workspace_dir = self.workspace.workspace_dir
+        for item in workspace_dir.iterdir():
+            if item.name not in [".state", ".cache", "logs", "config.toml"]:
+                if item.is_file():
+                    item.unlink()
+                elif item.is_dir():
+                    shutil.rmtree(item)
+
+        # Restore vault snapshot
+        for item in vault_snapshot.iterdir():
+            if item.is_file():
+                shutil.copy(item, workspace_dir / item.name)
+            elif item.is_dir():
+                shutil.copytree(item, workspace_dir / item.name)
+
+        self.bench.ok(
+            f"Restored vault to phase {phase_num}: {phase.phase_name}"
+        )
+
+    def _advance_phase(self) -> None:
+        """Advance to next phase in multi-phase test.
+
+        Moves to the next phase and updates logging.
+        """
+        self._current_phase += 1
+        if self._current_phase < len(self._phases):
+            phase = self._phases[self._current_phase]
+            self.bench.observe(
+                f"Advanced to phase {self._current_phase}: {phase.phase_name}"
+            )
 
     def upload_document(self, markdown_path: Path) -> str:
         """Upload document via normal sync.
+
+        Advances to next phase after upload in multi-phase mode.
 
         Args:
             markdown_path: Path to markdown file
@@ -131,6 +219,11 @@ class OfflineEmulator(DeviceInteractionManager):
             raise RuntimeError("Document UUID not found after sync")
 
         self.bench.ok(f"Uploaded document to rmfakecloud: {doc_uuid}")
+
+        # Advance to next phase in multi-phase mode
+        if self._phases:
+            self._advance_phase()
+
         return doc_uuid
 
     def wait_for_annotations(
@@ -141,6 +234,9 @@ class OfflineEmulator(DeviceInteractionManager):
         Instead of waiting for user input, this injects the pre-recorded
         .rm files from testdata into rmfakecloud, then syncs to download
         them as if they came from a real device.
+
+        In multi-phase mode, uses .rm files from the current or next phase.
+        Advances to next phase after injection and sync.
 
         Args:
             doc_uuid: Document UUID
@@ -157,20 +253,41 @@ class OfflineEmulator(DeviceInteractionManager):
                 "No test loaded - call load_test() or start_test() first"
             )
 
-        artifacts = self._current_artifacts
+        # Determine which rm_files to use
+        rm_files: dict[str, bytes] = {}
 
-        if not artifacts.rm_files:
-            self.bench.warn("No .rm files in test artifacts - skipping injection")
+        if self._phases:
+            # Multi-phase mode: find phase with rm_files starting from current phase
+            for phase in self._phases[self._current_phase :]:
+                if phase.rm_files:
+                    rm_files = phase.rm_files
+                    self.bench.observe(
+                        f"Using .rm files from phase {phase.phase_number}: {phase.phase_name}"
+                    )
+                    break
+        else:
+            # Legacy mode: use artifacts directly
+            rm_files = self._current_artifacts.rm_files
+
+        if not rm_files:
+            self.bench.warn("No .rm files found - skipping injection")
+            # Still advance phase
+            if self._phases:
+                self._advance_phase()
             return self.get_document_state(doc_uuid)
 
         # Inject .rm files into rmfakecloud
-        self._inject_rm_files(doc_uuid, artifacts.rm_files)
+        self._inject_rm_files(doc_uuid, rm_files)
 
         # Sync to download the injected annotations
         ret, out, err = self.workspace.run_sync("Download injected annotations")
 
         if ret != 0:
             raise RuntimeError(f"Failed to sync after injection: {err}")
+
+        # Advance to next phase in multi-phase mode
+        if self._phases:
+            self._advance_phase()
 
         return self.get_document_state(doc_uuid)
 

@@ -140,7 +140,15 @@ exclude_patterns = [".state/**", "logs/**", ".cache/**"]
         try:
             # Unsync from cloud
             if self.config_file.exists():
+                # Run unsync
                 self.bench.run_unsync(self.config_file, delete_from_cloud=True)
+
+                # Prompt user to confirm unsync completed
+                self.bench.prompt_user(
+                    "Unsyncing from cloud (this may take a moment)...",
+                    "Please wait for the document to be removed from your device.",
+                    "Then press Enter to complete cleanup...",
+                )
 
             # Remove state
             if self.state_dir.exists():

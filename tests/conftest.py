@@ -622,7 +622,7 @@ def rmfakecloud(request, tmp_path: Path):
         pytest.skip("No container runtime found (docker/podman)")
 
     # Use seeded rmfakecloud state
-    seed_data = Path(__file__).parent / "testdata" / "rmfakecloud" / "seed"
+    seed_data = Path(__file__).parent / "fixtures" / "rmfakecloud" / "seed"
     if not seed_data.exists():
         pytest.skip(f"rmfakecloud seed data not found at {seed_data}")
 

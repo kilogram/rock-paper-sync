@@ -3,18 +3,14 @@
 Provides fixtures and markers for device-interactive tests with online/offline modes.
 
 Usage:
-    # Run offline tests with automatic rmfakecloud container
-    uv run pytest tests/record_replay -m offline
+    # Run offline tests (replaying pre-recorded testdata with rmfakecloud)
+    uv run pytest tests/record_replay -m offline_only
 
-    # Run all device tests in online mode (real device)
-    uv run pytest tests/record_replay -m device --device-mode=online
+    # Run online tests (recording with real reMarkable device)
+    uv run pytest tests/record_replay --online -s
 
-    # Run in offline mode with external rmfakecloud
-    uv run pytest tests/record_replay -m device --device-mode=offline
-
-    # Replay specific test artifact
-    uv run pytest tests/record_replay -m device \\
-        --device-mode=offline --test-artifact=annotation_roundtrip_001
+    # Replay specific test artifact in offline mode
+    uv run pytest tests/record_replay --offline --test-artifact=highlights
 
     # List available offline tests
     uv run pytest tests/record_replay --list-tests
@@ -28,6 +24,9 @@ import time
 
 import pytest
 from pathlib import Path
+
+# Make sure json is available at module level
+import json
 
 
 # Import lazily to avoid import issues when running from different directories
@@ -77,13 +76,7 @@ def pytest_addoption(parser):
     parser.addoption(
         "--device-folder",
         default="DeviceBench",
-        help="Folder name on reMarkable device",
-    )
-    parser.addoption(
-        "--device-mode",
-        choices=["online", "offline"],
-        default="online",
-        help="Device mode: online (real device) or offline (replay via rmfakecloud)",
+        help="Folder name on reMarkable device (offline mode only; online mode uses config.toml)",
     )
     parser.addoption(
         "--test-artifact",
@@ -105,12 +98,12 @@ def pytest_addoption(parser):
         "--online",
         action="store_true",
         default=False,
-        help="Run device tests that require rmfakecloud or a real device",
+        help="Run online tests with real device (implies --capture=no for interactive prompts)",
     )
 
 
 def pytest_configure(config):
-    """Register device test markers."""
+    """Register device test markers and setup options."""
     config.addinivalue_line(
         "markers",
         "device: marks tests as device-interactive (require reMarkable device)",
@@ -131,6 +124,30 @@ def pytest_configure(config):
         "markers",
         "online_only: marks tests that only run in online mode",
     )
+
+    # If --online flag is set, require -s flag (no capture)
+    if config.getoption("--online", default=False):
+        if config.option.capture != "no":
+            raise pytest.UsageError(
+                "ERROR: --online requires -s flag to disable output capture for interactive prompts\n"
+                "Usage: uv run pytest tests/record_replay --online -s"
+            )
+        # Ensure capture is disabled for interactive prompts
+        config.option.capture = "no"
+        config.pluginmanager.set_blocked("cacheprovider")
+
+
+def pytest_sessionstart(session):
+    """Called after the Session object has been created.
+
+    Re-verify capture is disabled if --online flag is set.
+    """
+    if session.config.getoption("--online", default=False):
+        # Double-check capture is disabled
+        capmanager = session.config.pluginmanager.get_plugin("capturemanager")
+        if capmanager:
+            # Force disable any capturing
+            session.config.option.capture = "no"
 
 
 def pytest_collection_modifyitems(config, items):
@@ -154,20 +171,17 @@ def pytest_collection_modifyitems(config, items):
         print("-" * 60)
         pytest.exit("Listed available tests", returncode=0)
 
-    # Skip device tests unless --online is passed
+    # Determine device mode from --online flag
     online = config.getoption("--online")
-
-    # Skip tests based on mode
-    device_mode = config.getoption("--device-mode")
 
     for item in items:
         # Skip device tests unless --online is explicitly passed
         if "device" in item.keywords and not online:
             item.add_marker(pytest.mark.skip(reason="Device tests require --online flag"))
-        elif device_mode == "offline" and "online_only" in item.keywords:
-            item.add_marker(pytest.mark.skip(reason="Test requires online mode"))
-        elif device_mode == "online" and "offline_only" in item.keywords:
+        elif online and "offline_only" in item.keywords:
             item.add_marker(pytest.mark.skip(reason="Test requires offline mode"))
+        elif not online and "online_only" in item.keywords:
+            item.add_marker(pytest.mark.skip(reason="Test requires --online flag"))
 
 
 @pytest.fixture(scope="session")
@@ -224,15 +238,31 @@ def workspace(
 
     Handles setup and optional cleanup based on --no-cleanup flag.
     Creates vault manager based on device mode (online/offline).
-    Sets up test device credentials for rmfakecloud authentication.
+
+    Credential handling:
+    - Online mode: Uses user's actual device credentials from XDG config
+      (tests should use --device-folder to isolate to test vault)
+    - Offline mode: Uses test credentials for rmfakecloud authentication
     """
     import json
 
     WorkspaceManager = _get_workspace_manager()
-    device_folder = request.config.getoption("--device-folder")
     no_cleanup = request.config.getoption("--no-cleanup")
-    device_mode = request.config.getoption("--device-mode")
+    online = request.config.getoption("--online")
     cloud_url = rmfakecloud
+
+    # Determine device mode: online if --online flag set, else offline
+    device_mode = "online" if online else "offline"
+
+    # Device folder handling:
+    # - Offline mode: use --device-folder option (defaults to DeviceBench)
+    # - Online mode: use vaults from user's config.toml (ignore --device-folder)
+    if device_mode == "offline":
+        device_folder = request.config.getoption("--device-folder")
+    else:
+        # Online mode: workspace will use vaults from user's config.toml
+        # No override needed
+        device_folder = None
 
     # Create appropriate vault manager for the device mode
     if device_mode == "offline":
@@ -245,19 +275,92 @@ def workspace(
     ws = WorkspaceManager(workspace_dir, repo_root, bench, vault, device_folder, cloud_url)
     ws.setup()
 
-    # Setup test device credentials for sync CLI authentication
-    # This allows the sync command to authenticate with rmfakecloud
+    # Setup test fixtures and credentials depending on device mode
     fixtures_dir = Path(__file__).parent / "fixtures"
     test_creds_file = fixtures_dir / "rmfakecloud_test_credentials.json"
+    test_config_file = fixtures_dir / "config.toml"
+    creds_dir = Path.home() / ".config" / "rock-paper-sync"
+    creds_path = creds_dir / "device-credentials.json"
 
-    if test_creds_file.exists():
-        # Create credentials file in config directory for sync CLI to find
+    # Store original credentials for online mode cleanup
+    original_creds_path = None
+    original_creds_content = None
+
+    if device_mode == "offline" and test_creds_file.exists():
+        # Offline mode: Set up test credentials for rmfakecloud
+        # This allows the sync command to authenticate with rmfakecloud
         creds_data = json.loads(test_creds_file.read_text())
-        creds_dir = Path.home() / ".config" / "rock-paper-sync"
         creds_dir.mkdir(parents=True, exist_ok=True)
-        creds_path = creds_dir / "device-credentials.json"
         creds_path.write_text(json.dumps(creds_data, indent=2))
-        bench.ok(f"Created test credentials at {creds_path}")
+        bench.ok(f"Created test credentials at {creds_path} (offline mode)")
+
+        # Copy test config.toml to workspace
+        if test_config_file.exists():
+            import shutil
+            # Set environment variables for config template expansion
+            os.environ["RPS_TEST_WORKSPACE"] = str(workspace_dir.resolve())
+            os.environ["RPS_CLOUD_BASE_URL"] = rmfakecloud  # Use dynamically allocated rmfakecloud URL
+
+            # Read fixture config template
+            fixture_config_content = test_config_file.read_text()
+
+            # Expand environment variables in the config
+            expanded_config = os.path.expandvars(fixture_config_content)
+
+            # Write to workspace
+            workspace_config = workspace_dir / "config.toml"
+            workspace_config.write_text(expanded_config)
+            bench.ok(f"Using test config at {workspace_config}")
+
+
+    elif device_mode == "online":
+        # Online mode: Use user's real credentials and real cloud, with isolated test vault
+        if not creds_path.exists():
+            bench.error(
+                f"Device credentials not found at {creds_path}\n"
+                f"Online tests require credentials from: uv run rock-paper-sync register"
+            )
+            pytest.skip("Device credentials required for online tests")
+
+        bench.ok(f"Using real device credentials from {creds_path}")
+
+        # For online tests, use user's actual config to get the real cloud base_url,
+        # but override the vault section with the test vault
+        actual_config_path = creds_dir / "config.toml"
+        if actual_config_path.exists():
+            from rock_paper_sync.config import load_config
+            actual_config = load_config(actual_config_path)
+            cloud_base_url = actual_config.cloud.base_url
+            bench.ok(f"Using real cloud at {cloud_base_url}")
+        else:
+            cloud_base_url = "http://localhost:3000"  # Fallback
+            bench.warn(
+                f"Actual config not found at {actual_config_path}\n"
+                f"Using default cloud URL: {cloud_base_url}"
+            )
+
+        # Generate test config with real cloud URL but isolated test vault
+        if test_config_file.exists():
+            import shutil
+            # Set environment variable for config template expansion
+            os.environ["RPS_TEST_WORKSPACE"] = str(workspace_dir.resolve())
+            os.environ["RPS_CLOUD_BASE_URL"] = cloud_base_url
+
+            # Read fixture config template
+            fixture_config_content = test_config_file.read_text()
+
+            # Expand environment variables in the config
+            expanded_config = os.path.expandvars(fixture_config_content)
+
+            # Write to workspace
+            workspace_config = workspace_dir / "config.toml"
+            workspace_config.write_text(expanded_config)
+            bench.ok(f"Using test vault config at {workspace_config}")
+        else:
+            bench.warn(
+                f"Test config not found at {test_config_file}\n"
+                f"Online tests require a test vault configuration in fixtures/config.toml"
+            )
 
     yield ws
 
@@ -265,18 +368,19 @@ def workspace(
     if not no_cleanup:
         ws.cleanup()
 
-        # Clean up test credentials
-        creds_path = Path.home() / ".config" / "rock-paper-sync" / "device-credentials.json"
-        if creds_path.exists() and test_creds_file.exists():
-            try:
-                creds_data = json.loads(creds_path.read_text())
-                test_data = json.loads(test_creds_file.read_text())
-                # Only delete if it's our test credentials (same device_token)
-                if creds_data.get("device_token") == test_data.get("device_token"):
-                    creds_path.unlink()
-                    bench.ok("Cleaned up test credentials")
-            except Exception as e:
-                bench.warn(f"Failed to clean up test credentials: {e}")
+        if device_mode == "offline":
+            # Clean up test credentials (offline mode only)
+            if creds_path.exists() and test_creds_file.exists():
+                try:
+                    creds_data = json.loads(creds_path.read_text())
+                    test_data = json.loads(test_creds_file.read_text())
+                    # Only delete if it's our test credentials (same device_token)
+                    if creds_data.get("device_token") == test_data.get("device_token"):
+                        creds_path.unlink()
+                        bench.ok("Cleaned up test credentials")
+                except Exception as e:
+                    bench.warn(f"Failed to clean up test credentials: {e}")
+        # Online mode: uses user's real credentials, no cleanup needed
 
 
 @pytest.fixture(scope="session")
@@ -290,10 +394,10 @@ def testdata_store(fixtures_dir: Path):
 
 @pytest.fixture(scope="function")
 def device(request, workspace, testdata_store, bench, rmfakecloud):
-    """Create device instance based on --device-mode.
+    """Create device instance based on --online flag.
 
-    In online mode: OnlineDevice with real device interaction
-    In offline mode: OfflineEmulator with pre-recorded testdata
+    In online mode (--online): OnlineDevice with real device interaction
+    In offline mode (no --online): OfflineEmulator with pre-recorded testdata
 
     Usage in tests:
         def test_annotation(device, workspace):
@@ -301,10 +405,10 @@ def device(request, workspace, testdata_store, bench, rmfakecloud):
             state = device.wait_for_annotations(doc_uuid)
             assert state.has_annotations
     """
-    mode = request.config.getoption("--device-mode")
+    online = request.config.getoption("--online")
     test_artifact = request.config.getoption("--test-artifact")
 
-    if mode == "online":
+    if online:
         OnlineDevice = _get_online_device()
         dev = OnlineDevice(workspace, testdata_store, bench)
     else:
@@ -329,8 +433,11 @@ def device(request, workspace, testdata_store, bench, rmfakecloud):
 
 @pytest.fixture
 def device_mode(request) -> str:
-    """Get current device mode (online or offline)."""
-    return request.config.getoption("--device-mode")
+    """Get current device mode (online or offline).
+
+    Returns 'online' if --online flag is set, otherwise 'offline'.
+    """
+    return "online" if request.config.getoption("--online") else "offline"
 
 
 @pytest.fixture
@@ -400,17 +507,18 @@ def offline_device(request, workspace, testdata_store, bench, rmfakecloud):
 
 
 @pytest.fixture(scope="function")
-def golden_comparison(fixtures_dir: Path):
+def golden_comparison(fixtures_dir: Path, testdata_store):
     """Create GoldenComparison instance for validating markdown outputs.
 
     Used to compare test outputs against golden files in replay mode.
+    Supports both testdata-colocated and legacy fixtures/goldens/ locations.
 
     Usage:
         def test_markdown_output(golden_comparison):
             output_file = Path("output.md")
             output_file.write_text("# Test Output")
 
-            result = golden_comparison("test_id").compare(output_file)
+            result = golden_comparison("test_id").compare(output_file, phase_name="final")
             golden_comparison("test_id").print_result(result)
             assert result.matches or result.is_first_run
     """
@@ -419,8 +527,11 @@ def golden_comparison(fixtures_dir: Path):
     goldens_dir = fixtures_dir / "goldens"
 
     def create_comparison(test_id: str) -> GoldenComparison:
-        """Create a GoldenComparison instance for the given test ID."""
-        return GoldenComparison(test_id, goldens_dir)
+        """Create a GoldenComparison instance for the given test ID.
+
+        Checks testdata-colocated goldens first, falls back to legacy location.
+        """
+        return GoldenComparison(test_id, goldens_dir, testdata_store)
 
     return create_comparison
 

@@ -186,6 +186,40 @@ class Bench:
         from .command import run_unsync
         return run_unsync(config_file, self.repo_root, delete_from_cloud)
 
+    def prompt_user(self, *messages: str) -> None:
+        """Display a formatted prompt and wait for user input.
+
+        Displays messages surrounded by separator lines and waits for user
+        to press Enter. Handles keyboard interrupts gracefully.
+
+        Args:
+            *messages: Messages to display to user
+
+        Raises:
+            KeyboardInterrupt: If user presses Ctrl+C
+        """
+        # Display separator and messages
+        self.info(f"\n{'='*70}")
+        for msg in messages:
+            self.info(msg)
+        self.info(f"{'='*70}\n")
+
+        # Wait for user input
+        try:
+            input()
+        except (EOFError, KeyboardInterrupt):
+            self.warn("Interrupted by user")
+            raise
+        except OSError as e:
+            # Handle case where stdin is not available due to pytest output capture
+            if "reading from stdin while output is captured" in str(e):
+                self.error(
+                    "ERROR: Cannot read user input - pytest output capture is enabled.\n"
+                    "Run tests with: uv run pytest tests/record_replay --online -s\n"
+                    "(the -s flag disables output capture for interactive tests)"
+                )
+            raise
+
     def save_result(self, result: "DeviceTestResult") -> Path | None:
         """Save test result to JSON file."""
         return self._logger.save_result(result)

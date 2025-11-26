@@ -1,0 +1,14 @@
+id: test
+email: test
+emailverified: true
+password: $argon2id$v=19$m=3072,t=5,p=4$FTTAebHytvImeBtKa3hpVw$zJuH+rdSfnXNHA5+TyvE5fW5hbMCrexkyuoQZpxdeiY
+name: ""
+nickname: ""
+givenname: ""
+familyname: ""
+createdat: 2025-11-26T17:41:51.720194344Z
+updatedat: 2025-11-26T17:41:51.720194428Z
+isadmin: true
+sync15: true
+additionalscopes: []
+integrations: []
