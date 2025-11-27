@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING
 from rock_paper_sync.annotations import Annotation, AnnotationType, read_annotations
 from rock_paper_sync.annotations.common.text_extraction import extract_text_blocks_from_rm
 from rock_paper_sync.annotations.common.anchors import AnnotationAnchor
-from rock_paper_sync.annotations.core.data_types import ExtractedAnnotation, RenderConfig
+from rock_paper_sync.annotations.core.data_types import ExtractedAnnotation, OCRCorrection, RenderConfig
 from rock_paper_sync.coordinate_transformer import (
     extract_text_origin,
     build_parent_anchor_map,
@@ -387,3 +387,51 @@ class StrokeHandler:
         )
 
         return extracted
+
+    def detect_ocr_corrections(
+        self,
+        vault_name: str,
+        file_path: str,
+        paragraph_index: int,
+        old_paragraph: str,
+        new_paragraph: str,
+        annotation_id: str,
+        image_hash: str,
+        config: RenderConfig,
+    ) -> OCRCorrection | None:
+        """Detect OCR correction for training data collection.
+
+        Compares OCR text in old vs new paragraph versions to detect user edits.
+        This is a simple, focused method for collecting training data - not for
+        bidirectional sync.
+
+        Args:
+            vault_name: Vault name
+            file_path: File path
+            paragraph_index: Paragraph index
+            old_paragraph: Paragraph from snapshot
+            new_paragraph: Current paragraph
+            annotation_id: Annotation UUID
+            image_hash: Image hash for training
+            config: Rendering configuration
+
+        Returns:
+            OCRCorrection if text changed, None otherwise
+        """
+        # Extract OCR text from both versions
+        old_texts = self.extract_from_markdown(old_paragraph, config)
+        new_texts = self.extract_from_markdown(new_paragraph, config)
+
+        # Simple comparison (assumes one OCR annotation per paragraph)
+        # For multiple annotations per paragraph, we'd need more sophisticated matching
+        if old_texts and new_texts and old_texts[0].text != new_texts[0].text:
+            return OCRCorrection(
+                image_hash=image_hash,
+                original_text=old_texts[0].text,
+                corrected_text=new_texts[0].text,
+                paragraph_context=new_paragraph,
+                document_id=f"{vault_name}/{file_path}",
+                annotation_id=annotation_id,
+            )
+
+        return None

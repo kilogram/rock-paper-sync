@@ -61,3 +61,28 @@ class AnnotationInfo:
         if self.notes:
             parts.append(f"{self.notes} note{'s' if self.notes != 1 else ''}")
         return ", ".join(parts) if parts else "0 annotations"
+
+
+@dataclass
+class OCRCorrection:
+    """OCR correction for training data.
+
+    Simple dataclass for collecting OCR corrections when users fix OCR
+    errors in markdown. Used exclusively for training data collection,
+    not for bidirectional sync.
+
+    Attributes:
+        image_hash: Hash of the annotation image (for training dataset)
+        original_text: OCR text before user correction
+        corrected_text: Text after user correction
+        paragraph_context: Full paragraph text for context
+        document_id: Document identifier (vault_name/file_path)
+        annotation_id: Annotation UUID
+    """
+
+    image_hash: str
+    original_text: str
+    corrected_text: str
+    paragraph_context: str
+    document_id: str
+    annotation_id: str
