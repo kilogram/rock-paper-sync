@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from rock_paper_sync.annotations.common.snapshots import ContentStore, SnapshotStore
+
 logger = logging.getLogger("rock_paper_sync.state")
 
 
@@ -57,6 +59,9 @@ class StateManager:
             logger.debug(f"State database initialized at {db_path}")
         except Exception as e:
             raise StateError(f"Failed to initialize state database: {e}")
+
+        # Initialize snapshot store (lazy-loaded)
+        self._snapshot_store: Optional[SnapshotStore] = None
 
     def _ensure_schema(self) -> None:
         """Create database tables if they don't exist."""
@@ -879,6 +884,21 @@ class StateManager:
             "pending": row[1] or 0,
             "datasets": row[2] or 0,
         }
+
+    @property
+    def snapshots(self) -> SnapshotStore:
+        """Get snapshot store for file and annotation block snapshots.
+
+        Returns:
+            SnapshotStore instance (lazily initialized)
+        """
+        if self._snapshot_store is None:
+            # Create content store in data directory alongside state database
+            snapshots_dir = self.db_path.parent / "snapshots"
+            content_store = ContentStore(snapshots_dir)
+            self._snapshot_store = SnapshotStore(self.conn, content_store)
+
+        return self._snapshot_store
 
     def close(self) -> None:
         """Close database connection.
