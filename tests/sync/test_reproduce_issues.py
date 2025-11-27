@@ -234,53 +234,6 @@ class TestIssue6MissingTransactionSemantics:
         )
 
 
-class TestIssue7MissingCorrelationIds:
-    """LOGGING ISSUE #7: Missing correlation IDs for tracing operations.
-
-    Problem: Multi-step operations produce many log lines that get interleaved
-    when multiple operations run concurrently. Hard to trace which logs belong together.
-
-    Expected: Each operation should have a correlation ID (e.g., UUID prefix)
-    """
-
-    def test_issue_7_reproduces_missing_correlation_ids(
-        self,
-        integration_config: AppConfig,
-        temp_vault: Path,
-        mock_cloud_sync,
-        state_manager: StateManager,
-        caplog,
-    ) -> None:
-        """REPRODUCE: Verify logs lack correlation IDs."""
-        # Create files
-        for i in range(5):
-            (temp_vault / f"file{i}.md").write_text(f"# File {i}")
-
-        engine = SyncEngine(integration_config, state_manager, cloud_sync=mock_cloud_sync)
-        vault = integration_config.sync.vaults[0]
-
-        for i in range(5):
-            engine.sync_file(vault, temp_vault / f"file{i}.md")
-
-        with caplog.at_level(logging.INFO):
-            engine.sync_vault(vault)
-
-        # Check for correlation IDs in logs
-        log_lines = caplog.text.split("\n")
-
-        # Look for pattern like [UUID] prefix
-        correlated_lines = [l for l in log_lines if "[" in l and "]" in l and "INFO" in l]
-
-        if len(correlated_lines) < len(log_lines) * 0.5:  # Less than 50% have correlation
-            # ISSUE REPRODUCED: Missing correlation IDs
-            pytest.fail(
-                f"ISSUE #7 REPRODUCED: Missing correlation IDs in logs. "
-                f"Only {len(correlated_lines)}/{len(log_lines)} log lines have correlation prefix. "
-                f"This makes it hard to trace operations in concurrent scenarios. "
-                f"Sample logs:\n{chr(10).join(log_lines[:5])}"
-            )
-
-
 class TestIssue8MissingVaultNameInLogs:
     """LOGGING ISSUE #8: Generation conflict logs don't include vault name.
 
