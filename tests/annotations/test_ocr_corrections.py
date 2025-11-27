@@ -396,3 +396,155 @@ Third <!-- OCR: incorrect --> paragraph."""
         # This is a known limitation documented in the plan
         assert len(corrections) == 2  # One per stroke annotation
         assert all(c.original_text == "helo" for c in corrections)
+
+
+class TestIntegrationWorkflow:
+    """Integration tests for full OCR correction workflow."""
+
+    def test_end_to_end_correction_workflow(self, tmp_path):
+        """Test complete workflow: OCR → snapshot → edit → detect → store.
+
+        This integration test simulates the full correction workflow:
+        1. Initial sync: OCR result stored with snapshot
+        2. User manually edits OCR text in markdown
+        3. Next sync: correction detected and stored in database
+        4. Snapshot updated for next detection cycle
+        """
+        # Setup
+        content_store = ContentStore(tmp_path / "snapshots")
+        state_manager = StateManager(tmp_path / "state.db")
+        snapshot_store = SnapshotStore(state_manager.conn, content_store)
+
+        vault_name = "TestVault"
+        file_path = "notes/example.md"
+
+        # STEP 1: Initial sync - OCR result with snapshot
+        # Simulate what happens after first OCR processing
+        initial_paragraph = "Paragraph with <!-- OCR: helo wrld --> in it."
+
+        snapshot_store.snapshot_block(
+            vault_name=vault_name,
+            file_path=file_path,
+            paragraph_index=0,
+            block_content=initial_paragraph,
+            annotation_types=["stroke"],
+        )
+
+        # Verify snapshot was created
+        stored_snapshot = snapshot_store.get_block_snapshot(
+            vault_name, file_path, 0
+        )
+        assert stored_snapshot == initial_paragraph
+
+        # STEP 2: User manually edits OCR text
+        # User fixes "helo wrld" -> "hello world"
+        edited_markdown = "Paragraph with <!-- OCR: hello world --> in it."
+
+        # STEP 3: Next sync - detect correction
+        stroke_metadata = {
+            0: [{"annotation_id": "anno-abc-123", "image_hash": "hash-def-456"}]
+        }
+
+        corrections = detect_ocr_corrections_for_file(
+            vault_name=vault_name,
+            file_path=file_path,
+            current_markdown=edited_markdown,
+            snapshot_store=snapshot_store,
+            stroke_metadata=stroke_metadata,
+        )
+
+        # Verify correction was detected
+        assert len(corrections) == 1
+        correction = corrections[0]
+        assert correction.original_text == "helo wrld"
+        assert correction.corrected_text == "hello world"
+        assert correction.annotation_id == "anno-abc-123"
+        assert correction.image_hash == "hash-def-456"
+
+        # STEP 4: Store correction in database (simulating sync workflow)
+        import uuid
+        import time
+
+        correction_id = str(uuid.uuid4())
+        state_manager.add_ocr_correction(
+            correction_id=correction_id,
+            image_hash=correction.image_hash,
+            image_path="/tmp/hash-def-456.png",
+            original_text=correction.original_text,
+            corrected_text=correction.corrected_text,
+            paragraph_context=correction.paragraph_context,
+            document_id=correction.document_id,
+        )
+
+        # Verify correction was stored
+        pending_corrections = state_manager.get_pending_ocr_corrections()
+        assert len(pending_corrections) == 1
+        stored = pending_corrections[0]
+        assert stored["original_text"] == "helo wrld"
+        assert stored["corrected_text"] == "hello world"
+
+        # STEP 5: Update snapshot for next cycle
+        snapshot_store.snapshot_block(
+            vault_name=vault_name,
+            file_path=file_path,
+            paragraph_index=0,
+            block_content=edited_markdown,
+            annotation_types=["stroke"],
+        )
+
+        # Verify snapshot was updated
+        new_snapshot = snapshot_store.get_block_snapshot(vault_name, file_path, 0)
+        assert new_snapshot == edited_markdown
+
+        # STEP 6: Verify no correction on next sync (text unchanged)
+        corrections_again = detect_ocr_corrections_for_file(
+            vault_name=vault_name,
+            file_path=file_path,
+            current_markdown=edited_markdown,
+            snapshot_store=snapshot_store,
+            stroke_metadata=stroke_metadata,
+        )
+
+        assert len(corrections_again) == 0  # No new corrections
+
+    def test_multiple_correction_cycles(self, tmp_path):
+        """Test multiple rounds of OCR correction over time."""
+        content_store = ContentStore(tmp_path / "snapshots")
+        state_manager = StateManager(tmp_path / "state.db")
+        snapshot_store = SnapshotStore(state_manager.conn, content_store)
+
+        vault_name = "Vault"
+        file_path = "test.md"
+        stroke_metadata = {
+            0: [{"annotation_id": "anno-1", "image_hash": "hash-1"}]
+        }
+
+        # Cycle 1: Initial OCR result
+        v1_markdown = "<!-- OCR: helo -->"
+        snapshot_store.snapshot_block(vault_name, file_path, 0, v1_markdown, ["stroke"])
+
+        # Cycle 2: User corrects to "hello"
+        v2_markdown = "<!-- OCR: hello -->"
+        corrections_1 = detect_ocr_corrections_for_file(
+            vault_name, file_path, v2_markdown, snapshot_store, stroke_metadata
+        )
+
+        assert len(corrections_1) == 1
+        assert corrections_1[0].original_text == "helo"
+        assert corrections_1[0].corrected_text == "hello"
+
+        # Update snapshot
+        snapshot_store.snapshot_block(vault_name, file_path, 0, v2_markdown, ["stroke"])
+
+        # Cycle 3: User makes another correction "hello" -> "Hello World"
+        v3_markdown = "<!-- OCR: Hello World -->"
+        corrections_2 = detect_ocr_corrections_for_file(
+            vault_name, file_path, v3_markdown, snapshot_store, stroke_metadata
+        )
+
+        assert len(corrections_2) == 1
+        assert corrections_2[0].original_text == "hello"
+        assert corrections_2[0].corrected_text == "Hello World"
+
+        # We've detected 2 corrections total
+        # (though they're not stored in this test - that's tested above)

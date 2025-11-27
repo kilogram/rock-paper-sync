@@ -868,6 +868,106 @@ class SyncEngine:
             parent_uuid=parent_uuid,
         )
 
+    def _detect_and_store_ocr_corrections(
+        self,
+        vault_name: str,
+        file_path: str,
+        markdown_path: Path,
+        annotation_map: dict[int, AnnotationInfo],
+    ) -> None:
+        """Detect and store OCR corrections for training data.
+
+        Compares current markdown against stored snapshots to detect user edits
+        to OCR text. Stores detected corrections in database for training.
+
+        Args:
+            vault_name: Vault name
+            file_path: Relative file path
+            markdown_path: Absolute path to markdown file
+            annotation_map: Map of paragraph_index -> AnnotationInfo
+        """
+        from rock_paper_sync.annotations.ocr_corrections import (
+            detect_ocr_corrections_for_file,
+        )
+        from rock_paper_sync.annotations.core.data_types import RenderConfig
+        import uuid
+        import time
+
+        try:
+            # Read current markdown content
+            current_markdown = markdown_path.read_text(encoding="utf-8")
+
+            # Build stroke metadata from OCR state
+            # Get all OCR results for this file to find strokes
+            stroke_metadata = {}
+            all_ocr_results = self.state.get_all_ocr_results(vault_name, file_path)
+
+            for para_idx, ocr_data in all_ocr_results.items():
+                if para_idx in annotation_map and annotation_map[para_idx].strokes > 0:
+                    stroke_metadata[para_idx] = [
+                        {
+                            "annotation_id": ocr_data["annotation_uuid"],
+                            "image_hash": ocr_data["image_hash"],
+                        }
+                    ]
+
+            if not stroke_metadata:
+                logger.debug(
+                    f"No stroke metadata for {vault_name}:{file_path}, skipping correction detection"
+                )
+                return
+
+            # Detect corrections
+            corrections = detect_ocr_corrections_for_file(
+                vault_name=vault_name,
+                file_path=file_path,
+                current_markdown=current_markdown,
+                snapshot_store=self.state.snapshots,
+                stroke_metadata=stroke_metadata,
+                config=RenderConfig(stroke_style="comment"),  # Default config
+            )
+
+            # Store corrections in database
+            for correction in corrections:
+                # Generate correction ID
+                correction_id = str(uuid.uuid4())
+
+                # Get image path from OCR state
+                image_path = ""
+                for ocr_data in all_ocr_results.values():
+                    if ocr_data["image_hash"] == correction.image_hash:
+                        # Reconstruct image path (stored in corrections cache)
+                        cache_dir = self.config.cache_dir
+                        image_path = str(
+                            cache_dir
+                            / "corrections"
+                            / "images"
+                            / f"{correction.image_hash}.png"
+                        )
+                        break
+
+                self.state.add_ocr_correction(
+                    correction_id=correction_id,
+                    image_hash=correction.image_hash,
+                    image_path=image_path,
+                    original_text=correction.original_text,
+                    corrected_text=correction.corrected_text,
+                    paragraph_context=correction.paragraph_context,
+                    document_id=correction.document_id,
+                )
+
+                logger.info(
+                    f"Stored OCR correction: '{correction.original_text[:30]}...' -> "
+                    f"'{correction.corrected_text[:30]}...'"
+                )
+
+        except Exception as e:
+            logger.warning(
+                f"Failed to detect OCR corrections for {vault_name}:{file_path}: {e}",
+                exc_info=True,
+            )
+            # Don't fail the sync if correction detection fails
+
     def _update_annotation_markers(
         self,
         markdown_path: Path,
@@ -886,6 +986,9 @@ class SyncEngine:
         If OCR is enabled and rm_files are provided, also processes annotations
         for handwriting recognition.
 
+        Also detects OCR corrections (user edits to OCR text) for training data
+        collection before updating with new OCR results.
+
         Uses ContentBlock-aligned marker insertion to ensure markers appear at
         correct paragraph boundaries.
 
@@ -898,6 +1001,16 @@ class SyncEngine:
             rm_files: Optional list of .rm files for OCR processing
         """
         logger.debug(f"Updating annotation markers for {len(annotation_map)} blocks")
+
+        # Detect OCR corrections before processing new OCR results
+        # This captures user edits to OCR text for training data
+        if self.ocr_processor and rm_files:
+            self._detect_and_store_ocr_corrections(
+                vault_name=vault_name,
+                file_path=relative_path,
+                markdown_path=markdown_path,
+                annotation_map=annotation_map,
+            )
 
         # Add markers using ContentBlock alignment
         marked_content = add_annotation_markers_aligned(content_blocks, annotation_map)
@@ -919,6 +1032,26 @@ class SyncEngine:
                 paragraph_texts=paragraph_texts,
             )
             logger.info(f"OCR processing complete for {vault_name}:{relative_path}")
+
+            # Update snapshots after OCR processing for future correction detection
+            # Parse the new content with OCR results into paragraphs
+            from rock_paper_sync.annotations.ocr_corrections import parse_paragraphs
+
+            new_paragraphs = parse_paragraphs(marked_content)
+            for para_idx, para_text in enumerate(new_paragraphs):
+                # Only snapshot paragraphs that have strokes
+                if para_idx in annotation_map and annotation_map[para_idx].strokes > 0:
+                    self.state.snapshots.snapshot_block(
+                        vault_name=vault_name,
+                        file_path=relative_path,
+                        paragraph_index=para_idx,
+                        block_content=para_text,
+                        annotation_types=["stroke"],
+                    )
+            logger.debug(
+                f"Updated {len([i for i in annotation_map if annotation_map[i].strokes > 0])} "
+                f"paragraph snapshots for future correction detection"
+            )
 
         # Write marked content back to file
         with open(markdown_path, 'w', encoding='utf-8') as f:
