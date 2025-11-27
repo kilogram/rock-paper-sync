@@ -351,6 +351,77 @@ class RmCloudSync:
         """
         return self.sync_client.get_root_state()
 
+    def update_root(
+        self, root_hash: str, generation: int, broadcast: bool = True
+    ) -> int:
+        """
+        Update the root hash tree with optimistic concurrency control.
+
+        Args:
+            root_hash: Hash of the root index
+            generation: Current generation number (will be incremented)
+            broadcast: Whether to broadcast sync notification (triggers xochitl reload)
+
+        Returns:
+            New generation number
+
+        Raises:
+            GenerationConflictError: If another client updated root concurrently
+        """
+        return self.sync_client.update_root(root_hash, generation, broadcast)
+
+    def upload_index(self, entries: list) -> tuple[str, bytes]:
+        """
+        Create an index file, upload it as a blob, return hash and content.
+
+        INTERNAL USE ONLY: Prefer apply_virtual_state() for high-level operations.
+
+        Args:
+            entries: List of BlobEntry objects to include in index
+
+        Returns:
+            Tuple of (index_hash, index_content)
+        """
+        return self.sync_client.upload_index(entries)
+
+    def apply_virtual_state(self, virtual_state, broadcast: bool = True) -> int:
+        """
+        Atomically apply virtual device state to cloud.
+
+        High-level operation that:
+        1. Gets final entries from virtual state
+        2. Uploads new root index blob
+        3. Updates root hash with optimistic concurrency control
+
+        This encapsulates the low-level Sync v3 protocol details,
+        providing a clean abstraction for atomic multi-document operations.
+
+        Args:
+            virtual_state: VirtualDeviceState with staged changes
+            broadcast: Whether to broadcast sync notification to device
+
+        Returns:
+            New generation number after update
+
+        Raises:
+            GenerationConflictError: If another client updated root concurrently
+        """
+        # Get final state
+        final_entries = virtual_state.get_entries()
+        original_gen = virtual_state.original_gen
+
+        # Upload new root index blob
+        final_root_hash, _ = self.sync_client.upload_index(final_entries)
+
+        # Atomically update root
+        new_gen = self.sync_client.update_root(
+            root_hash=final_root_hash,
+            generation=original_gen,
+            broadcast=broadcast,
+        )
+
+        return new_gen
+
     def get_existing_page_uuids(self, doc_uuid: str) -> list[str]:
         """
         Get existing page UUIDs for a document.

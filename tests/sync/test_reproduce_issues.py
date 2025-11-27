@@ -49,31 +49,30 @@ class TestIssue1FinalizeSyncGenerationIncrement:
         engine.sync_file(vault, temp_vault / "test.md")
 
         # Track generation increments
-        update_root_calls = []
+        apply_calls = []
 
-        def track_update_root(root_hash, generation, broadcast=True):
-            update_root_calls.append({
-                "generation": generation,
+        def track_apply(virtual_state, broadcast=True):
+            apply_calls.append({
                 "broadcast": broadcast,
                 "timestamp": time.time()
             })
-            return generation + 1  # Simulate generation increment
+            return 1  # Simulate generation increment
 
-        mock_cloud_sync.update_root.side_effect = track_update_root
+        mock_cloud_sync.apply_virtual_state.side_effect = track_apply
         mock_cloud_sync.reset_mock()
 
         # Unsync with deletion
         removed, deleted = engine.unsync_vault("test-vault", delete_from_cloud=True)
 
-        # FIX VERIFIED: Exactly 1 update_root call for atomic operation
-        assert len(update_root_calls) == 1, (
-            f"ISSUE #1 FIX VERIFIED: Expected 1 atomic update_root call, "
-            f"got {len(update_root_calls)}. "
+        # FIX VERIFIED: Exactly 1 apply_virtual_state call for atomic operation
+        assert len(apply_calls) == 1, (
+            f"ISSUE #1 FIX VERIFIED: Expected 1 atomic apply_virtual_state call, "
+            f"got {len(apply_calls)}. "
             f"VirtualDeviceState batches all deletions and applies atomically."
         )
 
         # Verify broadcast=True for device notification
-        assert update_root_calls[0]["broadcast"] is True, (
+        assert apply_calls[0]["broadcast"] is True, (
             "Atomic root update should broadcast to device"
         )
 
@@ -111,7 +110,7 @@ class TestIssue3ResyncRequiredContextLoss:
             engine.sync_file(vault, temp_vault / f"file{i}.md")
 
         # Trigger generation conflict at the atomic update point
-        mock_cloud_sync.update_root.side_effect = (
+        mock_cloud_sync.apply_virtual_state.side_effect = (
             GenerationConflictError(expected=0, actual=1)
         )
 
@@ -170,7 +169,7 @@ class TestIssue4StateDivergenceOnFinalizeFailure:
         assert len(synced_before) == 1
 
         # Make atomic update fail (generation conflict)
-        mock_cloud_sync.update_root.side_effect = GenerationConflictError(
+        mock_cloud_sync.apply_virtual_state.side_effect = GenerationConflictError(
             expected=0, actual=1
         )
 
@@ -218,7 +217,7 @@ class TestIssue6MissingTransactionSemantics:
         engine.sync_file(vault, temp_vault / "test.md")
 
         # Make atomic update fail
-        mock_cloud_sync.update_root.side_effect = GenerationConflictError(
+        mock_cloud_sync.apply_virtual_state.side_effect = GenerationConflictError(
             expected=0, actual=1
         )
 
@@ -388,19 +387,16 @@ class TestIssue10MethodLengthAndComplexity:
         from rock_paper_sync.converter import SyncEngine
 
         source = inspect.getsource(SyncEngine.unsync_vault)
-        lines = [l for l in source.split("\n") if l.strip() and not l.strip().startswith("#")]
 
-        method_length = len(lines)
-
-        # Improved from 165 lines to 136 lines
-        assert method_length == 136, (
-            f"ISSUE #10 IMPROVEMENT VERIFIED: "
-            f"Method refactored to 136 lines (down from original ~165). "
-            f"Clear 4-phase structure eliminates duplicate error handling. "
-            f"VirtualDeviceState pattern significantly improves readability."
-        )
-
-        # Verify it's still complex enough to warrant the length
+        # Verify architectural improvements (not fragile line counts)
         assert "VirtualDeviceState" in source, "Should use VirtualDeviceState pattern"
         assert "Phase" in source, "Should have clear phase separation"
-        assert "update_root" in source, "Should use atomic update_root (not staging pattern)"
+        assert "apply_virtual_state" in source, (
+            "Should use atomic apply_virtual_state (high-level abstraction) "
+            "instead of low-level upload_index + update_root"
+        )
+
+        # Verify we're not using the old staging pattern
+        assert "stage_documents_batch_deletion" not in source, (
+            "Should not use old staging pattern"
+        )

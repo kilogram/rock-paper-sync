@@ -446,7 +446,7 @@ class TestFileFixtures:
     @pytest.fixture
     def fixtures_dir(self) -> Path:
         """Get path to fixtures directory."""
-        return Path(__file__).parent / "fixtures" / "sample_markdown"
+        return Path(__file__).parent.parent / "fixtures" / "sample_markdown"
 
     def test_simple_fixture(self, fixtures_dir: Path):
         """Parse simple.md fixture."""

@@ -698,17 +698,15 @@ class SyncEngine:
 
         # PHASE 3: Single atomic root update (for deletions)
         if virtual_state.has_changes():
-            final_root_hash = virtual_state.compute_final_hash()
             logger.info(
                 f"[{correlation_id}] Phase 3 (Atomic Update): Applying deletion of {deleted_count} files "
-                f"(gen {current_gen} → final hash {final_root_hash[:8]})"
+                f"(gen {current_gen})"
             )
 
             try:
-                # Single atomic root update
-                self.cloud_sync.update_root(
-                    root_hash=final_root_hash,
-                    generation=current_gen,
+                # Single atomic root update (uploads index blob + updates root)
+                self.cloud_sync.apply_virtual_state(
+                    virtual_state=virtual_state,
                     broadcast=True,  # Single broadcast for all deletions + uploads
                 )
                 logger.info(f"[{correlation_id}] Root updated atomically")
@@ -1067,18 +1065,15 @@ class SyncEngine:
                 self.state.delete_folder_mapping(vault_name, folder_path)
             return files_removed, 0
 
-        # Compute final root hash from virtual state
-        final_root_hash = virtual_state.compute_final_hash()
         logger.info(
             f"[{correlation_id}] Phase 3 (Atomic Update): Applying deletion of {deleted_count} items "
-            f"(gen {current_gen} → final hash {final_root_hash[:8]})"
+            f"(gen {current_gen})"
         )
 
         try:
-            # Single atomic root update with optimistic concurrency control
-            self.cloud_sync.update_root(
-                root_hash=final_root_hash,
-                generation=current_gen,
+            # Single atomic root update (uploads index blob + updates root)
+            self.cloud_sync.apply_virtual_state(
+                virtual_state=virtual_state,
                 broadcast=True,
             )
             logger.info(f"[{correlation_id}] Root updated atomically")

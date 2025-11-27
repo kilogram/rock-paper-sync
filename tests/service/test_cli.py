@@ -24,6 +24,10 @@ def mock_cloud_sync():
     mock_sync.upload_folder = MagicMock()
     mock_sync.get_existing_page_uuids = MagicMock(return_value=[])
     mock_sync.delete_document = MagicMock()
+    mock_sync.get_root_state = MagicMock(return_value=([], "", 0))
+    mock_sync.update_root = MagicMock()
+    mock_sync.upload_index = MagicMock(return_value=("fakehash123", b"fake index content"))
+    mock_sync.apply_virtual_state = MagicMock(return_value=1)
 
     with patch('rock_paper_sync.converter.RmCloudSync', return_value=mock_sync):
         with patch('rock_paper_sync.converter.RmCloudClient'):
@@ -492,9 +496,8 @@ class TestUnsyncCommand:
 
         assert result.exit_code == 0
         assert "deleted from cloud" in result.output
-        # New behavior: uses batch deletion with staging pattern
-        assert mock_cloud_sync.stage_documents_batch_deletion.called
-        assert mock_cloud_sync.finalize_sync.called
+        # Uses atomic VirtualDeviceState pattern with high-level apply_virtual_state
+        assert mock_cloud_sync.apply_virtual_state.called
 
     def test_unsync_all_vaults(
         self, runner: CliRunner, config_file: Path, temp_vault: Path, mock_cloud_sync

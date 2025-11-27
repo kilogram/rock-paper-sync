@@ -469,9 +469,9 @@ class TestUnsync:
         assert len(state_manager.get_all_synced_files("test-vault")) == 0
         # Verify atomic deletion was applied (VirtualDeviceState pattern):
         # - get_root_state is called to read current cloud state
-        # - update_root is called with computed final hash (atomic operation)
+        # - apply_virtual_state is called for atomic operation (uploads index + updates root)
         assert mock_cloud_sync.get_root_state.called
-        assert mock_cloud_sync.update_root.called
+        assert mock_cloud_sync.apply_virtual_state.called
 
     def test_unsync_vault_invalid_name(
         self,
@@ -503,7 +503,7 @@ class TestUnsync:
 
         # Make atomic update raise a generation conflict (concurrent cloud modification)
         from rock_paper_sync.sync_v3 import GenerationConflictError
-        mock_cloud_sync.update_root.side_effect = GenerationConflictError(
+        mock_cloud_sync.apply_virtual_state.side_effect = GenerationConflictError(
             expected=0, actual=1
         )
 

@@ -343,8 +343,12 @@ def mock_cloud_sync():
     mock_sync.is_sync_enabled = MagicMock(return_value=True)
     # Mock get_root_state to return empty cloud state (entries, hash, generation)
     mock_sync.get_root_state = MagicMock(return_value=([], None, 0))
-    # Mock update_root for atomic operations
+    # Mock update_root for atomic operations (legacy, prefer apply_virtual_state)
     mock_sync.update_root = MagicMock(return_value=1)
+    # Mock upload_index to return hash and content tuple (legacy, prefer apply_virtual_state)
+    mock_sync.upload_index = MagicMock(return_value=("fakehash123", b"fake index content"))
+    # Mock apply_virtual_state for high-level atomic operations
+    mock_sync.apply_virtual_state = MagicMock(return_value=1)
     return mock_sync
 
 
