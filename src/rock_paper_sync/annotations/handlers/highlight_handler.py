@@ -22,6 +22,7 @@ from pathlib import Path
 
 from rock_paper_sync.annotations import Annotation, AnnotationType, read_annotations
 from rock_paper_sync.annotations.common.text_extraction import extract_text_blocks_from_rm
+from rock_paper_sync.annotations.common.anchors import AnnotationAnchor
 
 logger = logging.getLogger(__name__)
 
@@ -228,3 +229,66 @@ class HighlightHandler:
                 "last_seen": row[2],
             }
         return None
+
+    def create_anchor(
+        self,
+        annotation: Annotation,
+        paragraph_text: str,
+        paragraph_index: int,
+        page_num: int = 0,
+    ) -> AnnotationAnchor:
+        """Create anchor from highlight annotation for matching and correction detection.
+
+        Args:
+            annotation: Highlight annotation from detect()
+            paragraph_text: Full text of the matched paragraph
+            paragraph_index: Index of paragraph in markdown
+            page_num: Page number (default: 0)
+
+        Returns:
+            AnnotationAnchor with highlight location/content information
+        """
+        if not annotation.highlight:
+            raise ValueError("Annotation is not a highlight")
+
+        highlight = annotation.highlight
+        highlight_text = highlight.text.strip() if highlight.text else ""
+
+        # Calculate position from rectangles
+        if highlight.rectangles:
+            # Use first rectangle for primary position
+            first_rect = highlight.rectangles[0]
+            center_x = first_rect.x + first_rect.w / 2
+            center_y = first_rect.y + first_rect.h / 2
+
+            # Calculate overall bounding box
+            min_x = min(r.x for r in highlight.rectangles)
+            min_y = min(r.y for r in highlight.rectangles)
+            max_x = max(r.x + r.w for r in highlight.rectangles)
+            max_y = max(r.y + r.h for r in highlight.rectangles)
+            bbox = (min_x, min_y, max_x - min_x, max_y - min_y)
+        else:
+            # Fallback if no rectangles
+            center_x, center_y = 0.0, 0.0
+            bbox = None
+
+        # Extract context from paragraph
+        if highlight_text and highlight_text in paragraph_text:
+            offset = paragraph_text.find(highlight_text)
+            context_before = paragraph_text[max(0, offset - 50):offset]
+            context_after = paragraph_text[offset + len(highlight_text):offset + len(highlight_text) + 50]
+        else:
+            # Fallback: use paragraph boundaries
+            context_before = paragraph_text[:50] if paragraph_text else ""
+            context_after = paragraph_text[-50:] if len(paragraph_text) > 50 else ""
+
+        return AnnotationAnchor.from_highlight(
+            highlight_text=highlight_text,
+            page_num=page_num,
+            position=(center_x, center_y),
+            bounding_box=bbox,
+            paragraph_index=paragraph_index,
+            context_before=context_before,
+            context_after=context_after,
+            color=highlight.color if hasattr(highlight, 'color') else None,
+        )

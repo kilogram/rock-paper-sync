@@ -30,7 +30,10 @@ Example usage:
 """
 
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from rock_paper_sync.annotations.common.anchors import AnnotationAnchor
 
 
 @runtime_checkable
@@ -158,5 +161,41 @@ class AnnotationHandler(Protocol):
 
         Returns:
             Type-specific state data, or None if not found
+        """
+        ...
+
+    def create_anchor(
+        self,
+        annotation: Any,
+        paragraph_text: str,
+        paragraph_index: int,
+        page_num: int = 0,
+    ) -> "AnnotationAnchor":
+        """Create an anchor from an annotation for matching and correction detection.
+
+        Anchors encapsulate all information needed to:
+        - Match annotations across syncs (fuzzy matching)
+        - Detect corrections from markdown edits
+        - Apply corrections to RM files
+
+        This method hides RM v6 format complexity from the handler. Handlers
+        should never import from rmscene or coordinate_transformer directly.
+
+        Args:
+            annotation: Annotation object from detect()
+            paragraph_text: Full text of the matched paragraph
+            paragraph_index: Index of paragraph in markdown
+            page_num: Page number (default: 0)
+
+        Returns:
+            AnnotationAnchor with all location/content information
+
+        Example (HighlightHandler):
+            anchor = self.create_anchor(
+                annotation=highlight_anno,
+                paragraph_text="This is the full paragraph text with highlight.",
+                paragraph_index=5,
+                page_num=0
+            )
         """
         ...

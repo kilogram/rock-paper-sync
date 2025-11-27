@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING
 
 from rock_paper_sync.annotations import Annotation, AnnotationType, read_annotations
 from rock_paper_sync.annotations.common.text_extraction import extract_text_blocks_from_rm
+from rock_paper_sync.annotations.common.anchors import AnnotationAnchor
 from rock_paper_sync.coordinate_transformer import (
     extract_text_origin,
     build_parent_anchor_map,
@@ -280,3 +281,49 @@ class StrokeHandler:
                 "last_processed": row[4],
             }
         return None
+
+    def create_anchor(
+        self,
+        annotation: Annotation,
+        paragraph_text: str,
+        paragraph_index: int,
+        page_num: int = 0,
+    ) -> AnnotationAnchor:
+        """Create anchor from stroke annotation for matching and correction detection.
+
+        Args:
+            annotation: Stroke annotation from detect()
+            paragraph_text: Full text of the matched paragraph
+            paragraph_index: Index of paragraph in markdown
+            page_num: Page number (default: 0)
+
+        Returns:
+            AnnotationAnchor with stroke location/content information
+        """
+        if not annotation.stroke or not annotation.stroke.bounding_box:
+            raise ValueError("Stroke annotation missing bounding box")
+
+        bbox = annotation.stroke.bounding_box
+        center_x = bbox.x + bbox.w / 2
+        center_y = bbox.y + bbox.h / 2
+
+        # Extract context from paragraph text
+        # For strokes, we don't have the actual text yet (needs OCR)
+        # But we can provide surrounding paragraph context
+        context_before = paragraph_text[:50] if paragraph_text else ""
+        context_after = paragraph_text[-50:] if len(paragraph_text) > 50 else ""
+
+        # Check if we have OCR text from state
+        ocr_text = None
+        # Note: In production, we would load state here to get OCR text
+        # For now, anchors are created without OCR text initially
+
+        return AnnotationAnchor.from_stroke(
+            page_num=page_num,
+            position=(center_x, center_y),
+            bounding_box=(bbox.x, bbox.y, bbox.w, bbox.h),
+            paragraph_index=paragraph_index,
+            ocr_text=ocr_text,
+            context_before=context_before,
+            context_after=context_after,
+        )
