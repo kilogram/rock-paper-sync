@@ -20,13 +20,14 @@ Architecture:
 
 Example Usage:
     >>> from parser import parse_markdown_file
-    >>> from annotation_mapper import map_annotations_to_paragraphs
+    >>> from annotations.core.processor import AnnotationProcessor
     >>>
     >>> # Parse markdown
     >>> doc = parse_markdown_file(Path("Document.md"))
     >>>
     >>> # Map annotations from device
-    >>> annotation_map = map_annotations_to_paragraphs("Document.rm", doc.content)
+    >>> processor = AnnotationProcessor()
+    >>> annotation_map = processor.map_annotations_to_paragraphs("Document.rm", doc.content)
     >>>
     >>> # Add markers (aligned with parser blocks!)
     >>> marked_content = add_annotation_markers_aligned(doc.content, annotation_map)
@@ -41,7 +42,7 @@ import re
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .annotation_mapper import AnnotationInfo
+    from .annotations.core.data_types import AnnotationInfo
     from .parser import ContentBlock
 
 from .markdown_reconstruction import blocks_to_markdown, block_to_markdown

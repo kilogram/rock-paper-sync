@@ -9,7 +9,7 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from rock_paper_sync.annotation_mapper import RmTextBlock
+from rock_paper_sync.annotations.common.text_extraction import RmTextBlock
 from rock_paper_sync.ocr.protocol import BoundingBox
 from rock_paper_sync.ocr.text_matching import match_rm_block_to_markdown
 from rock_paper_sync.parser import ContentBlock

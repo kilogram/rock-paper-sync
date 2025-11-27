@@ -187,7 +187,7 @@ level = "debug"
 - `docs/MULTI_VAULT.md` - Multi-vault user guide
 - `docs/SYNC_PROTOCOL.md` - Technical protocol reference
 - `docs/RMSCENE_FINDINGS.md` - rmscene library notes
-- `docs/ANNOTATION_ARCHITECTURE_REVIEW.md` - Coordinate space analysis and fixes
+- `src/rock_paper_sync/annotations/README.md` - Annotation system architecture
 
 ## Getting Help
 

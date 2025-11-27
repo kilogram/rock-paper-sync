@@ -22,7 +22,7 @@ from rock_paper_sync.annotations import (
     AnnotationType,
     read_annotations,
 )
-from rock_paper_sync.annotation_mapper import extract_text_blocks_from_rm
+from rock_paper_sync.annotations.common.text_extraction import extract_text_blocks_from_rm
 from rock_paper_sync.coordinate_transformer import (
     extract_text_origin,
     build_parent_anchor_map,

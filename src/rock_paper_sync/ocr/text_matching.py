@@ -7,7 +7,7 @@ avoid code duplication.
 
 import logging
 
-from rock_paper_sync.annotation_mapper import RmTextBlock
+from rock_paper_sync.annotations.common.text_extraction import RmTextBlock
 from rock_paper_sync.parser import BlockType, ContentBlock
 
 logger = logging.getLogger(__name__)

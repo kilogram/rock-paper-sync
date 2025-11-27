@@ -252,7 +252,7 @@ def build_parent_anchor_map(rm_file: Path) -> dict["CrdtId", AnchorOrigin]:
     """
     import rmscene
     from rmscene.scene_stream import TreeNodeBlock
-    from .annotation_mapper import extract_text_blocks_from_rm
+    from .annotations.common.text_extraction import extract_text_blocks_from_rm
 
     parent_to_anchor: dict["CrdtId", AnchorOrigin] = {}
 

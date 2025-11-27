@@ -230,7 +230,7 @@ rock-paper-sync/
 
 ## Future
 
-- Annotation preservation (see `docs/ANNOTATION_ARCHITECTURE_REVIEW.md`)
+- Annotation preservation (see `src/rock_paper_sync/annotations/README.md`)
 - Bidirectional sync
 - Image embedding
 

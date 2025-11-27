@@ -53,7 +53,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from .annotation_mapper import AnnotationInfo, map_annotations_to_paragraphs
+from .annotations.core.data_types import AnnotationInfo
+from .annotations.core.processor import AnnotationProcessor
+from .annotations.handlers.highlight_handler import HighlightHandler
+from .annotations.handlers.stroke_handler import StrokeHandler
 from .annotation_markers_v2 import (
     add_annotation_markers_aligned,
     strip_annotation_markers,
@@ -217,6 +220,12 @@ class SyncEngine:
             self.ocr_processor = OCRProcessor(config.ocr, state)
             logger.info(f"OCR processor initialized (provider: {config.ocr.provider})")
 
+        # Initialize annotation processor with handlers
+        self.annotation_processor = AnnotationProcessor(db_path=state.db_path)
+        self.annotation_processor.register_handler(HighlightHandler())
+        self.annotation_processor.register_handler(StrokeHandler(self.ocr_processor))
+        logger.debug("Annotation processor initialized with highlight and stroke handlers")
+
         # Initialize cloud sync (injected or created)
         if cloud_sync is not None:
             self.cloud_sync = cloud_sync
@@ -323,7 +332,7 @@ class SyncEngine:
                         annotation_map = {}
                         for rm_file in existing_rm_files:
                             if rm_file and rm_file.exists():
-                                file_annotations = map_annotations_to_paragraphs(
+                                file_annotations = self.annotation_processor.map_annotations_to_paragraphs(
                                     rm_file, md_doc.content
                                 )
                                 merge_annotation_maps(annotation_map, file_annotations)
@@ -429,7 +438,7 @@ class SyncEngine:
                 annotation_map = {}
                 for rm_file in existing_rm_files:
                     if rm_file and rm_file.exists():
-                        file_annotations = map_annotations_to_paragraphs(
+                        file_annotations = self.annotation_processor.map_annotations_to_paragraphs(
                             rm_file, md_doc.content
                         )
                         merge_annotation_maps(annotation_map, file_annotations)
