@@ -1,6 +1,35 @@
 """Core data types for annotation system."""
 
 from dataclasses import dataclass
+from typing import Literal
+
+
+@dataclass
+class RenderConfig:
+    """Configuration for how annotations are rendered in markdown.
+
+    Attributes:
+        highlight_style: How to render highlights ("mark", "bold", "italic")
+        stroke_style: How to render strokes/OCR ("footnote", "comment")
+    """
+    highlight_style: Literal["mark", "bold", "italic"] = "mark"
+    stroke_style: Literal["footnote", "comment"] = "comment"
+
+
+@dataclass
+class ExtractedAnnotation:
+    """Annotation extracted from markdown.
+
+    Attributes:
+        text: Extracted text content
+        annotation_type: Type of annotation ("highlight", "stroke", etc.)
+        start_offset: Character offset in paragraph where annotation starts
+        end_offset: Character offset in paragraph where annotation ends
+    """
+    text: str
+    annotation_type: str
+    start_offset: int = -1
+    end_offset: int = -1
 
 
 @dataclass

@@ -34,6 +34,7 @@ from typing import Any, Protocol, runtime_checkable, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from rock_paper_sync.annotations.common.anchors import AnnotationAnchor
+    from rock_paper_sync.annotations.core.data_types import ExtractedAnnotation, RenderConfig
 
 
 @runtime_checkable
@@ -197,5 +198,37 @@ class AnnotationHandler(Protocol):
                 paragraph_index=5,
                 page_num=0
             )
+        """
+        ...
+
+    def extract_from_markdown(
+        self,
+        paragraph: str,
+        config: "RenderConfig",
+    ) -> list["ExtractedAnnotation"]:
+        """Extract annotations from markdown based on rendering configuration.
+
+        Each handler knows how it rendered annotations and can extract them back
+        using simple pattern matching. This enables correction detection by
+        comparing extracted annotations across snapshot versions.
+
+        Args:
+            paragraph: Markdown paragraph text
+            config: Rendering configuration (determines patterns to match)
+
+        Returns:
+            List of extracted annotations with text and offsets
+
+        Example (HighlightHandler with mark style):
+            paragraph = "Text with <mark>highlighted part</mark> here"
+            config = RenderConfig(highlight_style="mark")
+            extracted = handler.extract_from_markdown(paragraph, config)
+            # Returns: [ExtractedAnnotation(text="highlighted part", ...)]
+
+        Example (StrokeHandler with footnote style):
+            paragraph = "Handwritten text[^1]\\n\\n[^1]: OCR confidence 0.95"
+            config = RenderConfig(stroke_style="footnote")
+            extracted = handler.extract_from_markdown(paragraph, config)
+            # Returns: [ExtractedAnnotation(text="Handwritten text", ...)]
         """
         ...

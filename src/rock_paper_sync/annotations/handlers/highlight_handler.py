@@ -18,11 +18,13 @@ Example:
 """
 
 import logging
+import re
 from pathlib import Path
 
 from rock_paper_sync.annotations import Annotation, AnnotationType, read_annotations
 from rock_paper_sync.annotations.common.text_extraction import extract_text_blocks_from_rm
 from rock_paper_sync.annotations.common.anchors import AnnotationAnchor
+from rock_paper_sync.annotations.core.data_types import ExtractedAnnotation, RenderConfig
 
 logger = logging.getLogger(__name__)
 
@@ -292,3 +294,53 @@ class HighlightHandler:
             context_after=context_after,
             color=highlight.color if hasattr(highlight, 'color') else None,
         )
+
+    def extract_from_markdown(
+        self,
+        paragraph: str,
+        config: RenderConfig,
+    ) -> list[ExtractedAnnotation]:
+        """Extract highlights from markdown based on rendering style.
+
+        Supports three rendering styles:
+        - mark: <mark>text</mark>
+        - bold: **text**
+        - italic: *text*
+
+        Args:
+            paragraph: Markdown paragraph text
+            config: Rendering configuration
+
+        Returns:
+            List of extracted highlight annotations
+        """
+        extracted = []
+
+        if config.highlight_style == "mark":
+            # Pattern: <mark>highlighted text</mark>
+            pattern = r'<mark>(.+?)</mark>'
+        elif config.highlight_style == "bold":
+            # Pattern: **highlighted text**
+            pattern = r'\*\*(.+?)\*\*'
+        elif config.highlight_style == "italic":
+            # Pattern: *highlighted text*
+            pattern = r'\*(.+?)\*'
+        else:
+            logger.warning(f"Unknown highlight style: {config.highlight_style}")
+            return []
+
+        # Find all matches with their positions
+        for match in re.finditer(pattern, paragraph):
+            extracted.append(ExtractedAnnotation(
+                text=match.group(1),
+                annotation_type="highlight",
+                start_offset=match.start(),
+                end_offset=match.end()
+            ))
+
+        logger.debug(
+            f"Extracted {len(extracted)} highlights from paragraph "
+            f"(style={config.highlight_style})"
+        )
+
+        return extracted
