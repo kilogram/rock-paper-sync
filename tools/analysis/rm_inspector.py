@@ -44,7 +44,7 @@ from rmscene.scene_stream import (
     MigrationInfoBlock,
     RootTextBlock,
     SceneGroupItemBlock,
-    SceneInfoBlock,
+    SceneItemBlock,
     SceneLineItemBlock,
     TreeNodeBlock,
 )

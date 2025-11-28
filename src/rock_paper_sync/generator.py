@@ -927,6 +927,21 @@ class RemarkableGenerator:
 
             # Replace text content in RootTextBlock
             if block_type == 'RootTextBlock':
+                # Build styles dictionary with newline markers (format code 10)
+                # See docs/RMSCENE_NEWLINE_WORKAROUND.md for details
+                styles = {
+                    CrdtId(0, 0): LwwValue(
+                        timestamp=CrdtId(1, 15), value=si.ParagraphStyle.PLAIN
+                    )
+                }
+
+                # Add format code 10 (newline marker) for each \n character
+                for i, char in enumerate(combined_text):
+                    if char == '\n':
+                        styles[CrdtId(0, i)] = LwwValue(
+                            timestamp=CrdtId(1, 15), value=10  # Format code 10 = newline
+                        )
+
                 # Create new RootTextBlock with updated text but same structure
                 modified_block = RootTextBlock(
                     block_id=block.block_id,
@@ -940,18 +955,14 @@ class RemarkableGenerator:
                                 value=combined_text,
                             )
                         ]),
-                        styles={
-                            CrdtId(0, 0): LwwValue(
-                                timestamp=CrdtId(1, 15), value=si.ParagraphStyle.PLAIN
-                            ),
-                        },
+                        styles=styles,  # Now includes newline markers
                         pos_x=block.value.pos_x,
                         pos_y=block.value.pos_y,
                         width=block.value.width,
                     ),
                 )
                 modified_blocks.append(modified_block)
-                logger.debug(f"Replaced text content in RootTextBlock ({len(combined_text)} chars)")
+                logger.debug(f"Replaced text content in RootTextBlock ({len(combined_text)} chars, {combined_text.count(chr(10))} newlines)")
 
             # Replace annotation blocks with adjusted versions
             elif block_type in ['SceneLineItemBlock', 'SceneGlyphItemBlock']:
@@ -1007,6 +1018,23 @@ class RemarkableGenerator:
         if not combined_text.strip():
             combined_text = " "  # At least one space for empty pages
 
+        # Build styles dictionary with newline markers (format code 10)
+        # See docs/RMSCENE_NEWLINE_WORKAROUND.md for details
+        styles = {
+            CrdtId(0, 0): LwwValue(
+                timestamp=CrdtId(1, 15), value=si.ParagraphStyle.PLAIN
+            )
+        }
+
+        # Add format code 10 (newline marker) for each \n character
+        # This is a workaround for rmscene not yet supporting ParagraphStyle.NEWLINE
+        for i, char in enumerate(combined_text):
+            if char == '\n':
+                # Use raw int 10 since rmscene doesn't have NEWLINE enum value yet
+                styles[CrdtId(0, i)] = LwwValue(
+                    timestamp=CrdtId(1, 15), value=10  # Format code 10 = newline
+                )
+
         # Generate blocks manually with custom text width
         author_uuid = uuid4()
 
@@ -1039,11 +1067,7 @@ class RemarkableGenerator:
                             )
                         ]
                     ),
-                    styles={
-                        CrdtId(0, 0): LwwValue(
-                            timestamp=CrdtId(1, 15), value=si.ParagraphStyle.PLAIN
-                        ),
-                    },
+                    styles=styles,  # Now includes newline markers at format code 10
                     pos_x=self.TEXT_POS_X,
                     pos_y=self.TEXT_POS_Y,
                     width=self.TEXT_WIDTH,
