@@ -186,6 +186,33 @@ class RemarkableGenerator:
             "RemarkableGenerator initialized with rmscene integration and Phase 1 annotation anchoring"
         )
 
+    def _build_text_styles(self, text: str) -> dict:
+        """Build rmscene styles dictionary with newline markers.
+
+        Creates a styles dictionary for rmscene Text blocks with format code 10
+        (newline marker) for each \\n character. This is a workaround for rmscene
+        not yet supporting ParagraphStyle.NEWLINE.
+
+        See docs/RMSCENE_NEWLINE_WORKAROUND.md for details.
+
+        Args:
+            text: Text content to build styles for
+
+        Returns:
+            Dictionary mapping CrdtId positions to LwwValue styles
+        """
+        styles = {CrdtId(0, 0): LwwValue(timestamp=CrdtId(1, 15), value=si.ParagraphStyle.PLAIN)}
+
+        # Add format code 10 (newline marker) for each \n character
+        for i, char in enumerate(text):
+            if char == "\n":
+                styles[CrdtId(0, i)] = LwwValue(
+                    timestamp=CrdtId(1, 15),
+                    value=10,  # Format code 10 = newline
+                )
+
+        return styles
+
     def generate_document(
         self,
         md_doc: MarkdownDocument,
@@ -658,9 +685,11 @@ class RemarkableGenerator:
         pages: list[list[ContentBlock]] = []
         current_page: list[ContentBlock] = []
         current_lines = 0
+        y_position = float(self.TEXT_POS_Y)  # Track Y for annotation mapping
 
         for block in blocks:
             block_lines = self.estimate_block_lines(block)
+            block.page_y_start = y_position  # Set Y position for annotation mapping
 
             # Check if header should start new page (avoid orphan headers)
             if block.type == BlockType.HEADER and current_page:
@@ -669,6 +698,8 @@ class RemarkableGenerator:
                     pages.append(current_page)
                     current_page = []
                     current_lines = 0
+                    y_position = float(self.TEXT_POS_Y)
+                    block.page_y_start = y_position
 
             # Check if block fits on current page
             if current_lines + block_lines > self.layout.lines_per_page:
@@ -715,24 +746,31 @@ class RemarkableGenerator:
                             )
                             current_page = [next_block]
                             current_lines = self.estimate_block_lines(next_block)
+                            y_position = float(self.TEXT_POS_Y) + current_lines * self.line_height
                         else:
                             current_page = []
                             current_lines = 0
+                            y_position = float(self.TEXT_POS_Y)
                     else:
                         # Not enough room to split meaningfully, start new page
                         if current_page:
                             pages.append(current_page)
                         current_page = [block]
                         current_lines = block_lines
+                        y_position = float(self.TEXT_POS_Y) + block_lines * self.line_height
+                        block.page_y_start = float(self.TEXT_POS_Y)
                 else:
                     # Atomic block placement (default behavior)
                     if current_page:
                         pages.append(current_page)
                     current_page = [block]
                     current_lines = block_lines
+                    y_position = float(self.TEXT_POS_Y) + block_lines * self.line_height
+                    block.page_y_start = float(self.TEXT_POS_Y)
             else:
                 current_page.append(block)
                 current_lines += block_lines
+                y_position += block_lines * self.line_height
 
         # Don't forget the last page
         if current_page:
@@ -933,19 +971,8 @@ class RemarkableGenerator:
 
             # Replace text content in RootTextBlock
             if block_type == "RootTextBlock":
-                # Build styles dictionary with newline markers (format code 10)
-                # See docs/RMSCENE_NEWLINE_WORKAROUND.md for details
-                styles = {
-                    CrdtId(0, 0): LwwValue(timestamp=CrdtId(1, 15), value=si.ParagraphStyle.PLAIN)
-                }
-
-                # Add format code 10 (newline marker) for each \n character
-                for i, char in enumerate(combined_text):
-                    if char == "\n":
-                        styles[CrdtId(0, i)] = LwwValue(
-                            timestamp=CrdtId(1, 15),
-                            value=10,  # Format code 10 = newline
-                        )
+                # Build styles dictionary with newline markers
+                styles = self._build_text_styles(combined_text)
 
                 # Create new RootTextBlock with updated text but same structure
                 modified_block = RootTextBlock(
@@ -1027,19 +1054,8 @@ class RemarkableGenerator:
         if not combined_text.strip():
             combined_text = " "  # At least one space for empty pages
 
-        # Build styles dictionary with newline markers (format code 10)
-        # See docs/RMSCENE_NEWLINE_WORKAROUND.md for details
-        styles = {CrdtId(0, 0): LwwValue(timestamp=CrdtId(1, 15), value=si.ParagraphStyle.PLAIN)}
-
-        # Add format code 10 (newline marker) for each \n character
-        # This is a workaround for rmscene not yet supporting ParagraphStyle.NEWLINE
-        for i, char in enumerate(combined_text):
-            if char == "\n":
-                # Use raw int 10 since rmscene doesn't have NEWLINE enum value yet
-                styles[CrdtId(0, i)] = LwwValue(
-                    timestamp=CrdtId(1, 15),
-                    value=10,  # Format code 10 = newline
-                )
+        # Build styles dictionary with newline markers
+        styles = self._build_text_styles(combined_text)
 
         # Generate blocks manually with custom text width
         author_uuid = uuid4()

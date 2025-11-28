@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 from rock_paper_sync.ocr.markers import extract_paragraph_index_mapping
 
 if TYPE_CHECKING:
+    from rock_paper_sync.ocr.markers import OCRBlock
     from rock_paper_sync.state import StateManager
 
 logger = logging.getLogger("rock_paper_sync.ocr.corrections")
@@ -62,6 +63,29 @@ class CorrectionManager:
 
         logger.debug(f"CorrectionManager initialized with cache dir: {cache_dir}")
 
+    def _get_ocr_block_data(
+        self, vault_name: str, obsidian_path: str, markdown: str
+    ) -> tuple[dict[int, "OCRBlock"], dict[int, dict]]:
+        """Get current and stored OCR block data for comparison.
+
+        Common setup logic for both correction and conflict detection.
+
+        Args:
+            vault_name: Name of the vault
+            obsidian_path: Relative path of file
+            markdown: Current markdown content
+
+        Returns:
+            Tuple of (current_blocks, stored_results) dictionaries
+        """
+        # Get current OCR blocks from markdown
+        current_blocks = extract_paragraph_index_mapping(markdown)
+
+        # Get stored OCR results from state
+        stored_results = self.state_manager.get_all_ocr_results(vault_name, obsidian_path)
+
+        return current_blocks, stored_results
+
     def detect_corrections(
         self,
         vault_name: str,
@@ -80,11 +104,10 @@ class CorrectionManager:
         """
         corrections = []
 
-        # Get current OCR blocks from markdown
-        current_blocks = extract_paragraph_index_mapping(markdown)
-
-        # Get stored OCR results from state
-        stored_results = self.state_manager.get_all_ocr_results(vault_name, obsidian_path)
+        # Get current and stored OCR block data
+        current_blocks, stored_results = self._get_ocr_block_data(
+            vault_name, obsidian_path, markdown
+        )
 
         for para_idx, block in current_blocks.items():
             if para_idx not in stored_results:
@@ -205,11 +228,10 @@ class CorrectionManager:
         """
         conflicts = []
 
-        # Get current OCR blocks from markdown
-        current_blocks = extract_paragraph_index_mapping(markdown)
-
-        # Get stored OCR results from state
-        stored_results = self.state_manager.get_all_ocr_results(vault_name, obsidian_path)
+        # Get current and stored OCR block data
+        current_blocks, stored_results = self._get_ocr_block_data(
+            vault_name, obsidian_path, markdown
+        )
 
         for para_idx, block in current_blocks.items():
             if para_idx not in stored_results:

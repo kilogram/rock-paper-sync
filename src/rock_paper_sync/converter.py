@@ -64,7 +64,6 @@ from .audit import get_audit_logger
 from .config import AppConfig, VaultConfig
 from .generator import RemarkableGenerator
 from .ocr.integration import OCRProcessor
-from .ocr.markers import AnnotationInfo as OcrAnnotationInfo
 from .parser import parse_markdown_file
 from .rm_cloud_client import RmCloudClient
 from .rm_cloud_sync import RmCloudSync
@@ -186,6 +185,27 @@ class SyncEngine:
     - `sync_all_changed()`: Sync all changed files across all vaults
     - `ensure_folder_hierarchy()`: Create folder structure for a file
     """
+
+    def _build_annotation_map(
+        self, rm_files: list[Path | None], content_blocks: list
+    ) -> dict[int, AnnotationInfo]:
+        """Build annotation map from .rm files.
+
+        Args:
+            rm_files: List of .rm file paths (may contain None)
+            content_blocks: ContentBlock list for annotation mapping
+
+        Returns:
+            Dictionary mapping paragraph_index to AnnotationInfo
+        """
+        annotation_map = {}
+        for rm_file in rm_files:
+            if rm_file and rm_file.exists():
+                file_annotations = self.annotation_processor.map_annotations_to_paragraphs(
+                    rm_file, content_blocks
+                )
+                merge_annotation_maps(annotation_map, file_annotations)
+        return annotation_map
 
     def __init__(
         self,
@@ -405,15 +425,14 @@ class SyncEngine:
                         )
 
                         # Map annotations from .rm files
-                        annotation_map = {}
-                        for rm_file in existing_rm_files:
-                            if rm_file and rm_file.exists():
-                                file_annotations = (
-                                    self.annotation_processor.map_annotations_to_paragraphs(
-                                        rm_file, md_doc.content
-                                    )
-                                )
-                                merge_annotation_maps(annotation_map, file_annotations)
+                        # Add pagination metadata for Y-position based annotation matching (issue #5)
+                        self.generator.paginate_content(
+                            md_doc.content
+                        )  # Sets page_y_start as side effect
+
+                        annotation_map = self._build_annotation_map(
+                            existing_rm_files, md_doc.content
+                        )
 
                         # Update state with new cloud versioning info
                         _, _, current_gen = self.cloud_sync.get_root_state()
@@ -567,13 +586,10 @@ class SyncEngine:
             # Add annotation markers to file if we have annotations
             if existing_rm_files and any(existing_rm_files):
                 # Map annotations from .rm files (iterate over each page)
-                annotation_map = {}
-                for rm_file in existing_rm_files:
-                    if rm_file and rm_file.exists():
-                        file_annotations = self.annotation_processor.map_annotations_to_paragraphs(
-                            rm_file, md_doc.content
-                        )
-                        merge_annotation_maps(annotation_map, file_annotations)
+                # Add pagination metadata for Y-position based annotation matching (issue #5)
+                self.generator.paginate_content(md_doc.content)  # Sets page_y_start as side effect
+
+                annotation_map = self._build_annotation_map(existing_rm_files, md_doc.content)
 
                 if annotation_map:
                     logger.info("Adding annotation markers after sync")
@@ -1243,15 +1259,9 @@ class SyncEngine:
             # Extract paragraph texts from content blocks
             paragraph_texts = [block.text for block in content_blocks]
 
-            # Convert annotation_map to OCR format (core.data_types -> ocr.markers)
-            ocr_annotation_map = {
-                para_idx: OcrAnnotationInfo(
-                    paragraph_index=para_idx,
-                    highlights=info.highlights,
-                    strokes=info.strokes,
-                )
-                for para_idx, info in annotation_map.items()
-            }
+            # annotation_map already uses correct AnnotationInfo format (core.data_types)
+            # No conversion needed - OCR processor accepts same format
+            ocr_annotation_map = annotation_map
 
             # Process annotations with OCR
             marked_content = self.ocr_processor.process_annotations(

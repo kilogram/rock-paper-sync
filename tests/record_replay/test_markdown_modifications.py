@@ -165,9 +165,9 @@ def test_markdown_modifications(device, workspace, fixtures_dir):
         print("✅ Highlight markers found in merged markdown")
 
     if strokes:
-        # Strokes render as annotation markers (OCR markers only if OCR enabled)
-        has_stroke_markers = "<!-- STROKE:" in final_content or "STROKE:" in final_content
-        # Note: OCR is disabled in test config, so we only expect stroke markers
+        # Strokes render as ANNOTATED markers with stroke count (OCR markers only if OCR enabled)
+        # When OCR is disabled, format is: <!-- ANNOTATED: N strokes -->
+        has_stroke_markers = "strokes" in final_content or "stroke" in final_content
         assert has_stroke_markers, (
             f"Three-way merge failed: stroke markers not found in modified markdown.\n\n"
             f"Expected: Stroke annotations from device re-anchored to modified content\n"

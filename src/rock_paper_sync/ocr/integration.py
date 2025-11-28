@@ -23,6 +23,7 @@ from rock_paper_sync.annotations import (
     read_annotations,
 )
 from rock_paper_sync.annotations.common.text_extraction import extract_text_blocks_from_rm
+from rock_paper_sync.annotations.core.data_types import AnnotationInfo
 from rock_paper_sync.coordinate_transformer import (
     NEGATIVE_Y_OFFSET,
     build_parent_anchor_map,
@@ -32,7 +33,6 @@ from rock_paper_sync.coordinate_transformer import (
 from rock_paper_sync.ocr.corrections import CorrectionManager
 from rock_paper_sync.ocr.factory import create_ocr_service
 from rock_paper_sync.ocr.markers import (
-    AnnotationInfo,
     _hash_text,
     add_ocr_markers,
     strip_ocr_markers,
@@ -291,92 +291,21 @@ class OCRProcessor:
             logger.debug(f"Processing .rm file: {rm_file}")
 
             try:
-                # Extract annotations from .rm file
-                annotations = read_annotations(rm_file)
-                if not annotations:
-                    logger.debug(f"No annotations found in {rm_file}")
+                # Extract and cluster annotations from .rm file
+                clusters, rm_text_blocks = self._extract_and_cluster_annotations(rm_file)
+
+                if not clusters:
                     continue
 
-                logger.debug(f"Found {len(annotations)} annotations in {rm_file}")
-
-                # Extract text blocks for position mapping
-                rm_text_blocks, text_origin_y = extract_text_blocks_from_rm(rm_file)
-                logger.debug(
-                    f"Extracted {len(rm_text_blocks)} text blocks, text_origin_y={text_origin_y}"
-                )
-
-                # Extract text origin X from RootTextBlock
-                text_origin_x = self._get_text_origin_x(rm_file)
-                logger.debug(f"Text origin: x={text_origin_x}, y={text_origin_y}")
-
-                # Build parent_id → (anchor_x, baseline_y) mapping via anchor system
-                # Different parent_ids (CrdtId(2, xxx)) represent different text LINES,
-                # each with its own anchor origin in X and Y. We extract per-parent
-                # anchor origins from TreeNodeBlock anchor_ids and anchor_origin_x.
-                parent_anchor_map = self._build_parent_baseline_map(rm_file)
-                logger.debug(f"Built anchor origin map for {len(parent_anchor_map)} parent IDs")
-
-                # Transform annotations to absolute coordinates using per-parent anchor origins
-                # This ensures strokes from different text lines are positioned correctly
-                annotations_absolute = self._transform_annotations_to_absolute(
-                    annotations, parent_anchor_map, text_origin_x, text_origin_y
-                )
-                logger.debug(f"Transformed {len(annotations)} annotations to absolute coordinates")
-
-                # STAGE 1: Cluster annotations spatially (using absolute coordinates)
-                clusters = self._cluster_annotations_by_proximity(annotations_absolute)
-                logger.debug(
-                    f"Clustered {len(annotations_absolute)} annotations into {len(clusters)} spatial groups"
-                )
-
-                # STAGE 2: Map each cluster to a paragraph using bounding boxes
+                # Process each cluster: render, map, and store
                 for cluster_idx, cluster in enumerate(clusters):
-                    # Render cluster (already in absolute coordinates after transformation)
-                    image_data, cluster_bbox = self._render_annotations_to_image(cluster)
-
-                    if not image_data:
-                        logger.warning(f"No image data rendered for cluster {cluster_idx}")
-                        continue
-
-                    logger.debug(
-                        f"Cluster {cluster_idx}: absolute bbox y={cluster_bbox.y:.1f}, h={cluster_bbox.height:.1f}"
-                    )
-
-                    # Map cluster to paragraph using spatial overlap
-                    # Cluster bbox is already in absolute coordinates
-                    para_idx = self.paragraph_mapper.map_cluster_to_paragraph(
-                        cluster_bbox,
+                    self._process_annotation_cluster(
+                        cluster,
+                        cluster_idx,
+                        annotation_map,
                         markdown_blocks or [],
                         rm_text_blocks,
-                    )
-
-                    if para_idx is None:
-                        logger.debug(
-                            f"Cluster {cluster_idx} (bbox: x={cluster_bbox.x:.1f}, y={cluster_bbox.y:.1f}) "
-                            f"could not be mapped to any paragraph"
-                        )
-                        continue
-
-                    # Verify paragraph is in annotation_map
-                    if para_idx not in annotation_map:
-                        logger.warning(
-                            f"Cluster {cluster_idx} mapped to paragraph {para_idx}, "
-                            f"but paragraph not in annotation_map"
-                        )
-                        continue
-
-                    # Store image for this paragraph
-                    annotation_info = annotation_map[para_idx]
-                    annotation_uuid = str(uuid.uuid4())
-
-                    if para_idx not in result:
-                        result[para_idx] = (annotation_info, [])
-
-                    result[para_idx][1].append((image_data, cluster_bbox, annotation_uuid))
-
-                    logger.info(
-                        f"Rendered cluster {cluster_idx+1}/{len(clusters)} "
-                        f"with {len(cluster)} annotations → paragraph {para_idx}"
+                        result,
                     )
 
             except Exception as e:
@@ -385,6 +314,117 @@ class OCRProcessor:
 
         logger.info(f"Extracted annotation images for {len(result)} paragraphs")
         return result
+
+    def _extract_and_cluster_annotations(
+        self, rm_file: Path
+    ) -> tuple[list[list[Annotation]], list]:
+        """Extract annotations from .rm file and cluster them spatially.
+
+        Args:
+            rm_file: Path to .rm file
+
+        Returns:
+            Tuple of (clusters, rm_text_blocks)
+        """
+        # Extract annotations from .rm file
+        annotations = read_annotations(rm_file)
+        if not annotations:
+            logger.debug(f"No annotations found in {rm_file}")
+            return [], []
+
+        logger.debug(f"Found {len(annotations)} annotations in {rm_file}")
+
+        # Extract text blocks for position mapping
+        rm_text_blocks, text_origin_y = extract_text_blocks_from_rm(rm_file)
+        logger.debug(f"Extracted {len(rm_text_blocks)} text blocks, text_origin_y={text_origin_y}")
+
+        # Extract coordinate transformation components
+        text_origin_x = self._get_text_origin_x(rm_file)
+        parent_anchor_map = self._build_parent_baseline_map(rm_file)
+        logger.debug(
+            f"Text origin: x={text_origin_x}, y={text_origin_y}, "
+            f"anchor map: {len(parent_anchor_map)} parent IDs"
+        )
+
+        # Transform annotations to absolute coordinates
+        annotations_absolute = self._transform_annotations_to_absolute(
+            annotations, parent_anchor_map, text_origin_x, text_origin_y
+        )
+        logger.debug(f"Transformed {len(annotations)} annotations to absolute coordinates")
+
+        # Cluster annotations spatially
+        clusters = self._cluster_annotations_by_proximity(annotations_absolute)
+        logger.debug(
+            f"Clustered {len(annotations_absolute)} annotations into {len(clusters)} spatial groups"
+        )
+
+        return clusters, rm_text_blocks
+
+    def _process_annotation_cluster(
+        self,
+        cluster: list[Annotation],
+        cluster_idx: int,
+        annotation_map: dict[int, AnnotationInfo],
+        markdown_blocks: list[ContentBlock],
+        rm_text_blocks: list,
+        result: dict[int, tuple[AnnotationInfo, list[tuple[bytes, BoundingBox, str]]]],
+    ) -> None:
+        """Process a single annotation cluster: render, map to paragraph, and store.
+
+        Args:
+            cluster: List of annotations in this cluster
+            cluster_idx: Index of cluster (for logging)
+            annotation_map: Map of paragraph index to annotation info
+            markdown_blocks: List of markdown content blocks
+            rm_text_blocks: List of .rm text blocks
+            result: Result dictionary to update
+        """
+        # Render cluster to image
+        image_data, cluster_bbox = self._render_annotations_to_image(cluster)
+
+        if not image_data:
+            logger.warning(f"No image data rendered for cluster {cluster_idx}")
+            return
+
+        logger.debug(
+            f"Cluster {cluster_idx}: absolute bbox y={cluster_bbox.y:.1f}, h={cluster_bbox.height:.1f}"
+        )
+
+        # Map cluster to paragraph using spatial overlap
+        para_idx = self.paragraph_mapper.map_cluster_to_paragraph(
+            cluster_bbox,
+            markdown_blocks,
+            rm_text_blocks,
+        )
+
+        if para_idx is None:
+            logger.debug(
+                f"Cluster {cluster_idx} (bbox: x={cluster_bbox.x:.1f}, y={cluster_bbox.y:.1f}) "
+                f"could not be mapped to any paragraph"
+            )
+            return
+
+        # Verify paragraph is in annotation_map
+        if para_idx not in annotation_map:
+            logger.warning(
+                f"Cluster {cluster_idx} mapped to paragraph {para_idx}, "
+                f"but paragraph not in annotation_map"
+            )
+            return
+
+        # Store image for this paragraph
+        annotation_info = annotation_map[para_idx]
+        annotation_uuid = str(uuid.uuid4())
+
+        if para_idx not in result:
+            result[para_idx] = (annotation_info, [])
+
+        result[para_idx][1].append((image_data, cluster_bbox, annotation_uuid))
+
+        logger.info(
+            f"Rendered cluster {cluster_idx+1} "
+            f"with {len(cluster)} annotations → paragraph {para_idx}"
+        )
 
     def _cluster_annotations_by_proximity(
         self,

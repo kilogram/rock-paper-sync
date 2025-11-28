@@ -22,6 +22,8 @@ import logging
 import re
 from dataclasses import dataclass
 
+from rock_paper_sync.annotations.core.data_types import AnnotationInfo
+
 logger = logging.getLogger("rock_paper_sync.ocr.markers")
 
 # Marker patterns
@@ -63,15 +65,6 @@ class OCRBlock:
         """Check if original text was edited (requires re-sync)."""
         # Will be compared against stored hash in state
         return True  # Always true initially; compare with state externally
-
-
-@dataclass
-class AnnotationInfo:
-    """Annotation counts for a paragraph."""
-
-    paragraph_index: int
-    highlights: int
-    strokes: int
 
 
 def generate_ocr_block(

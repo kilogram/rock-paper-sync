@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING
 
 from rock_paper_sync.annotations import Annotation, AnnotationType, read_annotations
 from rock_paper_sync.annotations.common.anchors import AnnotationAnchor
+from rock_paper_sync.annotations.common.spatial import find_nearest_paragraph_by_y
 from rock_paper_sync.annotations.common.text_extraction import extract_text_blocks_from_rm
 from rock_paper_sync.annotations.core.data_types import (
     ExtractedAnnotation,
@@ -149,50 +150,16 @@ class StrokeHandler:
                 # Already absolute
                 absolute_y = native_y
 
-            # Find closest paragraph by Y position
+            # Find closest paragraph by Y position using common utility
             # NOTE: Requires page_y_start attribute on ContentBlock
             # See issue #5 for pagination metadata persistence implementation
-            paragraph_index = None
+            paragraph_index = find_nearest_paragraph_by_y(absolute_y, markdown_blocks)
 
-            # Check if pagination data is available on ALL blocks
-            # IMPORTANT: Must validate each block, not just the first one
-            if (
-                markdown_blocks
-                and hasattr(markdown_blocks[0], "page_y_start")
-                and markdown_blocks[0].page_y_start is not None
-            ):
-                min_distance = float("inf")
-
-                for idx, md_block in enumerate(markdown_blocks):
-                    # Validate EACH block has page_y_start, not just the first
-                    if not hasattr(md_block, "page_y_start") or md_block.page_y_start is None:
-                        logger.warning(
-                            f"Stroke Y-position matching: Block {idx} missing page_y_start, skipping"
-                        )
-                        continue
-
-                    block_y = md_block.page_y_start
-                    distance = abs(absolute_y - block_y)
-                    if distance < min_distance:
-                        min_distance = distance
-                        paragraph_index = idx
-
-                if paragraph_index is not None:
-                    if paragraph_index not in mappings:
-                        mappings[paragraph_index] = []
-                    mappings[paragraph_index].append(annotation)
-                    logger.debug(
-                        f"Mapped stroke via Y-position: y={absolute_y:.1f} "
-                        f"→ paragraph {paragraph_index} (distance={min_distance:.1f})"
-                    )
-                else:
-                    logger.warning(
-                        f"Could not map stroke {annotation.annotation_id[:8]}: "
-                        "no paragraphs with valid page_y_start found"
-                    )
+            if paragraph_index is not None:
+                if paragraph_index not in mappings:
+                    mappings[paragraph_index] = []
+                mappings[paragraph_index].append(annotation)
             else:
-                # Y-position matching unavailable - stroke mapping will fail
-                # See issue #5 for implementation roadmap
                 logger.warning(
                     f"Cannot map stroke {annotation.annotation_id[:8]}: "
                     "pagination metadata (page_y_start) not available (see issue #5). "

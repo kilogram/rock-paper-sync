@@ -23,6 +23,7 @@ from pathlib import Path
 
 from rock_paper_sync.annotations import Annotation, AnnotationType, read_annotations
 from rock_paper_sync.annotations.common.anchors import AnnotationAnchor
+from rock_paper_sync.annotations.common.spatial import find_nearest_paragraph_by_y
 from rock_paper_sync.annotations.common.text_extraction import extract_text_blocks_from_rm
 from rock_paper_sync.annotations.core.data_types import ExtractedAnnotation, RenderConfig
 
@@ -99,44 +100,14 @@ class HighlightHandler:
             # NOTE: Requires page_y_start attribute on ContentBlock
             # See issue #5 for pagination metadata persistence implementation
             if paragraph_index is None and annotation.bounding_box:
-                # Check if pagination data is available on ALL blocks
-                # IMPORTANT: Must validate each block, not just the first one
-                if (
-                    markdown_blocks
-                    and hasattr(markdown_blocks[0], "page_y_start")
-                    and markdown_blocks[0].page_y_start is not None
-                ):
-                    bbox = annotation.bounding_box
-                    anno_y = bbox.y
+                bbox = annotation.bounding_box
+                anno_y = bbox.y
 
-                    # Simple text-relative transform (no 60px offset for highlights)
-                    anno_y_absolute = text_origin_y + anno_y
+                # Simple text-relative transform (no 60px offset for highlights)
+                anno_y_absolute = text_origin_y + anno_y
 
-                    # Find closest paragraph by Y position
-                    min_distance = float("inf")
-                    for idx, md_block in enumerate(markdown_blocks):
-                        # Validate EACH block has page_y_start, not just the first
-                        if not hasattr(md_block, "page_y_start") or md_block.page_y_start is None:
-                            logger.warning(
-                                f"Highlight Y-position matching: Block {idx} missing page_y_start, skipping"
-                            )
-                            continue
-
-                        block_y = md_block.page_y_start
-                        distance = abs(anno_y_absolute - block_y)
-                        if distance < min_distance:
-                            min_distance = distance
-                            paragraph_index = idx
-
-                    if paragraph_index is not None:
-                        logger.debug(
-                            f"Matched highlight via Y-position: y={anno_y_absolute:.1f} "
-                            f"→ paragraph {paragraph_index} (distance={min_distance:.1f})"
-                        )
-                else:
-                    logger.debug(
-                        "Y-position fallback unavailable: ContentBlock missing page_y_start attribute (see issue #5)"
-                    )
+                # Use common spatial matching utility
+                paragraph_index = find_nearest_paragraph_by_y(anno_y_absolute, markdown_blocks)
 
             # Store mapping
             if paragraph_index is not None:

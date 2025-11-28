@@ -539,12 +539,9 @@ class StateManager:
         )
         row = cursor.fetchone()
         if row:
-            return {
-                "content_hash": row[0],
-                "has_annotations": bool(row[1]),
-                "annotation_count": row[2],
-                "last_checked": row[3],
-            }
+            result = dict(row)
+            result["has_annotations"] = bool(result["has_annotations"])  # Convert to bool
+            return result
         return None
 
     def update_paragraph_state(
@@ -608,15 +605,13 @@ class StateManager:
             """,
             (vault_name, obsidian_path),
         )
-        return {
-            row[0]: {
-                "content_hash": row[1],
-                "has_annotations": bool(row[2]),
-                "annotation_count": row[3],
-                "last_checked": row[4],
-            }
-            for row in cursor.fetchall()
-        }
+        result = {}
+        for row in cursor.fetchall():
+            state = dict(row)
+            paragraph_index = state.pop("paragraph_index")
+            state["has_annotations"] = bool(state["has_annotations"])  # Convert to bool
+            result[paragraph_index] = state
+        return result
 
     def delete_paragraph_states(self, vault_name: str, obsidian_path: str) -> None:
         """Delete all paragraph states for a document.
@@ -710,17 +705,9 @@ class StateManager:
         )
         row = cursor.fetchone()
         if row:
-            return {
-                "paragraph_index": row[0],
-                "ocr_text": row[1],
-                "ocr_text_hash": row[2],
-                "original_text_hash": row[3],
-                "image_hash": row[4],
-                "confidence": row[5],
-                "model_version": row[6],
-                "processed_time": row[7],
-                "annotation_uuid": annotation_uuid,
-            }
+            result = dict(row)
+            result["annotation_uuid"] = annotation_uuid
+            return result
         return None
 
     def get_all_ocr_results(self, vault_name: str, obsidian_path: str) -> dict[int, dict]:
@@ -743,20 +730,12 @@ class StateManager:
             """,
             (vault_name, obsidian_path),
         )
-        return {
-            row[1]: {
-                "annotation_uuid": row[0],
-                "paragraph_index": row[1],
-                "ocr_text": row[2],
-                "ocr_text_hash": row[3],
-                "original_text_hash": row[4],
-                "image_hash": row[5],
-                "confidence": row[6],
-                "model_version": row[7],
-                "processed_time": row[8],
-            }
-            for row in cursor.fetchall()
-        }
+        result = {}
+        for row in cursor.fetchall():
+            state = dict(row)
+            paragraph_index = state["paragraph_index"]
+            result[paragraph_index] = state
+        return result
 
     def delete_ocr_results(self, vault_name: str, obsidian_path: str) -> None:
         """Delete all OCR results for a document.
