@@ -272,11 +272,21 @@ class SyncEngine:
         state = self.state.get_file_state(vault_name, relative_path)
         if not state:
             # No previous sync - will be handled by normal upload flow
+            logger.debug(
+                f"No previous state for {vault_name}:{relative_path}, skipping annotation check"
+            )
             return False
 
         # Get current cloud state
         _, _, current_generation = self.cloud_sync.get_root_state()
         current_doc_hash = self.cloud_sync.get_document_index_hash(doc_uuid)
+
+        logger.debug(
+            f"Annotation check for {vault_name}:{relative_path}: "
+            f"state_gen={state.last_root_generation}, cloud_gen={current_generation}, "
+            f"state_hash={state.last_doc_index_hash[:8] if state.last_doc_index_hash else 'None'}, "
+            f"cloud_hash={current_doc_hash[:8] if current_doc_hash else 'None'}"
+        )
 
         # Check if cloud has changed since last sync
         if state.last_root_generation is not None:
@@ -743,6 +753,10 @@ class SyncEngine:
         )
         synced_files = [(row[0], row[1]) for row in cursor.fetchall()]
 
+        logger.debug(
+            f"[{correlation_id}] Checking {len(synced_files)} synced file(s) for annotation-only changes"
+        )
+
         # Convert content-changed files to relative paths for exclusion
         content_changed_paths = {str(f.relative_to(vault.path)) for f in content_changed_files}
 
@@ -750,24 +764,37 @@ class SyncEngine:
         for relative_path, doc_uuid in synced_files:
             # Skip if content already changed
             if relative_path in content_changed_paths:
+                logger.debug(
+                    f"[{correlation_id}] Skipping {relative_path} (content already changed)"
+                )
                 continue
 
             # Check if file still exists
             file_path = vault.path / relative_path
             if not file_path.exists():
+                logger.debug(f"[{correlation_id}] Skipping {relative_path} (file deleted)")
                 continue  # Will be handled as deletion
 
             # Check for annotation changes
+            logger.debug(
+                f"[{correlation_id}] Checking annotations for {vault.name}:{relative_path} (uuid={doc_uuid})"
+            )
             if self.should_download_annotations(vault.name, relative_path, doc_uuid):
-                logger.debug(
+                logger.info(
                     f"[{correlation_id}] Annotation-only change detected: {vault.name}:{relative_path}"
                 )
                 annotation_changed_files.append(file_path)
+            else:
+                logger.debug(
+                    f"[{correlation_id}] No annotation changes for {vault.name}:{relative_path}"
+                )
 
         if annotation_changed_files:
             logger.info(
                 f"[{correlation_id}] Found {len(annotation_changed_files)} file(s) with annotation-only changes"
             )
+        else:
+            logger.debug(f"[{correlation_id}] No annotation-only changes found")
 
         return annotation_changed_files
 

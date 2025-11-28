@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .protocol import DeviceInteractionManager, DocumentState
-from .testdata import PhaseData, TestArtifacts, TestdataStore
+from .testdata import PhaseData, TestdataStore
 
 if TYPE_CHECKING:
     from .logging import Bench
@@ -70,49 +70,32 @@ class OfflineEmulator(DeviceInteractionManager):
         self.testdata_store = testdata_store
         self.bench = bench
         self.cloud_url = cloud_url
-        self._current_artifacts: TestArtifacts | None = None
         self._current_test_id: str | None = None
 
-        # Multi-phase support
+        # Multi-phase support (only format supported)
         self._current_phase: int = 0
         self._phases: list[PhaseData] = []
 
     def load_test(self, test_id: str) -> None:
-        """Load artifacts and phases for a specific test.
-
-        Must be called before running the test. Automatically restores vault
-        to initial phase state if multi-phase testdata is available.
+        """Load multi-phase test data.
 
         Args:
             test_id: Test identifier to load
 
         Raises:
-            FileNotFoundError: If test artifacts not found
+            FileNotFoundError: If test not found
         """
-        self._current_artifacts = self.testdata_store.load_artifacts(test_id)
         self._current_test_id = test_id
         self._current_phase = 0
 
-        # Load multi-phase data if available
-        try:
-            self._phases = self.testdata_store.load_phases(test_id)
-            self.bench.ok(
-                f"Loaded test artifacts: {test_id} "
-                f"({len(self._phases)} phases, "
-                f"{len(self._current_artifacts.rm_files)} .rm files)"
-            )
+        # Load multi-phase data (only format supported)
+        self._phases = self.testdata_store.load_phases(test_id)
 
-            # Restore initial vault state from phase 0
-            if self._phases:
-                self._restore_phase(0)
-        except Exception as e:
-            # Fallback to legacy single-phase behavior
-            self.bench.warn(f"Could not load phases: {e}. Using legacy mode.")
-            self._phases = []
-            self.bench.ok(
-                f"Loaded test artifacts: {test_id} "
-                f"({len(self._current_artifacts.rm_files)} .rm files)"
-            )
+        self.bench.ok(f"Loaded test artifacts: {test_id} ({len(self._phases)} phases)")
+
+        # Restore initial vault state from phase 0
+        if self._phases:
+            self._restore_phase(0)
 
     def start_test(self, test_id: str, description: str = "") -> None:
         """Begin test with the specified test_id.
@@ -136,7 +119,6 @@ class OfflineEmulator(DeviceInteractionManager):
             test_id: Test identifier
         """
         self.bench.ok(f"Offline test {test_id} completed successfully")
-        self._current_artifacts = None
         self._current_test_id = None
         self._current_phase = 0
         self._phases = []
@@ -250,24 +232,18 @@ class OfflineEmulator(DeviceInteractionManager):
         Raises:
             RuntimeError: If no test loaded or injection fails
         """
-        if not self._current_artifacts:
+        if not self._phases:
             raise RuntimeError("No test loaded - call load_test() or start_test() first")
 
-        # Determine which rm_files to use
+        # Find phase with rm_files starting from current phase
         rm_files: dict[str, bytes] = {}
-
-        if self._phases:
-            # Multi-phase mode: find phase with rm_files starting from current phase
-            for phase in self._phases[self._current_phase :]:
-                if phase.rm_files:
-                    rm_files = phase.rm_files
-                    self.bench.observe(
-                        f"Using .rm files from phase {phase.phase_number}: {phase.phase_name}"
-                    )
-                    break
-        else:
-            # Legacy mode: use artifacts directly
-            rm_files = self._current_artifacts.rm_files
+        for phase in self._phases[self._current_phase :]:
+            if phase.rm_files:
+                rm_files = phase.rm_files
+                self.bench.observe(
+                    f"Using .rm files from phase {phase.phase_number}: {phase.phase_name}"
+                )
+                break
 
         if not rm_files:
             self.bench.warn("No .rm files found - skipping injection")
@@ -389,17 +365,10 @@ class OfflineEmulator(DeviceInteractionManager):
 
         # In offline mode, we simulate unsync by returning expected values
         # The manifest should include expected_state_after_unsync if available
-        if (
-            self._current_artifacts
-            and self._current_artifacts.manifest
-            and hasattr(self._current_artifacts.manifest, "expected_state_after_unsync")
-        ):
-            expected = self._current_artifacts.manifest.expected_state_after_unsync
-            files_removed = expected.get("files_removed", 0)
-            files_deleted = expected.get("files_deleted", 0)
-        else:
-            files_removed = 0
-            files_deleted = 0
+        # Multi-phase tests don't have expected_state metadata
+        # Just return defaults
+        files_removed = 0
+        files_deleted = 0
 
         self.bench.info(
             f"Simulated unsync (offline): {files_removed} removed, {files_deleted} deleted"
@@ -420,17 +389,9 @@ class OfflineEmulator(DeviceInteractionManager):
         if not vault_name:
             vault_name = "device-bench"
 
-        # In offline mode, return expected folders from manifest
-        if (
-            self._current_artifacts
-            and self._current_artifacts.manifest
-            and hasattr(self._current_artifacts.manifest, "expected_folders_remaining")
-        ):
-            expected = self._current_artifacts.manifest.expected_folders_remaining
-            return expected
-        else:
-            # Default: no folders remaining after unsync
-            return []
+        # Multi-phase tests don't have expected_folders metadata
+        # Default: no folders remaining after unsync
+        return []
 
     def _validate_testdata(self, state: DocumentState) -> None:
         """Validate testdata integrity automatically during replay.
