@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -36,7 +37,14 @@ class RmCloudClient:
             credentials_path: Path to store/load device credentials
         """
         self.base_url = base_url.rstrip("/")
-        self.credentials_path = credentials_path or Path.home() / ".config" / "rock-paper-sync" / "device-credentials.json"
+        # Respect XDG_CONFIG_HOME for credentials path
+        if credentials_path:
+            self.credentials_path = credentials_path
+        else:
+            config_home = os.getenv("XDG_CONFIG_HOME", str(Path.home() / ".config"))
+            self.credentials_path = Path(config_home) / "rock-paper-sync" / "device-credentials.json"
+            logger.debug(f"Credentials path (from XDG_CONFIG_HOME={config_home}): {self.credentials_path}")
+            logger.debug(f"Credentials file exists: {self.credentials_path.exists()}")
         self.credentials: Optional[DeviceCredentials] = None
         self._load_credentials()
 

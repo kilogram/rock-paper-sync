@@ -134,21 +134,17 @@ exclude_patterns = [".state/**", "logs/**", ".cache/**"]
             log_file.unlink()
 
     def cleanup(self) -> None:
-        """Full cleanup including cloud unsync."""
+        """Full cleanup including cloud unsync.
+
+        Note: This only handles workspace cleanup (unsync, file removal).
+        User prompts are handled by the device implementation (device.cleanup()).
+        """
         self.bench.info("Cleaning up...")
 
         try:
             # Unsync from cloud
             if self.config_file.exists():
-                # Run unsync
                 self.bench.run_unsync(self.config_file, delete_from_cloud=True)
-
-                # Prompt user to confirm unsync completed
-                self.bench.prompt_user(
-                    "Unsyncing from cloud (this may take a moment)...",
-                    "Please wait for the document to be removed from your device.",
-                    "Then press Enter to complete cleanup...",
-                )
 
             # Remove state
             if self.state_dir.exists():

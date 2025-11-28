@@ -165,6 +165,16 @@ class DeviceInteractionProtocol(Protocol):
         """
         ...
 
+    def cleanup(self) -> None:
+        """Cleanup after test completion.
+
+        In online mode: Prompts user to confirm device cleanup is complete.
+        In offline mode: Silent cleanup, no user interaction required.
+
+        This is called during test teardown to ensure device state is cleaned up.
+        """
+        ...
+
 
 # Backward compatibility aliases
 DeviceProtocol = DeviceInteractionProtocol

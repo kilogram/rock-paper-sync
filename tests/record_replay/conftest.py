@@ -282,21 +282,57 @@ def workspace(
 
     fixtures_dir = Path(__file__).parent / "fixtures"
     test_config_file = fixtures_dir / "config.toml"
-    creds_dir = Path.home() / ".config" / "rock-paper-sync"
-    creds_path = creds_dir / "device-credentials.json"
 
     # Store original credentials for online mode cleanup
     original_creds_path = None
     original_creds_content = None
 
     if device_mode == "offline":
-        # Offline mode: Set up test credentials for rmfakecloud
-        # This allows the sync command to authenticate with rmfakecloud
+        # Offline mode: Use TEMPORARY credentials directory to avoid overwriting user's real credentials
+        # Create test credentials in workspace, not user's config directory
+        test_config_home = workspace_dir / ".test_config"
+        creds_dir = test_config_home / "rock-paper-sync"
+        creds_path = creds_dir / "device-credentials.json"
+
         try:
             creds_data = get_rmfakecloud_credentials()
             creds_dir.mkdir(parents=True, exist_ok=True)
             creds_path.write_text(json.dumps(creds_data, indent=2))
-            bench.ok(f"Created test credentials at {creds_path} (offline mode)")
+
+            # Verify file was written
+            import subprocess
+            file_check = subprocess.run(
+                ["ls", "-la", str(creds_path)],
+                capture_output=True,
+                text=True
+            )
+            bench.ok(f"Created test credentials at {creds_path}")
+            bench.ok(f"File verification: {file_check.stdout.strip() if file_check.returncode == 0 else 'FAILED'}")
+
+            # Override XDG_CONFIG_HOME so rock-paper-sync uses test credentials
+            # rock-paper-sync looks for $XDG_CONFIG_HOME/rock-paper-sync/device-credentials.json
+            os.environ["XDG_CONFIG_HOME"] = str(test_config_home)
+            bench.ok(f"Set XDG_CONFIG_HOME={os.environ['XDG_CONFIG_HOME']}")
+
+            # Double-check with subprocess
+            test_script = f"""
+import os
+from pathlib import Path
+print(f'XDG_CONFIG_HOME={{os.getenv("XDG_CONFIG_HOME")}}')
+p = Path('{creds_path}')
+print(f'File exists: {{p.exists()}}')
+if p.exists():
+    print(f'File size: {{p.stat().st_size}}')
+"""
+            env_check = subprocess.run(
+                ["python3", "-c", test_script],
+                capture_output=True,
+                text=True
+            )
+            if env_check.returncode == 0:
+                bench.ok(f"Subprocess verification:\n{env_check.stdout}")
+            else:
+                bench.warn(f"Subprocess check failed: {env_check.stderr}")
         except FileNotFoundError as e:
             bench.warn(f"Test credentials not found: {e}")
 
@@ -321,6 +357,9 @@ def workspace(
 
     elif device_mode == "online":
         # Online mode: Use user's real credentials and real cloud, with isolated test vault
+        creds_dir = Path.home() / ".config" / "rock-paper-sync"
+        creds_path = creds_dir / "device-credentials.json"
+
         if not creds_path.exists():
             bench.error(
                 f"Device credentials not found at {creds_path}\n"
@@ -439,9 +478,10 @@ def device(request, workspace, testdata_store, bench, rmfakecloud) -> "DeviceInt
     # This allows tests to use custom test IDs or handle offline mode gracefully.
     yield dev
 
-    # End test (success determined by test outcome)
-    # Note: can't determine success here, tests should call end_test manually
-    # if they need success-dependent behavior
+    # Teardown: cleanup device-specific state
+    # Online mode: prompts user to confirm device cleanup
+    # Offline mode: silent cleanup (no user interaction)
+    dev.cleanup()
 
 
 @pytest.fixture

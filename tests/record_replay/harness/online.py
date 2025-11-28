@@ -18,7 +18,7 @@ Usage:
 
     state = device.wait_for_annotations(doc_uuid)
     device.end_test("pen_colors", success=True)
-    # Testdata saved to tests/testdata/collected/pen_colors/
+    # Testdata saved to tests/testdata/pen_colors/
 """
 
 from pathlib import Path
@@ -101,7 +101,7 @@ class OnlineDevice(DeviceInteractionManager):
         self._phases = []
 
         # Create testdata directory
-        test_dir = self.testdata_store.collected_dir / test_id
+        test_dir = self.testdata_store.base_dir / test_id
         test_dir.mkdir(parents=True, exist_ok=True)
 
         self.bench.ok(f"Started recording: {test_id}")
@@ -333,6 +333,19 @@ class OnlineDevice(DeviceInteractionManager):
         self._current_phase = 0
         self._phases = []
 
+    def cleanup(self) -> None:
+        """Cleanup after test with user confirmation.
+
+        Prompts user to confirm that documents have been removed from their device.
+        This is necessary in online mode because the user has a real device that
+        needs time to sync the unsync operation.
+        """
+        self.bench.prompt_user(
+            "Unsyncing from cloud (this may take a moment)...",
+            "Please wait for the document to be removed from your device.",
+            "Then press Enter to complete cleanup...",
+        )
+
     def _capture_phase(
         self,
         phase_num: int,
@@ -357,7 +370,7 @@ class OnlineDevice(DeviceInteractionManager):
         if not self._current_test_id:
             raise RuntimeError("No test started")
 
-        test_dir = self.testdata_store.collected_dir / self._current_test_id
+        test_dir = self.testdata_store.base_dir / self._current_test_id
         phase_dir = test_dir / "phases" / f"phase_{phase_num}_{phase_name}"
         phase_dir.mkdir(parents=True, exist_ok=True)
 
@@ -427,7 +440,7 @@ class OnlineDevice(DeviceInteractionManager):
         if not self._current_test_id:
             return
 
-        test_dir = self.testdata_store.collected_dir / self._current_test_id
+        test_dir = self.testdata_store.base_dir / self._current_test_id
 
         # Prepare source markdown for legacy compatibility
         source_md = self.workspace.test_doc.read_text()

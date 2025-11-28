@@ -5,26 +5,22 @@ offline replay of device tests without a physical reMarkable device.
 
 Directory Structure (Multi-Phase):
     fixtures/testdata/
-    ├── collected/           # Auto-captured during online tests
-    │   └── {test_id}/
-    │       ├── manifest.json       # Enhanced with phases array
-    │       ├── phases/             # Multi-phase structure
-    │       │   ├── phase_0_initial/
-    │       │   │   ├── vault_snapshot/
-    │       │   │   └── phase_info.json
-    │       │   ├── phase_1_post_sync/
-    │       │   │   ├── vault_snapshot/
-    │       │   │   ├── device_state.json
-    │       │   │   ├── rm_files/
-    │       │   │   └── phase_info.json
-    │       │   └── phase_2_final/
-    │       │       ├── vault_snapshot/
-    │       │       └── phase_info.json
-    │       └── goldens/            # Co-located golden references
-    │           └── final_vault/
-    └── curated/                     # Explicitly extracted test sets
-        └── {set_name}/
-            └── {test_id}/...
+    └── {test_id}/
+        ├── manifest.json       # Enhanced with phases array
+        ├── phases/             # Multi-phase structure
+        │   ├── phase_0_initial/
+        │   │   ├── vault_snapshot/
+        │   │   └── phase_info.json
+        │   ├── phase_1_post_sync/
+        │   │   ├── vault_snapshot/
+        │   │   ├── device_state.json
+        │   │   ├── rm_files/
+        │   │   └── phase_info.json
+        │   └── phase_2_final/
+        │       ├── vault_snapshot/
+        │       └── phase_info.json
+        └── goldens/            # Co-located golden references
+            └── final_vault/
 """
 
 import json
@@ -188,8 +184,7 @@ class TestdataStore:
     """Manages test artifact storage and retrieval.
 
     Supports two storage locations:
-    - collected/: Auto-captured artifacts from online tests
-    - curated/: Manually exported test sets for CI/offline use
+    All tests are stored directly under testdata/ in flat structure
 
     Usage:
         store = TestdataStore(fixtures_dir / "testdata")
@@ -212,12 +207,9 @@ class TestdataStore:
             base_dir: Base directory for testdata storage
         """
         self.base_dir = base_dir
-        self.collected_dir = base_dir / "collected"
-        self.curated_dir = base_dir / "curated"
 
-        # Ensure directories exist
-        self.collected_dir.mkdir(parents=True, exist_ok=True)
-        self.curated_dir.mkdir(parents=True, exist_ok=True)
+        # Ensure base directory exists
+        self.base_dir.mkdir(parents=True, exist_ok=True)
 
     def save_artifacts(
         self,
@@ -243,7 +235,7 @@ class TestdataStore:
         Returns:
             Path to the saved test directory
         """
-        test_dir = self.collected_dir / test_id
+        test_dir = self.base_dir / test_id
         rm_dir = test_dir / "rm_files"
 
         # Clean up existing if present
@@ -281,7 +273,7 @@ class TestdataStore:
     def load_artifacts(self, test_id: str) -> TestArtifacts:
         """Load previously captured artifacts.
 
-        Searches in both collected/ and curated/ directories.
+        Searches in testdata directory.
 
         Args:
             test_id: Test identifier to load
@@ -320,7 +312,7 @@ class TestdataStore:
         )
 
     def _find_test_dir(self, test_id: str) -> Path:
-        """Find test directory in collected or curated locations.
+        """Find test directory.
 
         Args:
             test_id: Test identifier
@@ -331,53 +323,31 @@ class TestdataStore:
         Raises:
             FileNotFoundError: If not found
         """
-        # Try collected
-        collected_path = self.collected_dir / test_id
-        if collected_path.exists():
-            return collected_path
-
-        # Try curated (any set name)
-        for set_dir in self.curated_dir.iterdir():
-            if set_dir.is_dir():
-                curated_path = set_dir / test_id
-                if curated_path.exists():
-                    return curated_path
-
-        # Try base directory directly (for legacy testdata organization)
-        base_path = self.base_dir / test_id
-        if base_path.exists():
-            return base_path
+        test_path = self.base_dir / test_id
+        if test_path.exists():
+            return test_path
 
         raise FileNotFoundError(
             f"Test artifacts not found: {test_id}\n"
-            f"Searched in: {self.collected_dir}, {self.curated_dir}, {self.base_dir}"
+            f"Searched in: {self.base_dir}"
         )
 
     def list_available_tests(self, include_curated: bool = True) -> list[TestManifest]:
         """List all available test artifacts.
 
         Args:
-            include_curated: Whether to include curated tests
+            include_curated: Unused (kept for API compatibility)
 
         Returns:
             List of test manifests sorted by test_id
         """
         manifests: list[TestManifest] = []
 
-        # Collected tests
-        for test_dir in self._iter_test_dirs(self.collected_dir):
+        # Scan base directory for all tests
+        for test_dir in self._iter_test_dirs(self.base_dir):
             manifest = self._load_manifest(test_dir)
             if manifest:
                 manifests.append(manifest)
-
-        # Curated tests
-        if include_curated:
-            for set_dir in self.curated_dir.iterdir():
-                if set_dir.is_dir():
-                    for test_dir in self._iter_test_dirs(set_dir):
-                        manifest = self._load_manifest(test_dir)
-                        if manifest:
-                            manifests.append(manifest)
 
         return sorted(manifests, key=lambda m: m.test_id)
 
@@ -421,7 +391,7 @@ class TestdataStore:
         Raises:
             FileNotFoundError: If any test_id not found
         """
-        set_dir = self.curated_dir / set_name
+        set_dir = self.base_dir / set_name
         set_dir.mkdir(parents=True, exist_ok=True)
 
         # Write set metadata
@@ -465,7 +435,7 @@ class TestdataStore:
     def delete_test(self, test_id: str) -> bool:
         """Delete a collected test.
 
-        Only deletes from collected/, not curated/.
+        Deletes test directory from testdata/.
 
         Args:
             test_id: Test identifier
@@ -473,7 +443,7 @@ class TestdataStore:
         Returns:
             True if deleted, False if not found
         """
-        test_dir = self.collected_dir / test_id
+        test_dir = self.base_dir / test_id
         if test_dir.exists():
             shutil.rmtree(test_dir)
             return True
@@ -537,7 +507,7 @@ class TestdataStore:
             test_id: Test identifier
             operations: List of vault operations
         """
-        test_dir = self.collected_dir / test_id
+        test_dir = self.base_dir / test_id
         ops_file = test_dir / "vault_operations.json"
 
         ops_data = [op.to_dict() for op in operations]
@@ -573,7 +543,7 @@ class TestdataStore:
         Returns:
             Path to snapshot directory
         """
-        return self.collected_dir / test_id / "vault_snapshots" / snapshot_name
+        return self.base_dir / test_id / "vault_snapshots" / snapshot_name
 
     def save_golden_vault(
         self, test_id: str, vault_dir: Path, phase_name: str = "final"
@@ -591,7 +561,7 @@ class TestdataStore:
         Returns:
             Path to golden vault directory
         """
-        golden_dir = self.collected_dir / test_id / "goldens" / f"{phase_name}_vault"
+        golden_dir = self.base_dir / test_id / "goldens" / f"{phase_name}_vault"
         golden_dir.parent.mkdir(parents=True, exist_ok=True)
 
         # Remove existing golden if present
@@ -620,7 +590,7 @@ class TestdataStore:
         Raises:
             FileNotFoundError: If golden vault not found
         """
-        golden_dir = self.collected_dir / test_id / "goldens" / f"{phase_name}_vault"
+        golden_dir = self.base_dir / test_id / "goldens" / f"{phase_name}_vault"
 
         if not golden_dir.exists():
             raise FileNotFoundError(
@@ -712,7 +682,7 @@ class TestdataStore:
         Returns:
             Path to phase directory
         """
-        test_dir = self.collected_dir / test_id
+        test_dir = self.base_dir / test_id
         phase_dir = test_dir / "phases" / f"phase_{phase_num}_{phase_name}"
         return phase_dir
 

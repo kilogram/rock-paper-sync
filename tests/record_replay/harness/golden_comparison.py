@@ -4,7 +4,7 @@ Automatically captures markdown outputs from device tests and compares them
 against golden files. Supports both online and offline testing modes.
 
 Multi-Phase Support:
-    - Goldens are stored in testdata: tests/testdata/collected/{test_id}/goldens/
+    - Goldens are stored in testdata: tests/testdata/{test_id}/goldens/
     - Compare specific phases: golden.compare(output, phase_name="final")
     - Compare vault directories: golden.compare_vault(vault_dir)
 

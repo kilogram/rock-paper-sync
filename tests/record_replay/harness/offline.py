@@ -141,6 +141,15 @@ class OfflineEmulator(DeviceInteractionManager):
         self._current_phase = 0
         self._phases = []
 
+    def cleanup(self) -> None:
+        """Cleanup after test (silent for offline tests).
+
+        Offline tests are fully automated, so no user interaction is needed.
+        This is a no-op to satisfy the DeviceInteractionProtocol.
+        """
+        # Silent cleanup - no user prompts for automated tests
+        pass
+
     def _restore_phase(self, phase_num: int) -> None:
         """Restore vault to a specific phase state.
 
@@ -164,10 +173,10 @@ class OfflineEmulator(DeviceInteractionManager):
             self.bench.warn(f"Phase {phase_num} vault snapshot not found")
             return
 
-        # Clear workspace (preserve .state, .cache, logs, config)
+        # Clear workspace (preserve .state, .cache, logs, config, .test_config)
         workspace_dir = self.workspace.workspace_dir
         for item in workspace_dir.iterdir():
-            if item.name not in [".state", ".cache", "logs", "config.toml"]:
+            if item.name not in [".state", ".cache", "logs", "config.toml", ".test_config"]:
                 if item.is_file():
                     item.unlink()
                 elif item.is_dir():
