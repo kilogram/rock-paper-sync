@@ -101,10 +101,11 @@ class OCRProcessor:
                 close_method = getattr(self._service, "close", None)
                 if close_method is not None and callable(close_method):
                     close_method()
-            except Exception:  # pragma: no cover
-                pass
-            self._service = None
-            logger.debug("OCR processor cleaned up")
+            except Exception as e:  # pragma: no cover
+                logger.warning(f"Failed to clean up OCR service: {e}")
+            finally:
+                self._service = None
+                logger.debug("OCR processor cleaned up")
 
     def process_annotations(
         self,

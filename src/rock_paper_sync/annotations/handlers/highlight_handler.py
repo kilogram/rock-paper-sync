@@ -96,26 +96,46 @@ class HighlightHandler:
                         break
 
             # Strategy 2: Y-position fallback
+            # NOTE: Requires page_y_start attribute on ContentBlock
+            # See issue #5 for pagination metadata persistence implementation
             if paragraph_index is None and annotation.bounding_box:
-                bbox = annotation.bounding_box
-                anno_y = bbox.y
+                # Check if pagination data is available on ALL blocks
+                # IMPORTANT: Must validate each block, not just the first one
+                if (
+                    markdown_blocks
+                    and hasattr(markdown_blocks[0], "page_y_start")
+                    and markdown_blocks[0].page_y_start is not None
+                ):
+                    bbox = annotation.bounding_box
+                    anno_y = bbox.y
 
-                # Simple text-relative transform (no 60px offset for highlights)
-                anno_y_absolute = text_origin_y + anno_y
+                    # Simple text-relative transform (no 60px offset for highlights)
+                    anno_y_absolute = text_origin_y + anno_y
 
-                # Find closest paragraph by Y position
-                min_distance = float("inf")
-                for idx, md_block in enumerate(markdown_blocks):
-                    block_y = md_block.page_y_start
-                    distance = abs(anno_y_absolute - block_y)
-                    if distance < min_distance:
-                        min_distance = distance
-                        paragraph_index = idx
+                    # Find closest paragraph by Y position
+                    min_distance = float("inf")
+                    for idx, md_block in enumerate(markdown_blocks):
+                        # Validate EACH block has page_y_start, not just the first
+                        if not hasattr(md_block, "page_y_start") or md_block.page_y_start is None:
+                            logger.warning(
+                                f"Highlight Y-position matching: Block {idx} missing page_y_start, skipping"
+                            )
+                            continue
 
-                if paragraph_index is not None:
+                        block_y = md_block.page_y_start
+                        distance = abs(anno_y_absolute - block_y)
+                        if distance < min_distance:
+                            min_distance = distance
+                            paragraph_index = idx
+
+                    if paragraph_index is not None:
+                        logger.debug(
+                            f"Matched highlight via Y-position: y={anno_y_absolute:.1f} "
+                            f"→ paragraph {paragraph_index} (distance={min_distance:.1f})"
+                        )
+                else:
                     logger.debug(
-                        f"Matched highlight via Y-position: y={anno_y_absolute:.1f} "
-                        f"→ paragraph {paragraph_index} (distance={min_distance:.1f})"
+                        "Y-position fallback unavailable: ContentBlock missing page_y_start attribute (see issue #5)"
                     )
 
             # Store mapping

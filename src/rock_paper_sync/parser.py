@@ -112,6 +112,7 @@ class ContentBlock:
         text: Plain text content (formatting stripped)
         formatting: List of inline formatting ranges
         children: Nested content blocks (for lists or quotes)
+        page_y_start: Y-coordinate where this block starts on the page (optional, set during pagination)
     """
 
     type: BlockType
@@ -119,6 +120,7 @@ class ContentBlock:
     text: str
     formatting: list[TextFormat] = field(default_factory=list)
     children: list["ContentBlock"] = field(default_factory=list)
+    page_y_start: float | None = None  # Set during pagination for annotation mapping
 
 
 @dataclass

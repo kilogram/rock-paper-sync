@@ -162,8 +162,10 @@ class CorrectionManager:
                 logger.debug(f"Stored annotation image: {image_hash}")
             except FileExistsError:
                 # Another process beat us to it, that's fine
+                logger.debug(f"Image {image_hash} already exists (race condition resolved)")
                 temp_path.unlink(missing_ok=True)
-            except Exception:
+            except Exception as e:
+                logger.error(f"Failed to store annotation image {image_hash}: {e}", exc_info=True)
                 temp_path.unlink(missing_ok=True)
                 raise
 
