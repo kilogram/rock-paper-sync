@@ -97,6 +97,18 @@ uv run pytest
 uv run pytest --cov=src/rock_paper_sync --cov-report=term-missing
 ```
 
+### Git Workflow
+
+**IMPORTANT: Never amend commits**
+- Create new commits instead of amending
+- Let the user handle fixups and rebasing
+- Pre-commit hooks may modify files - commit the changes separately if needed
+- Run lint and type checks before committing:
+  ```bash
+  uv run ruff check <files>
+  uv run python -m py_compile <files>
+  ```
+
 ### Adding Features
 
 1. **New Vault Feature**
