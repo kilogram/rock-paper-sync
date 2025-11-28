@@ -78,7 +78,7 @@ line three
         """Test generating OCR marker block."""
         from rock_paper_sync.ocr.markers import AnnotationInfo, generate_ocr_block
 
-        annotation = AnnotationInfo(paragraph_index=0, highlights=3, strokes=2)
+        annotation = AnnotationInfo(highlights=3, strokes=2)
         original = "Test paragraph content."
         ocr_lines = ["handwriting line 1", "handwriting line 2"]
 
@@ -142,9 +142,7 @@ Second paragraph.
 Third paragraph.
 """
         # Add OCR result for paragraph index 1 (Second paragraph)
-        ocr_results = {
-            1: (AnnotationInfo(paragraph_index=1, highlights=1, strokes=1), ["ocr text here"])
-        }
+        ocr_results = {1: (AnnotationInfo(highlights=1, strokes=1), ["ocr text here"])}
 
         result = add_ocr_markers(content, ocr_results)
 
@@ -639,7 +637,7 @@ class TestOCRIntegration:
         processor = OCRProcessor(ocr_config, state_manager)
 
         # Mock annotation data
-        annotation_map = {0: AnnotationInfo(paragraph_index=0, highlights=1, strokes=1)}
+        annotation_map = {0: AnnotationInfo(highlights=1, strokes=1)}
 
         # This would need actual .rm files to work fully
         # For now, test that the method runs without error
@@ -1309,7 +1307,7 @@ This is the conclusion."""
         vault_file.write_text(original_content)
 
         # Create annotation map - simple case
-        annotation_map = {1: AnnotationInfo(paragraph_index=1, highlights=1, strokes=1)}
+        annotation_map = {1: AnnotationInfo(highlights=1, strokes=1)}
 
         paragraph_texts = [
             "This is the introduction paragraph.",
@@ -1384,7 +1382,7 @@ Third paragraph."""
         vault_file.write_text(original_content)
 
         # Create annotation map
-        annotation_map = {1: AnnotationInfo(paragraph_index=1, highlights=1, strokes=2)}
+        annotation_map = {1: AnnotationInfo(highlights=1, strokes=2)}
 
         paragraph_texts = [
             "First paragraph here.",
@@ -1420,7 +1418,7 @@ Third paragraph."""
 
         # Mock _extract_annotation_images to return fake image data
         fake_image_data = b"fake PNG image data"
-        mock_annotation_info = AnnotationInfo(paragraph_index=1, highlights=1, strokes=2)
+        mock_annotation_info = AnnotationInfo(highlights=1, strokes=2)
         fake_bbox = BoundingBox(x=10, y=20, width=100, height=50)
 
         # Return dict: paragraph_index -> (AnnotationInfo, [(image_bytes, bbox, uuid)])
