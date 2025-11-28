@@ -5,7 +5,6 @@ the minimal OCR service. Suitable for testing and development.
 """
 
 import base64
-import json
 import logging
 import time
 from datetime import datetime
@@ -18,7 +17,6 @@ from rock_paper_sync.ocr.protocol import (
     OCRRequest,
     OCRResult,
     OCRServiceError,
-    OCRServiceProtocol,
     TrainingJob,
 )
 
@@ -165,7 +163,9 @@ class LocalOCRService:
             return results
 
         except httpx.HTTPStatusError as e:
-            raise OCRServiceError(f"Local OCR API error: {e.response.status_code} - {e.response.text}")
+            raise OCRServiceError(
+                f"Local OCR API error: {e.response.status_code} - {e.response.text}"
+            )
         except httpx.RequestError as e:
             raise OCRServiceError(f"Local OCR request failed: {e}")
 
@@ -191,7 +191,9 @@ class LocalOCRService:
                 base_model=data.get("base_model", "minimal"),
                 is_fine_tuned=data.get("is_fine_tuned", False),
                 dataset_version=data.get("dataset_version"),
-                created_at=datetime.fromisoformat(data["created_at"]) if data.get("created_at") else None,
+                created_at=datetime.fromisoformat(data["created_at"])
+                if data.get("created_at")
+                else None,
                 metrics=data.get("metrics", {}),
             )
 
@@ -268,8 +270,12 @@ class LocalOCRService:
                 status=status_map.get(data.get("status", ""), JobStatus.PENDING),
                 dataset_version=output.get("dataset_version", ""),
                 output_model_version=output.get("model_version", ""),
-                started_at=datetime.fromisoformat(output["started_at"]) if output.get("started_at") else None,
-                completed_at=datetime.fromisoformat(output["completed_at"]) if output.get("completed_at") else None,
+                started_at=datetime.fromisoformat(output["started_at"])
+                if output.get("started_at")
+                else None,
+                completed_at=datetime.fromisoformat(output["completed_at"])
+                if output.get("completed_at")
+                else None,
                 metrics=output.get("metrics", {}),
                 error_message=data.get("error"),
             )

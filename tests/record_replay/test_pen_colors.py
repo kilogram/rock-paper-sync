@@ -13,10 +13,11 @@ Replaying:
 """
 
 import io
-import pytest
 
+import pytest
 from rmscene.scene_items import PenColor
-from rock_paper_sync.annotations import read_annotations, AnnotationType
+
+from rock_paper_sync.annotations import AnnotationType, read_annotations
 
 
 @pytest.mark.device
@@ -36,10 +37,7 @@ def test_pen_colors(device, workspace, fixtures_dir):
     try:
         device.start_test(test_id, description="Annotations with multiple pen colors")
     except FileNotFoundError:
-        pytest.skip(
-            f"Testdata '{test_id}' not available. "
-            f"Run with --online -s to record."
-        )
+        pytest.skip(f"Testdata '{test_id}' not available. " f"Run with --online -s to record.")
 
     # Upload document
     doc_uuid = device.upload_document(workspace.test_doc)
@@ -61,14 +59,14 @@ def test_pen_colors(device, workspace, fixtures_dir):
                 colors_found.add(a.stroke.color)
 
     # Should have multiple colors
-    assert len(colors_found) >= 2, (
-        f"Expected multiple colors, found {len(colors_found)}: {colors_found}"
-    )
+    assert (
+        len(colors_found) >= 2
+    ), f"Expected multiple colors, found {len(colors_found)}: {colors_found}"
 
     # Black should be present
-    assert PenColor.BLACK.value in colors_found, (
-        f"Expected black color to be present, found: {colors_found}"
-    )
+    assert (
+        PenColor.BLACK.value in colors_found
+    ), f"Expected black color to be present, found: {colors_found}"
 
     # Finalize test
     device.end_test(test_id)

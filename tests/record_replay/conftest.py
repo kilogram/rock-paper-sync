@@ -19,15 +19,12 @@ Usage:
     uv run pytest tests/record_replay --no-cleanup
 """
 
+# Make sure json is available at module level
 import os
-import time
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
-from pathlib import Path
-
-# Make sure json is available at module level
-import json
 
 if TYPE_CHECKING:
     from tests.record_replay.harness import DeviceInteractionProtocol
@@ -36,36 +33,43 @@ if TYPE_CHECKING:
 # Import lazily to avoid import issues when running from different directories
 def _get_bench():
     from tests.record_replay.harness import Bench
+
     return Bench
 
 
 def _get_workspace_manager():
     from tests.record_replay.harness import WorkspaceManager
+
     return WorkspaceManager
 
 
 def _get_testdata_store():
     from tests.record_replay.harness import TestdataStore
+
     return TestdataStore
 
 
 def _get_online_device():
     from tests.record_replay.harness import OnlineDevice
+
     return OnlineDevice
 
 
 def _get_offline_emulator():
     from tests.record_replay.harness import OfflineEmulator
+
     return OfflineEmulator
 
 
 def _get_online_vault():
     from tests.record_replay.harness import OnlineVault
+
     return OnlineVault
 
 
 def _get_offline_vault():
     from tests.record_replay.harness import OfflineVault
+
     return OfflineVault
 
 
@@ -158,7 +162,7 @@ def pytest_collection_modifyitems(config, items):
     """Handle --list-tests option and mode-based test selection."""
     # Handle --list-tests
     if config.getoption("--list-tests"):
-        TestdataStore = _get_testdata_store()
+        TestdataStore = _get_testdata_store()  # noqa: N806
         fixtures_dir = Path(__file__).parent / "fixtures"
         store = TestdataStore(fixtures_dir / "testdata")
 
@@ -221,7 +225,7 @@ def workspace_dir(tmp_path: Path) -> Path:
 @pytest.fixture(scope="function")
 def bench(repo_root: Path, tmp_path: Path):
     """Create Bench instance for test."""
-    Bench = _get_bench()
+    Bench = _get_bench()  # noqa: N806
     log_dir = tmp_path / "logs"
     log_dir.mkdir()
     return Bench(repo_root, log_dir)
@@ -248,7 +252,7 @@ def workspace(
     """
     import json
 
-    WorkspaceManager = _get_workspace_manager()
+    WorkspaceManager = _get_workspace_manager()  # noqa: N806
     no_cleanup = request.config.getoption("--no-cleanup")
     online = request.config.getoption("--online")
     cloud_url = rmfakecloud
@@ -268,10 +272,10 @@ def workspace(
 
     # Create appropriate vault manager for the device mode
     if device_mode == "offline":
-        OfflineVault = _get_offline_vault()
+        OfflineVault = _get_offline_vault()  # noqa: N806
         vault = OfflineVault(workspace_dir, bench, testdata_store)
     else:
-        OnlineVault = _get_online_vault()
+        OnlineVault = _get_online_vault()  # noqa: N806
         vault = OnlineVault(workspace_dir, bench, testdata_store)
 
     ws = WorkspaceManager(workspace_dir, repo_root, bench, vault, device_folder, cloud_url)
@@ -282,10 +286,6 @@ def workspace(
 
     fixtures_dir = Path(__file__).parent / "fixtures"
     test_config_file = fixtures_dir / "config.toml"
-
-    # Store original credentials for online mode cleanup
-    original_creds_path = None
-    original_creds_content = None
 
     if device_mode == "offline":
         # Offline mode: Use TEMPORARY credentials directory to avoid overwriting user's real credentials
@@ -301,13 +301,14 @@ def workspace(
 
             # Verify file was written
             import subprocess
+
             file_check = subprocess.run(
-                ["ls", "-la", str(creds_path)],
-                capture_output=True,
-                text=True
+                ["ls", "-la", str(creds_path)], capture_output=True, text=True
             )
             bench.ok(f"Created test credentials at {creds_path}")
-            bench.ok(f"File verification: {file_check.stdout.strip() if file_check.returncode == 0 else 'FAILED'}")
+            bench.ok(
+                f"File verification: {file_check.stdout.strip() if file_check.returncode == 0 else 'FAILED'}"
+            )
 
             # Override XDG_CONFIG_HOME so rock-paper-sync uses test credentials
             # rock-paper-sync looks for $XDG_CONFIG_HOME/rock-paper-sync/device-credentials.json
@@ -325,9 +326,7 @@ if p.exists():
     print(f'File size: {{p.stat().st_size}}')
 """
             env_check = subprocess.run(
-                ["python3", "-c", test_script],
-                capture_output=True,
-                text=True
+                ["python3", "-c", test_script], capture_output=True, text=True
             )
             if env_check.returncode == 0:
                 bench.ok(f"Subprocess verification:\n{env_check.stdout}")
@@ -338,10 +337,11 @@ if p.exists():
 
         # Copy test config.toml to workspace
         if test_config_file.exists():
-            import shutil
             # Set environment variables for config template expansion
             os.environ["RPS_TEST_WORKSPACE"] = str(workspace_dir.resolve())
-            os.environ["RPS_CLOUD_BASE_URL"] = rmfakecloud  # Use dynamically allocated rmfakecloud URL
+            os.environ["RPS_CLOUD_BASE_URL"] = (
+                rmfakecloud  # Use dynamically allocated rmfakecloud URL
+            )
 
             # Read fixture config template
             fixture_config_content = test_config_file.read_text()
@@ -353,7 +353,6 @@ if p.exists():
             workspace_config = workspace_dir / "config.toml"
             workspace_config.write_text(expanded_config)
             bench.ok(f"Using test config at {workspace_config}")
-
 
     elif device_mode == "online":
         # Online mode: Use user's real credentials and real cloud, with isolated test vault
@@ -374,6 +373,7 @@ if p.exists():
         actual_config_path = creds_dir / "config.toml"
         if actual_config_path.exists():
             from rock_paper_sync.config import load_config
+
             actual_config = load_config(actual_config_path)
             cloud_base_url = actual_config.cloud.base_url
             bench.ok(f"Using real cloud at {cloud_base_url}")
@@ -386,7 +386,6 @@ if p.exists():
 
         # Generate test config with real cloud URL but isolated test vault
         if test_config_file.exists():
-            import shutil
             # Set environment variable for config template expansion
             os.environ["RPS_TEST_WORKSPACE"] = str(workspace_dir.resolve())
             os.environ["RPS_CLOUD_BASE_URL"] = cloud_base_url
@@ -431,7 +430,7 @@ if p.exists():
 @pytest.fixture(scope="session")
 def testdata_store(fixtures_dir: Path):
     """Create TestdataStore instance for test session."""
-    TestdataStore = _get_testdata_store()
+    TestdataStore = _get_testdata_store()  # noqa: N806
     # Testdata is now at tests/record_replay/testdata/
     testdata_dir = fixtures_dir.parent / "testdata"
     return TestdataStore(testdata_dir)
@@ -461,14 +460,12 @@ def device(request, workspace, testdata_store, bench, rmfakecloud) -> "DeviceInt
     test_artifact = request.config.getoption("--test-artifact")
 
     if online:
-        OnlineDevice = _get_online_device()
+        OnlineDevice = _get_online_device()  # noqa: N806
         dev = OnlineDevice(workspace, testdata_store, bench)
     else:
-        OfflineEmulator = _get_offline_emulator()
+        OfflineEmulator = _get_offline_emulator()  # noqa: N806
         # Use dynamically allocated rmfakecloud URL (handles parallel execution)
-        dev = OfflineEmulator(
-            workspace, testdata_store, bench, cloud_url=rmfakecloud
-        )
+        dev = OfflineEmulator(workspace, testdata_store, bench, cloud_url=rmfakecloud)
 
         # Load specific test artifact if provided
         if test_artifact:
@@ -507,8 +504,7 @@ def has_testdata(testdata_dir: Path) -> bool:
     rm_files_dir = testdata_dir / "rm_files"
     # Check manifest exists and .rm files are either in root or rm_files/ subdirectory
     return manifest.exists() and (
-        list(testdata_dir.glob("*.rm")) or
-        list(rm_files_dir.glob("*.rm"))
+        list(testdata_dir.glob("*.rm")) or list(rm_files_dir.glob("*.rm"))
     )
 
 
@@ -518,7 +514,9 @@ def has_testdata(testdata_dir: Path) -> bool:
 
 
 @pytest.fixture(scope="function")
-def offline_device(request, workspace, testdata_store, bench, rmfakecloud) -> "DeviceInteractionProtocol":
+def offline_device(
+    request, workspace, testdata_store, bench, rmfakecloud
+) -> "DeviceInteractionProtocol":
     """Create OfflineEmulator connected to containerized rmfakecloud.
 
     This fixture automatically starts rmfakecloud (Docker or Podman) and
@@ -549,7 +547,7 @@ def offline_device(request, workspace, testdata_store, bench, rmfakecloud) -> "D
             state = offline_device.wait_for_annotations(doc_uuid)
             assert state.has_annotations
     """
-    OfflineEmulator = _get_offline_emulator()
+    OfflineEmulator = _get_offline_emulator()  # noqa: N806
 
     dev = OfflineEmulator(
         workspace=workspace,
@@ -621,7 +619,6 @@ def golden_replay(workspace, testdata_store, golden_comparison, request):
         golden_replay.validate_vault_state()
         golden_replay.validate_markdown_output(output_file)
     """
-    import shutil
     from pathlib import Path
 
     class GoldenReplay:
@@ -701,7 +698,7 @@ def golden_replay(workspace, testdata_store, golden_comparison, request):
                         try:
                             rel_path = file_path.relative_to(vault_dir).as_posix()
                             vault_files[rel_path] = file_path.read_text()
-                        except (UnicodeDecodeError, IOError):
+                        except (OSError, UnicodeDecodeError):
                             pass
 
             return vault_files
@@ -755,6 +752,7 @@ def ocr_service():
     """
     import subprocess
     import time
+
     from rock_paper_sync.ocr.local import LocalOCRService
 
     # Start OCR minimal service using podman-compose
@@ -762,7 +760,14 @@ def ocr_service():
 
     # Start the service
     result = subprocess.run(
-        ["podman-compose", "-f", str(compose_dir / "docker-compose.yml"), "up", "-d", "ocr-minimal"],
+        [
+            "podman-compose",
+            "-f",
+            str(compose_dir / "docker-compose.yml"),
+            "up",
+            "-d",
+            "ocr-minimal",
+        ],
         cwd=compose_dir,
         capture_output=True,
         text=True,

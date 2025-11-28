@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .protocol import DeviceInteractionManager, DocumentState
-from .testdata import TestArtifacts, TestdataStore, PhaseData
+from .testdata import PhaseData, TestArtifacts, TestdataStore
 
 if TYPE_CHECKING:
     from .logging import Bench
@@ -162,9 +162,7 @@ class OfflineEmulator(DeviceInteractionManager):
             ValueError: If phase not found
         """
         if phase_num >= len(self._phases):
-            raise ValueError(
-                f"Phase {phase_num} not found (have {len(self._phases)} phases)"
-            )
+            raise ValueError(f"Phase {phase_num} not found (have {len(self._phases)} phases)")
 
         phase = self._phases[phase_num]
         vault_snapshot = phase.vault_snapshot_path
@@ -189,9 +187,7 @@ class OfflineEmulator(DeviceInteractionManager):
             elif item.is_dir():
                 shutil.copytree(item, workspace_dir / item.name)
 
-        self.bench.ok(
-            f"Restored vault to phase {phase_num}: {phase.phase_name}"
-        )
+        self.bench.ok(f"Restored vault to phase {phase_num}: {phase.phase_name}")
 
     def _advance_phase(self) -> None:
         """Advance to next phase in multi-phase test.
@@ -201,9 +197,7 @@ class OfflineEmulator(DeviceInteractionManager):
         self._current_phase += 1
         if self._current_phase < len(self._phases):
             phase = self._phases[self._current_phase]
-            self.bench.observe(
-                f"Advanced to phase {self._current_phase}: {phase.phase_name}"
-            )
+            self.bench.observe(f"Advanced to phase {self._current_phase}: {phase.phase_name}")
 
     def upload_document(self, markdown_path: Path) -> str:
         """Upload document via normal sync.
@@ -236,9 +230,7 @@ class OfflineEmulator(DeviceInteractionManager):
 
         return doc_uuid
 
-    def wait_for_annotations(
-        self, doc_uuid: str, timeout: float = 0.0
-    ) -> DocumentState:
+    def wait_for_annotations(self, doc_uuid: str, timeout: float = 0.0) -> DocumentState:
         """Inject pre-recorded annotations and sync.
 
         Instead of waiting for user input, this injects the pre-recorded
@@ -259,9 +251,7 @@ class OfflineEmulator(DeviceInteractionManager):
             RuntimeError: If no test loaded or injection fails
         """
         if not self._current_artifacts:
-            raise RuntimeError(
-                "No test loaded - call load_test() or start_test() first"
-            )
+            raise RuntimeError("No test loaded - call load_test() or start_test() first")
 
         # Determine which rm_files to use
         rm_files: dict[str, bytes] = {}
@@ -342,9 +332,7 @@ class OfflineEmulator(DeviceInteractionManager):
             has_annotations=has_annotations,
         )
 
-    def _inject_rm_files(
-        self, doc_uuid: str, rm_files: dict[str, bytes]
-    ) -> None:
+    def _inject_rm_files(self, doc_uuid: str, rm_files: dict[str, bytes]) -> None:
         """Inject .rm files into rmfakecloud.
 
         Uses production RmCloudSync to upload documents via Sync v3 protocol.
@@ -413,7 +401,9 @@ class OfflineEmulator(DeviceInteractionManager):
             files_removed = 0
             files_deleted = 0
 
-        self.bench.info(f"Simulated unsync (offline): {files_removed} removed, {files_deleted} deleted")
+        self.bench.info(
+            f"Simulated unsync (offline): {files_removed} removed, {files_deleted} deleted"
+        )
         return (files_removed, files_deleted)
 
     def get_remaining_folders(self, vault_name: str | None = None) -> list[tuple[str, str]]:
@@ -459,7 +449,9 @@ class OfflineEmulator(DeviceInteractionManager):
             AssertionError: If validation fails
         """
         import io
+
         from rmscene import read_blocks
+
         from rock_paper_sync.annotations import read_annotations
 
         if not state.has_annotations:

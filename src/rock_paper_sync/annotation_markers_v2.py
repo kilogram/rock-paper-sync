@@ -45,7 +45,7 @@ if TYPE_CHECKING:
     from .annotations.core.data_types import AnnotationInfo
     from .parser import ContentBlock
 
-from .markdown_reconstruction import blocks_to_markdown, block_to_markdown
+from .markdown_reconstruction import block_to_markdown, blocks_to_markdown
 
 logger = logging.getLogger("rock_paper_sync.annotation_markers")
 
@@ -55,15 +55,11 @@ MARKER_START_SUFFIX = " -->"
 MARKER_END = "<!-- /ANNOTATED -->"
 
 # Regex patterns for marker detection and stripping
-MARKER_START_PATTERN = re.compile(
-    r"^<!-- ANNOTATED: .+? -->$", re.MULTILINE
-)
-MARKER_END_PATTERN = re.compile(
-    r"^<!-- /ANNOTATED -->$", re.MULTILINE
-)
+MARKER_START_PATTERN = re.compile(r"^<!-- ANNOTATED: .+? -->$", re.MULTILINE)
+MARKER_END_PATTERN = re.compile(r"^<!-- /ANNOTATED -->$", re.MULTILINE)
 
 
-def format_marker(annotation_info: 'AnnotationInfo') -> str:
+def format_marker(annotation_info: "AnnotationInfo") -> str:
     """Format an annotation marker comment.
 
     Args:
@@ -82,8 +78,7 @@ def format_marker(annotation_info: 'AnnotationInfo') -> str:
 
 
 def add_annotation_markers_aligned(
-    content_blocks: list['ContentBlock'],
-    annotation_map: dict[int, 'AnnotationInfo']
+    content_blocks: list["ContentBlock"], annotation_map: dict[int, "AnnotationInfo"]
 ) -> str:
     """Add HTML comment markers to annotated blocks (ALIGNED version).
 
@@ -228,8 +223,7 @@ def count_annotation_markers(markdown_content: str) -> int:
 
 
 def update_markers_aligned(
-    content_blocks: list['ContentBlock'],
-    new_annotation_map: dict[int, 'AnnotationInfo']
+    content_blocks: list["ContentBlock"], new_annotation_map: dict[int, "AnnotationInfo"]
 ) -> str:
     """Update annotation markers with current annotation state (ALIGNED version).
 

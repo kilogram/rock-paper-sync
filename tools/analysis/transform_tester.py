@@ -42,9 +42,9 @@ from PIL import Image, ImageDraw
 # Add parent to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from rock_paper_sync.annotations import read_annotations
 from rock_paper_sync.annotation_mapper import extract_text_blocks_from_rm
 
+from rock_paper_sync.annotations import read_annotations
 
 TRANSFORMATION_RULES = {
     'native': 'No transformation',
@@ -102,12 +102,12 @@ def transform_coordinates(annotations, rule, text_origin_x, text_origin_y, paren
 
             elif rule == 'simple_offset':
                 # Fixed 60px offset for negative Y (CORRECT SOLUTION)
-                NEGATIVE_Y_OFFSET = 60
+                negative_y_offset = 60
                 new_x = point.x + anchor_x
                 if stroke_center_y >= 0:
                     new_y = text_origin_y + point.y
                 else:
-                    new_y = text_origin_y + NEGATIVE_Y_OFFSET + point.y
+                    new_y = text_origin_y + negative_y_offset + point.y
 
             elif rule == 'offset_30':
                 # Test 30px offset

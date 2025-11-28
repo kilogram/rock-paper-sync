@@ -10,15 +10,15 @@ This allows testing:
 - Round-trip preservation logic
 """
 
-import pytest
 from pathlib import Path
 
-from rock_paper_sync.annotations import read_annotations, AnnotationType
-from rock_paper_sync.annotation_mapper import extract_text_blocks_from_rm
-from rock_paper_sync.generator import RemarkableGenerator
-from rock_paper_sync.config import LayoutConfig
-from rock_paper_sync.parser import parse_markdown_file
+import pytest
 
+from rock_paper_sync.annotations import AnnotationType, read_annotations
+from rock_paper_sync.annotations.common.text_extraction import extract_text_blocks_from_rm
+from rock_paper_sync.config import LayoutConfig
+from rock_paper_sync.generator import RemarkableGenerator
+from rock_paper_sync.parser import parse_markdown_file
 
 # Test data paths
 TESTDATA_DIR = Path(__file__).parent / "testdata" / "real_world_annotation_test"
@@ -87,9 +87,9 @@ class TestAnnotationDetection:
             total_annotations += len(annotations)
 
         # Stage1 should be clean
-        assert total_annotations == 0, (
-            f"Expected no annotations in stage1, found {total_annotations}"
-        )
+        assert (
+            total_annotations == 0
+        ), f"Expected no annotations in stage1, found {total_annotations}"
 
     def test_stage2_has_annotations(self, stage2_rm_files):
         """Verify stage2 files have annotations (user added them)."""
@@ -108,9 +108,9 @@ class TestAnnotationDetection:
         stage2_count = sum(len(read_annotations(f)) for f in stage2_rm_files)
 
         # Stage2 should have more annotations
-        assert stage2_count > stage1_count, (
-            f"Stage2 ({stage2_count}) should have more annotations than stage1 ({stage1_count})"
-        )
+        assert (
+            stage2_count > stage1_count
+        ), f"Stage2 ({stage2_count}) should have more annotations than stage1 ({stage1_count})"
 
 
 class TestAnnotationContent:
@@ -121,9 +121,10 @@ class TestAnnotationContent:
         for rm_file in stage2_rm_files:
             annotations = read_annotations(rm_file)
             for ann in annotations:
-                assert ann.type in [AnnotationType.STROKE, AnnotationType.HIGHLIGHT], (
-                    f"Invalid annotation type: {ann.type}"
-                )
+                assert ann.type in [
+                    AnnotationType.STROKE,
+                    AnnotationType.HIGHLIGHT,
+                ], f"Invalid annotation type: {ann.type}"
 
     def test_strokes_have_points(self, stage2_rm_files):
         """Verify strokes have point data."""
@@ -142,7 +143,9 @@ class TestAnnotationContent:
             for ann in annotations:
                 if ann.type == AnnotationType.HIGHLIGHT:
                     assert ann.highlight is not None, "Highlight annotation missing highlight data"
-                    assert len(ann.highlight.rectangles) >= 1, "Highlight needs at least 1 rectangle"
+                    assert (
+                        len(ann.highlight.rectangles) >= 1
+                    ), "Highlight needs at least 1 rectangle"
 
 
 class TestTextBlockExtraction:
@@ -179,9 +182,7 @@ class TestTextBlockExtraction:
             stage1_text = "\n".join(b.content for b in stage1_blocks)
             stage2_text = "\n".join(b.content for b in stage2_blocks)
 
-            assert stage1_text == stage2_text, (
-                f"Text content differs in {name}"
-            )
+            assert stage1_text == stage2_text, f"Text content differs in {name}"
 
 
 def make_layout_config():
@@ -215,40 +216,33 @@ class TestAnnotationPreservation:
         import rmscene
 
         for rm_file in stage2_rm_files:
-            with open(rm_file, 'rb') as f:
+            with open(rm_file, "rb") as f:
                 blocks = list(rmscene.read_blocks(f))
 
             # Find annotation blocks
             annotation_blocks = [
-                b for b in blocks
-                if 'Line' in type(b).__name__ or 'Glyph' in type(b).__name__
+                b for b in blocks if "Line" in type(b).__name__ or "Glyph" in type(b).__name__
             ]
 
             # Stage2 should have annotation blocks
             # (Not all pages may have annotations, so we don't assert > 0 here)
             for block in annotation_blocks:
                 # Verify structure
-                assert hasattr(block, 'item'), "Annotation block missing item"
+                assert hasattr(block, "item"), "Annotation block missing item"
 
     def test_roundtrip_structure_preservation(self, stage2_rm_files):
         """Verify .rm file structure elements needed for round-trip."""
         import rmscene
-        from rmscene.scene_stream import (
-            RootTextBlock,
-            SceneTreeBlock,
-            TreeNodeBlock,
-            PageInfoBlock,
-        )
 
         for rm_file in stage2_rm_files:
-            with open(rm_file, 'rb') as f:
+            with open(rm_file, "rb") as f:
                 blocks = list(rmscene.read_blocks(f))
 
             block_types = [type(b).__name__ for b in blocks]
 
             # Essential blocks for round-trip
-            assert 'RootTextBlock' in block_types, f"Missing RootTextBlock in {rm_file.name}"
-            assert 'TreeNodeBlock' in block_types, f"Missing TreeNodeBlock in {rm_file.name}"
+            assert "RootTextBlock" in block_types, f"Missing RootTextBlock in {rm_file.name}"
+            assert "TreeNodeBlock" in block_types, f"Missing TreeNodeBlock in {rm_file.name}"
 
 
 class TestPositionMapping:
@@ -307,14 +301,8 @@ class TestCoordinateSpace:
 
     def test_transformation_completeness(self, stage2_rm_files):
         """Verify all annotations can be transformed to absolute space."""
-        from rock_paper_sync.coordinate_transformer import (
-            get_annotation_center_y,
-            extract_text_origin,
-        )
-
         for rm_file in stage2_rm_files:
             annotations = read_annotations(rm_file)
-            origin = extract_text_origin(rm_file)
 
             for ann in annotations:
                 if ann.type == AnnotationType.STROKE and ann.stroke:
@@ -341,7 +329,7 @@ class TestEndToEndPreservation:
         # Generate document with existing page UUIDs and .rm files
         # Map page UUIDs to existing files
         rm_file_list = []
-        for uuid in page_uuids[:len(stage2_rm_files)]:
+        for uuid in page_uuids[: len(stage2_rm_files)]:
             # Find matching .rm file
             matching = [f for f in stage2_rm_files if uuid in f.name]
             if matching:
@@ -357,7 +345,7 @@ class TestEndToEndPreservation:
             md_doc,
             parent_uuid="",
             doc_uuid=None,
-            existing_page_uuids=page_uuids[:len(rm_file_list)],
+            existing_page_uuids=page_uuids[: len(rm_file_list)],
             existing_rm_files=rm_file_list,
         )
 
@@ -367,13 +355,14 @@ class TestEndToEndPreservation:
 
         # Check annotations were preserved on some pages
         pages_with_annotations = sum(
-            1 for page in doc.pages
-            if hasattr(page, 'annotation_blocks') and page.annotation_blocks
+            1 for page in doc.pages if hasattr(page, "annotation_blocks") and page.annotation_blocks
         )
 
         print(f"\nPreserved annotations on {pages_with_annotations}/{len(doc.pages)} pages")
 
-    def test_generate_rm_with_preserved_annotations(self, stage2_rm_files, markdown_file, page_uuids):
+    def test_generate_rm_with_preserved_annotations(
+        self, stage2_rm_files, markdown_file, page_uuids
+    ):
         """Test generating .rm files with preserved annotations."""
         layout = make_layout_config()
         generator = RemarkableGenerator(layout)
@@ -383,7 +372,7 @@ class TestEndToEndPreservation:
 
         # Map UUIDs to files
         rm_file_list = []
-        for uuid in page_uuids[:len(stage2_rm_files)]:
+        for uuid in page_uuids[: len(stage2_rm_files)]:
             matching = [f for f in stage2_rm_files if uuid in f.name]
             rm_file_list.append(matching[0] if matching else None)
 
@@ -394,13 +383,13 @@ class TestEndToEndPreservation:
         doc = generator.generate_document(
             md_doc,
             parent_uuid="",
-            existing_page_uuids=page_uuids[:len(rm_file_list)],
+            existing_page_uuids=page_uuids[: len(rm_file_list)],
             existing_rm_files=rm_file_list,
         )
 
         # Try generating .rm file for pages with preserved annotations
         for page in doc.pages:
-            if hasattr(page, 'annotation_blocks') and page.annotation_blocks:
+            if hasattr(page, "annotation_blocks") and page.annotation_blocks:
                 # This should work without error
                 rm_bytes = generator.generate_rm_file(page)
 
@@ -409,7 +398,9 @@ class TestEndToEndPreservation:
 
                 # Should start with rmscene magic bytes
                 # Magic header is "reMarkable lines with" followed by version info
-                assert rm_bytes.startswith(b'reMarkab'), "Invalid .rm file header"
+                assert rm_bytes.startswith(b"reMarkab"), "Invalid .rm file header"
 
-                print(f"\nGenerated .rm file: {len(rm_bytes)} bytes, "
-                      f"{len(page.annotation_blocks)} annotations preserved")
+                print(
+                    f"\nGenerated .rm file: {len(rm_bytes)} bytes, "
+                    f"{len(page.annotation_blocks)} annotations preserved"
+                )

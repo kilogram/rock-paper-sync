@@ -7,33 +7,37 @@ data structures for inference and training.
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from pathlib import Path
 from typing import Protocol
 
 
 # Exception hierarchy for OCR operations
 class OCRError(Exception):
     """Base exception for all OCR-related errors."""
+
     pass
 
 
 class OCRServiceError(OCRError):
     """Raised when OCR service communication or processing fails."""
+
     pass
 
 
 class OCRDataError(OCRError):
     """Raised when OCR data validation or format is incorrect."""
+
     pass
 
 
 class OCRConfigError(OCRError):
     """Raised when OCR configuration is invalid."""
+
     pass
 
 
 class JobStatus(Enum):
     """Status of a training job."""
+
     PENDING = "pending"
     RUNNING = "running"
     COMPLETED = "completed"
@@ -43,6 +47,7 @@ class JobStatus(Enum):
 @dataclass(frozen=True)
 class BoundingBox:
     """Bounding box for an annotation region."""
+
     x: float
     y: float
     width: float
@@ -52,6 +57,7 @@ class BoundingBox:
 @dataclass(frozen=True)
 class ParagraphContext:
     """Context for associating annotation with source content."""
+
     document_id: str
     page_number: int
     paragraph_index: int
@@ -63,6 +69,7 @@ class ParagraphContext:
 @dataclass(frozen=True)
 class OCRRequest:
     """Request for OCR recognition."""
+
     image: bytes
     annotation_uuid: str
     bounding_box: BoundingBox
@@ -72,6 +79,7 @@ class OCRRequest:
 @dataclass
 class OCRResult:
     """Result from OCR recognition."""
+
     annotation_uuid: str
     text: str
     confidence: float
@@ -84,6 +92,7 @@ class OCRResult:
 @dataclass
 class ModelInfo:
     """Information about the current OCR model."""
+
     version: str
     base_model: str
     is_fine_tuned: bool
@@ -95,6 +104,7 @@ class ModelInfo:
 @dataclass
 class TrainingJob:
     """Training job information."""
+
     job_id: str
     status: JobStatus
     dataset_version: str
@@ -191,4 +201,5 @@ class OCRServiceProtocol(OCRInferenceProtocol, OCRTrainingProtocol, Protocol):
     For inference-only providers (e.g., commercial APIs), implement only
     OCRInferenceProtocol instead.
     """
+
     ...

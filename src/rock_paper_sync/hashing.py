@@ -49,7 +49,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .parser import ContentBlock
 
-def compute_semantic_hash(content_blocks: list['ContentBlock']) -> str:
+
+def compute_semantic_hash(content_blocks: list["ContentBlock"]) -> str:
     """Compute hash of semantic content (what renders).
 
     This hash is **stable** across:
@@ -96,10 +97,10 @@ def compute_semantic_hash(content_blocks: list['ContentBlock']) -> str:
     combined = "\n".join(canonical_parts)
 
     # Hash the combined canonical representation
-    return hashlib.sha256(combined.encode('utf-8')).hexdigest()
+    return hashlib.sha256(combined.encode("utf-8")).hexdigest()
 
 
-def _block_to_dict(block: 'ContentBlock') -> dict:
+def _block_to_dict(block: "ContentBlock") -> dict:
     """Convert ContentBlock to canonical dictionary for hashing.
 
     Args:
@@ -109,18 +110,18 @@ def _block_to_dict(block: 'ContentBlock') -> dict:
         Dictionary with canonical representation
     """
     result = {
-        'type': block.type.value,
-        'level': block.level,
-        'text': _normalize_text(block.text),
+        "type": block.type.value,
+        "level": block.level,
+        "text": _normalize_text(block.text),
     }
 
     # Include inline formatting if present
     if block.formatting:
-        result['formatting'] = [
+        result["formatting"] = [
             {
-                'style': f.style.value,
-                'start': f.start,
-                'end': f.end,
+                "style": f.style.value,
+                "start": f.start,
+                "end": f.end,
             }
             # Sort by position for deterministic ordering
             for f in sorted(block.formatting, key=lambda x: (x.start, x.end))
@@ -128,10 +129,7 @@ def _block_to_dict(block: 'ContentBlock') -> dict:
 
     # Include nested children if present (lists, blockquotes)
     if block.children:
-        result['children'] = [
-            _block_to_dict(child)
-            for child in block.children
-        ]
+        result["children"] = [_block_to_dict(child) for child in block.children]
 
     return result
 
@@ -156,7 +154,7 @@ def _normalize_text(text: str) -> str:
     normalized = text.strip()
 
     # Collapse multiple spaces/newlines to single space
-    normalized = ' '.join(normalized.split())
+    normalized = " ".join(normalized.split())
 
     return normalized
 
@@ -186,9 +184,9 @@ def compute_file_hash(file_path: Path) -> str:
     """
     hasher = hashlib.sha256()
 
-    with open(file_path, 'rb') as f:
+    with open(file_path, "rb") as f:
         # Read in chunks for memory efficiency with large files
-        for chunk in iter(lambda: f.read(8192), b''):
+        for chunk in iter(lambda: f.read(8192), b""):
             hasher.update(chunk)
 
     return hasher.hexdigest()
@@ -212,7 +210,7 @@ def compute_paragraph_hash(text: str) -> str:
         >>> assert hash1 == hash2  # Whitespace ignored
     """
     normalized = _normalize_text(text)
-    return hashlib.sha256(normalized.encode('utf-8')).hexdigest()
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 def compute_content_hash_from_text(text: str) -> str:
@@ -228,4 +226,4 @@ def compute_content_hash_from_text(text: str) -> str:
         SHA-256 hex digest of normalized text
     """
     normalized = _normalize_text(text)
-    return hashlib.sha256(normalized.encode('utf-8')).hexdigest()
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()

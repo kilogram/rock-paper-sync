@@ -53,8 +53,14 @@ def match_rm_block_to_markdown(
             return i
 
         # Prefix matching for longer blocks
-        if len(md_text) > MIN_TEXT_LENGTH_FOR_PREFIX_MATCH and len(rm_text) > MIN_TEXT_LENGTH_FOR_PREFIX_MATCH:
-            if md_text[:MIN_TEXT_LENGTH_FOR_PREFIX_MATCH] == rm_text[:MIN_TEXT_LENGTH_FOR_PREFIX_MATCH]:
+        if (
+            len(md_text) > MIN_TEXT_LENGTH_FOR_PREFIX_MATCH
+            and len(rm_text) > MIN_TEXT_LENGTH_FOR_PREFIX_MATCH
+        ):
+            if (
+                md_text[:MIN_TEXT_LENGTH_FOR_PREFIX_MATCH]
+                == rm_text[:MIN_TEXT_LENGTH_FOR_PREFIX_MATCH]
+            ):
                 return i
 
     return None

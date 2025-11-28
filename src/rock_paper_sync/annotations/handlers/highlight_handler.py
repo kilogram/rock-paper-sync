@@ -22,8 +22,8 @@ import re
 from pathlib import Path
 
 from rock_paper_sync.annotations import Annotation, AnnotationType, read_annotations
-from rock_paper_sync.annotations.common.text_extraction import extract_text_blocks_from_rm
 from rock_paper_sync.annotations.common.anchors import AnnotationAnchor
+from rock_paper_sync.annotations.common.text_extraction import extract_text_blocks_from_rm
 from rock_paper_sync.annotations.core.data_types import ExtractedAnnotation, RenderConfig
 
 logger = logging.getLogger(__name__)
@@ -52,11 +52,7 @@ class HighlightHandler:
             List of Annotation objects with type=HIGHLIGHT
         """
         all_annotations = read_annotations(rm_file_path)
-        highlights = [
-            anno
-            for anno in all_annotations
-            if anno.type == AnnotationType.HIGHLIGHT
-        ]
+        highlights = [anno for anno in all_annotations if anno.type == AnnotationType.HIGHLIGHT]
         logger.debug(f"Detected {len(highlights)} highlights in {rm_file_path.name}")
         return highlights
 
@@ -277,8 +273,10 @@ class HighlightHandler:
         # Extract context from paragraph
         if highlight_text and highlight_text in paragraph_text:
             offset = paragraph_text.find(highlight_text)
-            context_before = paragraph_text[max(0, offset - 50):offset]
-            context_after = paragraph_text[offset + len(highlight_text):offset + len(highlight_text) + 50]
+            context_before = paragraph_text[max(0, offset - 50) : offset]
+            context_after = paragraph_text[
+                offset + len(highlight_text) : offset + len(highlight_text) + 50
+            ]
         else:
             # Fallback: use paragraph boundaries
             context_before = paragraph_text[:50] if paragraph_text else ""
@@ -292,7 +290,7 @@ class HighlightHandler:
             paragraph_index=paragraph_index,
             context_before=context_before,
             context_after=context_after,
-            color=highlight.color if hasattr(highlight, 'color') else None,
+            color=highlight.color if hasattr(highlight, "color") else None,
         )
 
     def extract_from_markdown(
@@ -318,25 +316,27 @@ class HighlightHandler:
 
         if config.highlight_style == "mark":
             # Pattern: <mark>highlighted text</mark>
-            pattern = r'<mark>(.+?)</mark>'
+            pattern = r"<mark>(.+?)</mark>"
         elif config.highlight_style == "bold":
             # Pattern: **highlighted text**
-            pattern = r'\*\*(.+?)\*\*'
+            pattern = r"\*\*(.+?)\*\*"
         elif config.highlight_style == "italic":
             # Pattern: *highlighted text*
-            pattern = r'\*(.+?)\*'
+            pattern = r"\*(.+?)\*"
         else:
             logger.warning(f"Unknown highlight style: {config.highlight_style}")
             return []
 
         # Find all matches with their positions
         for match in re.finditer(pattern, paragraph):
-            extracted.append(ExtractedAnnotation(
-                text=match.group(1),
-                annotation_type="highlight",
-                start_offset=match.start(),
-                end_offset=match.end()
-            ))
+            extracted.append(
+                ExtractedAnnotation(
+                    text=match.group(1),
+                    annotation_type="highlight",
+                    start_offset=match.start(),
+                    end_offset=match.end(),
+                )
+            )
 
         logger.debug(
             f"Extracted {len(extracted)} highlights from paragraph "

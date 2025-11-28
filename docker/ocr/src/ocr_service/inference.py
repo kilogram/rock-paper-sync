@@ -1,8 +1,6 @@
 """TrOCR inference engine."""
 
 import logging
-import os
-from datetime import datetime
 from pathlib import Path
 
 import torch
@@ -52,6 +50,7 @@ class TrOCRInference:
                 metadata_path = Path(self.model_path) / "metadata.json"
                 if metadata_path.exists():
                     import json
+
                     with open(metadata_path) as f:
                         metadata = json.load(f)
                     self.model_version = metadata.get("version", "fine-tuned")
@@ -93,10 +92,9 @@ class TrOCRInference:
             raise RuntimeError("Model not loaded")
 
         # Preprocess image
-        pixel_values = self.processor(
-            images=image,
-            return_tensors="pt"
-        ).pixel_values.to(self.device)
+        pixel_values = self.processor(images=image, return_tensors="pt").pixel_values.to(
+            self.device
+        )
 
         # Generate text
         with torch.no_grad():
@@ -110,10 +108,7 @@ class TrOCRInference:
 
         # Decode text
         generated_ids = outputs.sequences
-        generated_text = self.processor.batch_decode(
-            generated_ids,
-            skip_special_tokens=True
-        )[0]
+        generated_text = self.processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
 
         # Calculate confidence (SIMPLIFIED ESTIMATE - see limitations below)
         #
@@ -133,7 +128,9 @@ class TrOCRInference:
             confidence = top_probs.mean().item()
         else:
             # No scores available - return low confidence rather than fake middle value
-            confidence = 0.3  # Low confidence indicator (was 0.5, changed to avoid misleading users)
+            confidence = (
+                0.3  # Low confidence indicator (was 0.5, changed to avoid misleading users)
+            )
 
         return generated_text, confidence
 

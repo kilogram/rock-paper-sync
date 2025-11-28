@@ -25,20 +25,18 @@ from dataclasses import dataclass
 logger = logging.getLogger("rock_paper_sync.ocr.markers")
 
 # Marker patterns
-ANNOTATED_PATTERN = re.compile(
-    r'<!-- RPS:ANNOTATED\s+highlights=(\d+)\s+strokes=(\d+)\s*-->'
-)
+ANNOTATED_PATTERN = re.compile(r"<!-- RPS:ANNOTATED\s+highlights=(\d+)\s+strokes=(\d+)\s*-->")
 OCR_MARKER = "<!-- RPS:OCR -->"
 END_MARKER = "<!-- RPS:END -->"
 
 # Full block pattern for extraction
 BLOCK_PATTERN = re.compile(
-    r'<!-- RPS:ANNOTATED\s+highlights=(\d+)\s+strokes=(\d+)\s*-->\n'
-    r'(.*?)\n'
-    r'<!-- RPS:OCR -->\n'
-    r'(.*?)\n'
-    r'<!-- RPS:END -->',
-    re.DOTALL
+    r"<!-- RPS:ANNOTATED\s+highlights=(\d+)\s+strokes=(\d+)\s*-->\n"
+    r"(.*?)\n"
+    r"<!-- RPS:OCR -->\n"
+    r"(.*?)\n"
+    r"<!-- RPS:END -->",
+    re.DOTALL,
 )
 
 
@@ -119,15 +117,17 @@ def parse_ocr_blocks(markdown: str) -> list[OCRBlock]:
         original_text = match.group(3).strip()
         ocr_text = match.group(4).strip()
 
-        blocks.append(OCRBlock(
-            paragraph_index=i,  # Will be updated by caller with actual index
-            highlights=highlights,
-            strokes=strokes,
-            original_text=original_text,
-            ocr_text=ocr_text,
-            original_text_hash=_hash_text(original_text),
-            ocr_text_hash=_hash_text(ocr_text),
-        ))
+        blocks.append(
+            OCRBlock(
+                paragraph_index=i,  # Will be updated by caller with actual index
+                highlights=highlights,
+                strokes=strokes,
+                original_text=original_text,
+                ocr_text=ocr_text,
+                original_text_hash=_hash_text(original_text),
+                ocr_text_hash=_hash_text(ocr_text),
+            )
+        )
 
     return blocks
 
@@ -144,6 +144,7 @@ def strip_ocr_markers(markdown: str) -> str:
     Returns:
         Clean markdown with markers removed
     """
+
     def replace_block(match: re.Match) -> str:
         # Return only the original text
         return match.group(3).strip()
@@ -171,7 +172,7 @@ def add_ocr_markers(
     if not ocr_results:
         return markdown
 
-    lines = markdown.split('\n')
+    lines = markdown.split("\n")
     result_lines = []
     paragraph_index = 0
     in_paragraph = False
@@ -205,7 +206,7 @@ def add_ocr_markers(
                     annotation, ocr_lines = ocr_results[paragraph_index]
 
                     # Get paragraph text
-                    para_text = '\n'.join(result_lines[paragraph_start:])
+                    para_text = "\n".join(result_lines[paragraph_start:])
 
                     # Replace paragraph with OCR block
                     result_lines = result_lines[:paragraph_start]
@@ -220,11 +221,11 @@ def add_ocr_markers(
     # Handle final paragraph
     if in_paragraph and paragraph_index in ocr_results:
         annotation, ocr_lines = ocr_results[paragraph_index]
-        para_text = '\n'.join(result_lines[paragraph_start:])
+        para_text = "\n".join(result_lines[paragraph_start:])
         result_lines = result_lines[:paragraph_start]
         result_lines.append(generate_ocr_block(annotation, para_text, ocr_lines))
 
-    return '\n'.join(result_lines)
+    return "\n".join(result_lines)
 
 
 def extract_paragraph_index_mapping(markdown: str) -> dict[int, OCRBlock]:
@@ -240,7 +241,7 @@ def extract_paragraph_index_mapping(markdown: str) -> dict[int, OCRBlock]:
         Dict mapping paragraph_index to OCRBlock
     """
     blocks = {}
-    lines = markdown.split('\n')
+    lines = markdown.split("\n")
     paragraph_index = 0
     i = 0
 
@@ -270,8 +271,8 @@ def extract_paragraph_index_mapping(markdown: str) -> dict[int, OCRBlock]:
                 ocr_lines.append(lines[i])
                 i += 1
 
-            original_text = '\n'.join(original_lines).strip()
-            ocr_text = '\n'.join(ocr_lines).strip()
+            original_text = "\n".join(original_lines).strip()
+            ocr_text = "\n".join(ocr_lines).strip()
 
             blocks[paragraph_index] = OCRBlock(
                 paragraph_index=paragraph_index,
@@ -308,7 +309,7 @@ def _hash_text(text: str) -> str:
     Returns:
         Hexadecimal hash string
     """
-    return hashlib.sha256(text.encode('utf-8')).hexdigest()
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def find_ocr_blocks_needing_attention(
@@ -339,15 +340,11 @@ def find_ocr_blocks_needing_attention(
         # Check for original text modification (conflict)
         if block.original_text_hash != stored_original_hash:
             conflicts.append(para_idx)
-            logger.warning(
-                f"Paragraph {para_idx} original text modified - requires re-sync"
-            )
+            logger.warning(f"Paragraph {para_idx} original text modified - requires re-sync")
 
         # Check for OCR text correction
         elif block.ocr_text_hash != stored_ocr_hash:
             corrections.append(para_idx)
-            logger.info(
-                f"Paragraph {para_idx} OCR text corrected - will use for training"
-            )
+            logger.info(f"Paragraph {para_idx} OCR text corrected - will use for training")
 
     return corrections, conflicts

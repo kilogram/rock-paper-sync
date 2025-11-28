@@ -8,14 +8,14 @@ Format: test_issue_XXX_reproduces_problem() - Documents the bug
         test_issue_XXX_fix_verified() - Verifies the fix works
 """
 
-import pytest
-from pathlib import Path
-from unittest.mock import MagicMock, patch
-import time
 import logging
+import time
+from pathlib import Path
+
+import pytest
 
 from rock_paper_sync.config import AppConfig
-from rock_paper_sync.converter import SyncEngine, ResyncRequired
+from rock_paper_sync.converter import ResyncRequiredError, SyncEngine
 from rock_paper_sync.state import StateManager
 from rock_paper_sync.sync_v3 import GenerationConflictError
 
@@ -52,10 +52,7 @@ class TestIssue1FinalizeSyncGenerationIncrement:
         apply_calls = []
 
         def track_apply(virtual_state, broadcast=True):
-            apply_calls.append({
-                "broadcast": broadcast,
-                "timestamp": time.time()
-            })
+            apply_calls.append({"broadcast": broadcast, "timestamp": time.time()})
             return 1  # Simulate generation increment
 
         mock_cloud_sync.apply_virtual_state.side_effect = track_apply
@@ -72,9 +69,7 @@ class TestIssue1FinalizeSyncGenerationIncrement:
         )
 
         # Verify broadcast=True for device notification
-        assert apply_calls[0]["broadcast"] is True, (
-            "Atomic root update should broadcast to device"
-        )
+        assert apply_calls[0]["broadcast"] is True, "Atomic root update should broadcast to device"
 
         # Verify state was updated
         assert removed > 0, "Files should be removed from state"
@@ -110,15 +105,15 @@ class TestIssue3ResyncRequiredContextLoss:
             engine.sync_file(vault, temp_vault / f"file{i}.md")
 
         # Trigger generation conflict at the atomic update point
-        mock_cloud_sync.apply_virtual_state.side_effect = (
-            GenerationConflictError(expected=0, actual=1)
+        mock_cloud_sync.apply_virtual_state.side_effect = GenerationConflictError(
+            expected=0, actual=1
         )
 
         # Catch ResyncRequired exception
         try:
             engine.unsync_vault("test-vault", delete_from_cloud=True)
             pytest.fail("Expected ResyncRequired to be raised")
-        except ResyncRequired as exc:
+        except ResyncRequiredError as exc:
             # Check what context is available
             context_items = {
                 "vault_name": hasattr(exc, "vault_name") and exc.vault_name == "test-vault",
@@ -127,15 +122,13 @@ class TestIssue3ResyncRequiredContextLoss:
             }
 
             # Verify essential context is present
-            assert context_items["vault_name"], (
-                "ResyncRequired should include vault_name for proper handling"
-            )
-            assert context_items["reason"], (
-                "ResyncRequired should include reason for debugging"
-            )
-            assert context_items["conflict_error"], (
-                "ResyncRequired should include original conflict_error for context"
-            )
+            assert context_items[
+                "vault_name"
+            ], "ResyncRequired should include vault_name for proper handling"
+            assert context_items["reason"], "ResyncRequired should include reason for debugging"
+            assert context_items[
+                "conflict_error"
+            ], "ResyncRequired should include original conflict_error for context"
 
 
 class TestIssue4StateDivergenceOnFinalizeFailure:
@@ -174,7 +167,7 @@ class TestIssue4StateDivergenceOnFinalizeFailure:
         )
 
         # Unsync should raise ResyncRequired
-        with pytest.raises(ResyncRequired):
+        with pytest.raises(ResyncRequiredError):
             engine.unsync_vault("test-vault", delete_from_cloud=True)
 
         # VERIFY FIX: State should remain UNCHANGED (atomic guarantee)
@@ -222,7 +215,7 @@ class TestIssue6MissingTransactionSemantics:
         )
 
         # Unsync should raise ResyncRequired
-        with pytest.raises(ResyncRequired):
+        with pytest.raises(ResyncRequiredError):
             engine.unsync_vault("test-vault", delete_from_cloud=True)
 
         # VERIFY FIX: State is entirely unchanged (true atomicity)
@@ -258,14 +251,12 @@ class TestIssue8MissingVaultNameInLogs:
         vault = integration_config.sync.vaults[0]
         engine.sync_file(vault, temp_vault / "test.md")
 
-        mock_cloud_sync.update_root.side_effect = (
-            GenerationConflictError(expected=0, actual=1)
-        )
+        mock_cloud_sync.update_root.side_effect = GenerationConflictError(expected=0, actual=1)
 
         with caplog.at_level(logging.WARNING):
             try:
                 engine.unsync_vault("test-vault", delete_from_cloud=True)
-            except ResyncRequired:
+            except ResyncRequiredError:
                 pass
 
         # Check if vault name is in the generation conflict log
@@ -299,6 +290,7 @@ class TestIssue9MagicNumbersInRetryLogic:
         # Expected locations: _retry_with_backoff default parameters
 
         import inspect
+
         from rock_paper_sync.converter import SyncEngine
 
         source = inspect.getsource(SyncEngine._retry_with_backoff)
@@ -307,8 +299,8 @@ class TestIssue9MagicNumbersInRetryLogic:
         if "max_retries: int = 3" in source or "base_delay: float = 1.0" in source:
             # ISSUE REPRODUCED: Magic numbers in function signature
             pytest.fail(
-                f"ISSUE #9 REPRODUCED: Magic numbers found in retry logic. "
-                f"Should use class constants instead of hardcoded defaults in function signature."
+                "ISSUE #9 REPRODUCED: Magic numbers found in retry logic. "
+                "Should use class constants instead of hardcoded defaults in function signature."
             )
 
 
@@ -337,6 +329,7 @@ class TestIssue10MethodLengthAndComplexity:
     def test_issue_10_verify_improvement_via_virtualdevicestate(self) -> None:
         """VERIFY IMPROVEMENT: Method refactored with VirtualDeviceState pattern."""
         import inspect
+
         from rock_paper_sync.converter import SyncEngine
 
         source = inspect.getsource(SyncEngine.unsync_vault)
@@ -350,6 +343,4 @@ class TestIssue10MethodLengthAndComplexity:
         )
 
         # Verify we're not using the old staging pattern
-        assert "stage_documents_batch_deletion" not in source, (
-            "Should not use old staging pattern"
-        )
+        assert "stage_documents_batch_deletion" not in source, "Should not use old staging pattern"

@@ -5,8 +5,6 @@ Detects user corrections to OCR text and stores them for fine-tuning.
 
 import hashlib
 import logging
-import os
-import shutil
 import time
 import uuid
 from dataclasses import dataclass
@@ -155,7 +153,7 @@ class CorrectionManager:
 
         if not image_path.exists():
             # Use temp file + atomic rename to avoid race conditions
-            temp_path = image_path.with_suffix('.tmp')
+            temp_path = image_path.with_suffix(".tmp")
             try:
                 with open(temp_path, "wb") as f:
                     f.write(image_data)

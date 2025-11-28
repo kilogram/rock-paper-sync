@@ -10,7 +10,6 @@ generator output can be correctly parsed by rmscene.
 import io
 from pathlib import Path
 
-import pytest
 import rmscene
 
 from rock_paper_sync.config import LayoutConfig
@@ -20,7 +19,6 @@ from rock_paper_sync.parser import (
     ContentBlock,
     FormatStyle,
     MarkdownDocument,
-    TextFormat,
     parse_markdown_file,
 )
 
@@ -37,11 +35,11 @@ class TestRoundtripBasic:
 
         # Write to .rm file
         rm_file = tmp_path / "test.rm"
-        with rm_file.open('wb') as f:
+        with rm_file.open("wb") as f:
             rmscene.write_blocks(f, blocks)
 
         # Read back
-        with rm_file.open('rb') as f:
+        with rm_file.open("rb") as f:
             read_blocks = list(rmscene.read_blocks(f))
 
         # Verify we got blocks back
@@ -74,11 +72,7 @@ Another paragraph here.
 
         # Generate .rm file using our generator
         layout = LayoutConfig(
-            lines_per_page=45,
-            margin_top=50,
-            margin_bottom=50,
-            margin_left=50,
-            margin_right=50
+            lines_per_page=45, margin_top=50, margin_bottom=50, margin_left=50, margin_right=50
         )
         generator = RemarkableGenerator(layout)
         rm_doc = generator.generate_document(md_doc)
@@ -110,8 +104,7 @@ class TestRoundtripMultiPage:
         md_file = tmp_path / "long.md"
         sections = []
         for i in range(10):
-            sections.append(f"## Section {i+1}\n\n" +
-                          "Lorem ipsum dolor sit amet. " * 20)
+            sections.append(f"## Section {i+1}\n\n" + "Lorem ipsum dolor sit amet. " * 20)
         md_file.write_text("\n\n".join(sections))
 
         # Parse and generate
@@ -121,7 +114,7 @@ class TestRoundtripMultiPage:
             margin_top=50,
             margin_bottom=50,
             margin_left=50,
-            margin_right=50
+            margin_right=50,
         )
         generator = RemarkableGenerator(layout)
         rm_doc = generator.generate_document(md_doc)
@@ -154,11 +147,7 @@ class TestRoundtripMultiPage:
         # Parse and generate
         md_doc = parse_markdown_file(md_file)
         layout = LayoutConfig(
-            lines_per_page=45,
-            margin_top=50,
-            margin_bottom=50,
-            margin_left=50,
-            margin_right=50
+            lines_per_page=45, margin_top=50, margin_bottom=50, margin_left=50, margin_right=50
         )
         generator = RemarkableGenerator(layout)
         rm_doc = generator.generate_document(md_doc)
@@ -225,11 +214,7 @@ This has [links](https://example.com) in it.
 
         # Generate .rm file
         layout = LayoutConfig(
-            lines_per_page=45,
-            margin_top=50,
-            margin_bottom=50,
-            margin_left=50,
-            margin_right=50
+            lines_per_page=45, margin_top=50, margin_bottom=50, margin_left=50, margin_right=50
         )
         generator = RemarkableGenerator(layout)
         rm_doc = generator.generate_document(md_doc)
@@ -317,11 +302,7 @@ That's all folks!
 
         # Generate .rm file
         layout = LayoutConfig(
-            lines_per_page=45,
-            margin_top=50,
-            margin_bottom=50,
-            margin_left=50,
-            margin_right=50
+            lines_per_page=45, margin_top=50, margin_bottom=50, margin_left=50, margin_right=50
         )
         generator = RemarkableGenerator(layout)
         rm_doc = generator.generate_document(md_doc)
@@ -353,11 +334,7 @@ And math: ∑ ∫ ∂ √ ∞
         # Parse and generate
         md_doc = parse_markdown_file(md_file)
         layout = LayoutConfig(
-            lines_per_page=45,
-            margin_top=50,
-            margin_bottom=50,
-            margin_left=50,
-            margin_right=50
+            lines_per_page=45, margin_top=50, margin_bottom=50, margin_left=50, margin_right=50
         )
         generator = RemarkableGenerator(layout)
         rm_doc = generator.generate_document(md_doc)
@@ -381,8 +358,8 @@ class TestRoundtripMetadata:
     def test_metadata_files_valid_json(self, tmp_path: Path) -> None:
         """Test that generated metadata structures are valid."""
         from rock_paper_sync.metadata import (
-            generate_document_metadata,
             generate_content_metadata,
+            generate_document_metadata,
             generate_page_metadata,
         )
 
@@ -393,11 +370,7 @@ class TestRoundtripMetadata:
         # Parse and generate
         md_doc = parse_markdown_file(md_file)
         layout = LayoutConfig(
-            lines_per_page=45,
-            margin_top=50,
-            margin_bottom=50,
-            margin_left=50,
-            margin_right=50
+            lines_per_page=45, margin_top=50, margin_bottom=50, margin_left=50, margin_right=50
         )
         generator = RemarkableGenerator(layout)
         rm_doc = generator.generate_document(md_doc)
@@ -435,11 +408,7 @@ title: My Awesome Document
         assert md_doc.title == "My Awesome Document"
 
         layout = LayoutConfig(
-            lines_per_page=45,
-            margin_top=50,
-            margin_bottom=50,
-            margin_left=50,
-            margin_right=50
+            lines_per_page=45, margin_top=50, margin_bottom=50, margin_left=50, margin_right=50
         )
         generator = RemarkableGenerator(layout)
         rm_doc = generator.generate_document(md_doc)
@@ -456,11 +425,7 @@ class TestDocumentUpdates:
         from datetime import datetime
 
         layout = LayoutConfig(
-            lines_per_page=45,
-            margin_top=50,
-            margin_bottom=50,
-            margin_left=50,
-            margin_right=50
+            lines_per_page=45, margin_top=50, margin_bottom=50, margin_left=50, margin_right=50
         )
         generator = RemarkableGenerator(layout)
 
@@ -474,7 +439,7 @@ class TestDocumentUpdates:
             ],
             frontmatter={},
             last_modified=datetime.now(),
-            content_hash="hash1"
+            content_hash="hash1",
         )
 
         # Generate with specific UUID
@@ -491,7 +456,7 @@ class TestDocumentUpdates:
             ],
             frontmatter={},
             last_modified=datetime.now(),
-            content_hash="hash2"
+            content_hash="hash2",
         )
 
         # Generate update with SAME UUID
@@ -506,7 +471,9 @@ class TestDocumentUpdates:
         """Test updating a document that changes page count."""
         from datetime import datetime
 
-        layout = LayoutConfig(lines_per_page=5, margin_top=50, margin_bottom=50, margin_left=50, margin_right=50)
+        layout = LayoutConfig(
+            lines_per_page=5, margin_top=50, margin_bottom=50, margin_left=50, margin_right=50
+        )
         generator = RemarkableGenerator(layout)
 
         # Short document (1 page)
@@ -517,7 +484,7 @@ class TestDocumentUpdates:
             content=short_content,
             frontmatter={},
             last_modified=datetime.now(),
-            content_hash="hash1"
+            content_hash="hash1",
         )
 
         rm_short = generator.generate_document(md_short, "", "fixed-uuid")
@@ -526,8 +493,7 @@ class TestDocumentUpdates:
 
         # Long document (multiple pages)
         long_content = [
-            ContentBlock(BlockType.PARAGRAPH, 0, f"Paragraph {i}", [])
-            for i in range(20)
+            ContentBlock(BlockType.PARAGRAPH, 0, f"Paragraph {i}", []) for i in range(20)
         ]
         md_long = MarkdownDocument(
             path=tmp_path / "test.md",
@@ -535,7 +501,7 @@ class TestDocumentUpdates:
             content=long_content,
             frontmatter={},
             last_modified=datetime.now(),
-            content_hash="hash2"
+            content_hash="hash2",
         )
 
         rm_long = generator.generate_document(md_long, "", "fixed-uuid")
@@ -546,7 +512,9 @@ class TestDocumentUpdates:
         """Test round-trip with content updates."""
         from datetime import datetime
 
-        layout = LayoutConfig(lines_per_page=45, margin_top=50, margin_bottom=50, margin_left=50, margin_right=50)
+        layout = LayoutConfig(
+            lines_per_page=45, margin_top=50, margin_bottom=50, margin_left=50, margin_right=50
+        )
         generator = RemarkableGenerator(layout)
 
         # Version 1
@@ -559,7 +527,7 @@ class TestDocumentUpdates:
             ],
             frontmatter={},
             last_modified=datetime.now(),
-            content_hash="v1"
+            content_hash="v1",
         )
 
         rm_v1 = generator.generate_document(md_v1, "", "stable-uuid")
@@ -582,7 +550,7 @@ class TestDocumentUpdates:
             ],
             frontmatter={},
             last_modified=datetime.now(),
-            content_hash="v2"
+            content_hash="v2",
         )
 
         rm_v2 = generator.generate_document(md_v2, "", "stable-uuid")
@@ -600,9 +568,12 @@ class TestDocumentUpdates:
         """Test that metadata timestamp is updated on content changes."""
         import time
         from datetime import datetime
+
         from rock_paper_sync.metadata import generate_document_metadata
 
-        layout = LayoutConfig(lines_per_page=45, margin_top=50, margin_bottom=50, margin_left=50, margin_right=50)
+        layout = LayoutConfig(
+            lines_per_page=45, margin_top=50, margin_bottom=50, margin_left=50, margin_right=50
+        )
         generator = RemarkableGenerator(layout)
 
         md_doc = MarkdownDocument(
@@ -611,7 +582,7 @@ class TestDocumentUpdates:
             content=[ContentBlock(BlockType.PARAGRAPH, 0, "Content", [])],
             frontmatter={},
             last_modified=datetime.now(),
-            content_hash="v1"
+            content_hash="v1",
         )
 
         # First generation
@@ -637,8 +608,8 @@ class TestDocumentUpdates:
         assert timestamp_v2 >= timestamp_v1  # May be equal if system clock doesn't advance
 
 
-
 # Helper functions
+
 
 def extract_text_from_blocks(blocks: list) -> str:
     """Extract text content from rmscene blocks.
@@ -655,12 +626,12 @@ def extract_text_from_blocks(blocks: list) -> str:
         if isinstance(block, RootTextBlock):
             # RootTextBlock has a value attribute which is a Text object
             # Text has an items attribute which is a CrdtSequence
-            if hasattr(block, 'value') and hasattr(block.value, 'items'):
+            if hasattr(block, "value") and hasattr(block.value, "items"):
                 # CrdtSequence has an internal _items dict mapping CrdtId -> CrdtSequenceItem
-                if hasattr(block.value.items, '_items'):
+                if hasattr(block.value.items, "_items"):
                     for item_id, item_data in block.value.items._items.items():
                         # Each CrdtSequenceItem has a value which is the actual text string
-                        if hasattr(item_data, 'value') and isinstance(item_data.value, str):
+                        if hasattr(item_data, "value") and isinstance(item_data.value, str):
                             text_parts.append(item_data.value)
 
     return " ".join(text_parts)

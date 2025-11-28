@@ -67,6 +67,9 @@ target-version = ["py310"]
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+exclude = ["tools/", "docker/"]
+
+[tool.ruff.lint]
 select = [
     "E",   # pycodestyle errors
     "F",   # pyflakes
@@ -76,23 +79,8 @@ select = [
     "UP",  # pyupgrade
 ]
 ignore = [
-    "E501",  # line too long (handled by black)
+    "E501",  # line too long
 ]
-
-[tool.mypy]
-python_version = "3.10"
-strict = true
-warn_return_any = true
-warn_unused_configs = true
-disallow_untyped_defs = true
-
-[[tool.mypy.overrides]]
-module = [
-    "rmscene.*",
-    "mistune.*",
-    "watchdog.*",
-]
-ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -123,10 +111,16 @@ exclude_lines = [
     "if TYPE_CHECKING:",
 ]
 
+[tool.ty.src]
+include = ["src"]
+exclude = ["tools/"]
+
 [dependency-groups]
 dev = [
     "pytest>=9.0.1",
     "pytest-cov>=7.0.0",
     "pytest-docker>=3.2.5",
     "pytest-mock>=3.15.1",
+    "ruff>=0.14.5",
+    "ty>=0.0.1a28",
 ]

@@ -30,7 +30,7 @@ Example usage:
 """
 
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from rock_paper_sync.annotations.common.anchors import AnnotationAnchor

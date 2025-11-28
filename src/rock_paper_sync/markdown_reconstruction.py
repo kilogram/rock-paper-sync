@@ -17,10 +17,10 @@ Example:
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .parser import ContentBlock, BlockType, FormatStyle
+    from .parser import ContentBlock
 
 
-def block_to_markdown(block: 'ContentBlock', indent_level: int = 0) -> str:
+def block_to_markdown(block: "ContentBlock", indent_level: int = 0) -> str:
     """Convert a single ContentBlock to markdown text.
 
     Args:
@@ -114,10 +114,10 @@ def apply_inline_formatting(text: str, formatting: list) -> str:
     for fmt in sorted_fmt:
         # Add text before this formatting
         if fmt.start > pos:
-            result.append(text[pos:fmt.start])
+            result.append(text[pos : fmt.start])
 
         # Get formatted segment
-        segment = text[fmt.start:fmt.end]
+        segment = text[fmt.start : fmt.end]
 
         # Apply formatting markers
         if fmt.style == FormatStyle.BOLD:
@@ -141,10 +141,10 @@ def apply_inline_formatting(text: str, formatting: list) -> str:
     if pos < len(text):
         result.append(text[pos:])
 
-    return ''.join(result)
+    return "".join(result)
 
 
-def blocks_to_markdown(blocks: list['ContentBlock'], indent_level: int = 0) -> str:
+def blocks_to_markdown(blocks: list["ContentBlock"], indent_level: int = 0) -> str:
     """Convert list of ContentBlocks to markdown text.
 
     Args:

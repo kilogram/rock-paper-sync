@@ -169,9 +169,7 @@ class CoordinateTransformer:
         """
         from .annotations import Point
 
-        abs_x, abs_y = self.to_absolute(
-            point.x, point.y, parent_id, anchor_x, stroke_center_y
-        )
+        abs_x, abs_y = self.to_absolute(point.x, point.y, parent_id, anchor_x, stroke_center_y)
         return Point(x=abs_x, y=abs_y)
 
     def transform_bbox(
@@ -196,9 +194,7 @@ class CoordinateTransformer:
         stroke_center_y = bbox.y + bbox.h / 2
 
         # Transform top-left corner
-        abs_x, abs_y = self.to_absolute(
-            bbox.x, bbox.y, parent_id, anchor_x, stroke_center_y
-        )
+        abs_x, abs_y = self.to_absolute(bbox.x, bbox.y, parent_id, anchor_x, stroke_center_y)
 
         return Rectangle(x=abs_x, y=abs_y, w=bbox.w, h=bbox.h)
 
@@ -252,9 +248,10 @@ def build_parent_anchor_map(rm_file: Path) -> dict["CrdtId", AnchorOrigin]:
     """
     import rmscene
     from rmscene.scene_stream import TreeNodeBlock
+
     from .annotations.common.text_extraction import extract_text_blocks_from_rm
 
-    parent_to_anchor: dict["CrdtId", AnchorOrigin] = {}
+    parent_to_anchor: dict[CrdtId, AnchorOrigin] = {}
 
     try:
         # Extract TreeNodeBlocks
@@ -334,7 +331,6 @@ def get_annotation_center_y(block, text_origin_y: float = DEFAULT_TEXT_ORIGIN_Y)
     Returns:
         Center Y in absolute coordinates, or None if cannot determine
     """
-    from rmscene.tagged_block_common import CrdtId
 
     try:
         if not hasattr(block, "item") or not hasattr(block.item, "value"):

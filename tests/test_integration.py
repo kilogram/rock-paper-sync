@@ -4,13 +4,19 @@ These tests verify that all components work together correctly, from markdown
 parsing through state management to eventual file generation.
 """
 
-import hashlib
 import time
 from pathlib import Path
 
 import pytest
 
-from rock_paper_sync.config import AppConfig, CloudConfig, LayoutConfig, OCRConfig, SyncConfig, VaultConfig
+from rock_paper_sync.config import (
+    AppConfig,
+    CloudConfig,
+    LayoutConfig,
+    OCRConfig,
+    SyncConfig,
+    VaultConfig,
+)
 from rock_paper_sync.parser import BlockType, FormatStyle, parse_markdown_file
 from rock_paper_sync.state import StateManager, SyncRecord
 
@@ -40,9 +46,7 @@ def integration_env(tmp_path: Path):
             state_database=db,
             debounce_seconds=1,
         ),
-        cloud=CloudConfig(
-            base_url="http://localhost:3000"
-        ),
+        cloud=CloudConfig(base_url="http://localhost:3000"),
         layout=LayoutConfig(
             lines_per_page=45,
             margin_top=50,
@@ -413,7 +417,9 @@ Second paragraph with ***bold italic*** combined.
         doc = parse_markdown_file(format_file)
 
         # Find paragraph with multiple formats
-        para = next(b for b in doc.content if b.type == BlockType.PARAGRAPH and len(b.formatting) > 1)
+        para = next(
+            b for b in doc.content if b.type == BlockType.PARAGRAPH and len(b.formatting) > 1
+        )
 
         # Verify each formatting is accurate
         for fmt in para.formatting:
@@ -577,7 +583,6 @@ class TestFullPipelineStubs:
         results1 = engine.sync_all_changed()
         assert len(results1) == 1
         assert results1[0].success
-        uuid1 = results1[0].remarkable_uuid
 
         # Reset mock to track second sync
         mock_cloud_sync.reset_mock()
@@ -978,11 +983,13 @@ class TestDocumentUpdateFlow:
 
         # Update
         test_file.write_text("# V2\n\nSecond.")
-        result2 = engine.sync_file(vault_config, test_file)
+        engine.sync_file(vault_config, test_file)
 
         # Check updated state
         file_state2 = state.get_file_state("test-vault", "tracked.md")
         assert file_state2 is not None
         assert file_state2.remarkable_uuid == uuid  # Same UUID
         assert file_state2.content_hash != hash1  # Different hash
-        assert file_state2.last_sync_time >= file_state1.last_sync_time  # Should increase or stay same
+        assert (
+            file_state2.last_sync_time >= file_state1.last_sync_time
+        )  # Should increase or stay same

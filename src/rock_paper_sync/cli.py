@@ -133,7 +133,6 @@ def sync(ctx: click.Context, dry_run: bool, vault: str | None) -> None:
 
     uploaded_count = sum(1 for r in results if r.success and not r.skipped)
     skipped_count = sum(1 for r in results if r.success and r.skipped)
-    failed_count = sum(1 for r in results if not r.success)
 
     if skipped_count > 0:
         click.echo(f"\nSynced {uploaded_count}/{len(results)} file(s), {skipped_count} unchanged")
@@ -202,7 +201,9 @@ def unsync(ctx: click.Context, vault: str | None, delete_from_cloud: bool, yes: 
             return
 
     # Confirm unless --yes flag is set
-    if not yes and not click.confirm("This will remove sync state for the specified vault(s). Continue?"):
+    if not yes and not click.confirm(
+        "This will remove sync state for the specified vault(s). Continue?"
+    ):
         click.echo("Aborted.")
         ctx.exit(1)
 
@@ -219,9 +220,7 @@ def unsync(ctx: click.Context, vault: str | None, delete_from_cloud: bool, yes: 
         if vault:
             # Unsync specific vault
             click.echo(f"Unsyncing vault '{vault}'...")
-            removed, deleted = engine.unsync_vault(
-                vault, delete_from_cloud=delete_from_cloud
-            )
+            removed, deleted = engine.unsync_vault(vault, delete_from_cloud=delete_from_cloud)
 
             click.echo(f"\nVault '{vault}' unsynced:")
             click.echo(f"  - {removed} file(s) removed from sync state")
@@ -252,6 +251,7 @@ def unsync(ctx: click.Context, vault: str | None, delete_from_cloud: bool, yes: 
     except Exception as e:
         click.echo(f"Error during unsync: {e}", err=True)
         import traceback
+
         traceback.print_exc()
     finally:
         state.close()
@@ -300,9 +300,13 @@ def watch(ctx: click.Context, vault: str | None) -> None:  # pragma: no cover
 
         result = engine.sync_file(vault_config, file_path)
         if result.success:
-            click.echo(f"[{vault_config.name}] Synced: {file_path.name} ({result.page_count} page(s))")
+            click.echo(
+                f"[{vault_config.name}] Synced: {file_path.name} ({result.page_count} page(s))"
+            )
         else:
-            click.echo(f"[{vault_config.name}] Error syncing {file_path.name}: {result.error}", err=True)
+            click.echo(
+                f"[{vault_config.name}] Error syncing {file_path.name}: {result.error}", err=True
+            )
 
     # Create watchers for all relevant vaults
     watchers = []
@@ -406,8 +410,10 @@ def status(ctx: click.Context, vault: str | None) -> None:
             vault_stats = state.get_stats(vault_name=v.name)
             total = sum(vault_stats.values())
             if total > 0:
-                click.echo(f"  {v.name}: {vault_stats.get('synced', 0)} synced, "
-                          f"{vault_stats.get('error', 0)} errors")
+                click.echo(
+                    f"  {v.name}: {vault_stats.get('synced', 0)} synced, "
+                    f"{vault_stats.get('error', 0)} errors"
+                )
 
         # Recent activity across all vaults
         history = state.get_recent_history(limit=10)
@@ -415,7 +421,9 @@ def status(ctx: click.Context, vault: str | None) -> None:
             click.echo("\nRecent Activity:")
             for vault_name, obsidian_path, action, timestamp, details in history:
                 dt = datetime.fromtimestamp(timestamp)
-                click.echo(f"  {dt.strftime('%Y-%m-%d %H:%M')} [{vault_name}] {action:8s} {obsidian_path}")
+                click.echo(
+                    f"  {dt.strftime('%Y-%m-%d %H:%M')} [{vault_name}] {action:8s} {obsidian_path}"
+                )
         else:
             click.echo("\nNo sync history yet")
 
@@ -423,9 +431,7 @@ def status(ctx: click.Context, vault: str | None) -> None:
 
 
 @main.command()
-@click.confirmation_option(
-    prompt="This will clear all sync state. Continue?"
-)
+@click.confirmation_option(prompt="This will clear all sync state. Continue?")
 @click.pass_context
 def reset(ctx: click.Context) -> None:
     """Clear sync state (force full re-sync).
@@ -565,7 +571,7 @@ def register(ctx: click.Context, device_id: str, code: str) -> None:
     try:
         click.echo(f"Registering device '{device_id}' with {url}...")
         creds = client.register_device(code, device_id)
-        click.echo(f"✓ Device registered successfully!")
+        click.echo("✓ Device registered successfully!")
         click.echo(f"  Device ID: {creds.device_id}")
         click.echo(f"  Credentials saved to: {client.credentials_path}")
     except Exception as e:
@@ -626,7 +632,7 @@ def ocr_status(ctx: click.Context) -> None:
         click.echo("Set [ocr] enabled = true to enable OCR processing")
         return
 
-    click.echo(f"OCR Configuration:")
+    click.echo("OCR Configuration:")
     click.echo(f"  Provider: {config.ocr.provider}")
     click.echo(f"  Model version: {config.ocr.model_version}")
     click.echo(f"  Cache directory: {config.ocr.cache_dir}")
@@ -636,6 +642,7 @@ def ocr_status(ctx: click.Context) -> None:
     state = StateManager(config.sync.state_database)
 
     from rock_paper_sync.ocr.training import TrainingPipeline
+
     pipeline = TrainingPipeline(config.ocr, state)
     stats = pipeline.get_stats()
 
@@ -657,6 +664,7 @@ def ocr_status(ctx: click.Context) -> None:
     if config.ocr.provider == "runpods":
         try:
             from rock_paper_sync.ocr.factory import create_ocr_service
+
             service = create_ocr_service(config.ocr)
             if service.health_check():
                 click.echo("\nService status: healthy")
@@ -707,6 +715,7 @@ def ocr_train(
     state = StateManager(config.sync.state_database)
 
     from rock_paper_sync.ocr.training import TrainingPipeline
+
     pipeline = TrainingPipeline(config.ocr, state)
 
     # Create dataset if not specified
@@ -716,10 +725,7 @@ def ocr_train(
 
         if not dataset_version:
             pending = state.get_ocr_correction_stats()["pending"]
-            click.echo(
-                f"Insufficient corrections: {pending}/{min_samples} required",
-                err=True
-            )
+            click.echo(f"Insufficient corrections: {pending}/{min_samples} required", err=True)
             state.close()
             return
 
@@ -735,7 +741,7 @@ def ocr_train(
         else:
             model = pipeline.train(dataset, output)
 
-        click.echo(f"\n✓ Training complete!")
+        click.echo("\n✓ Training complete!")
         click.echo(f"  Model version: {model.version}")
         click.echo(f"  Checkpoint: {model.checkpoint_path}")
 
@@ -767,6 +773,7 @@ def ocr_models(ctx: click.Context) -> None:
         return
 
     from rock_paper_sync.ocr.training import ModelRegistry
+
     registry = ModelRegistry(config.ocr.cache_dir)
 
     versions = registry.get_all_versions()
@@ -809,6 +816,7 @@ def ocr_activate(ctx: click.Context, version: str) -> None:
         return
 
     from rock_paper_sync.ocr.training import ModelRegistry
+
     registry = ModelRegistry(config.ocr.cache_dir)
 
     try:
@@ -844,6 +852,7 @@ def ocr_prepare_dataset(
     state = StateManager(config.sync.state_database)
 
     from rock_paper_sync.ocr.training import DatasetManager
+
     manager = DatasetManager(config.ocr.cache_dir, state)
 
     dataset = manager.create_dataset_version(min_samples)

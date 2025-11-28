@@ -33,19 +33,14 @@ useful for understanding coordinate transformation and stroke anchoring.
 """
 
 import argparse
-import json
 import sys
 from collections import defaultdict
 from pathlib import Path
 
 import rmscene
 from rmscene.scene_stream import (
-    AuthorIdsBlock,
-    MigrationInfoBlock,
     RootTextBlock,
     SceneGroupItemBlock,
-    SceneItemBlock,
-    SceneLineItemBlock,
     TreeNodeBlock,
 )
 
@@ -62,7 +57,7 @@ def analyze_anchors(rm_file: Path, output_file: Path | None = None):
     tree_nodes = [b for b in blocks if isinstance(b, TreeNodeBlock)]
 
     lines = []
-    lines.append(f"=== TreeNodeBlock Anchoring Analysis ===")
+    lines.append("=== TreeNodeBlock Anchoring Analysis ===")
     lines.append(f"File: {rm_file}")
     lines.append(f"Total TreeNodeBlocks: {len(tree_nodes)}\n")
 
@@ -86,7 +81,7 @@ def analyze_anchors(rm_file: Path, output_file: Path | None = None):
             val = group.anchor_origin_y.value if hasattr(group.anchor_origin_y, 'value') else group.anchor_origin_y
             lines.append(f"  anchor_origin_y: {val}")
         else:
-            lines.append(f"  anchor_origin_y: NOT FOUND")
+            lines.append("  anchor_origin_y: NOT FOUND")
 
         if hasattr(group, 'anchor_type') and group.anchor_type:
             val = group.anchor_type.value if hasattr(group.anchor_type, 'value') else group.anchor_type
@@ -117,7 +112,7 @@ def analyze_coords(rm_file: Path, output_file: Path | None = None):
     annotations = read_annotations(rm_file)
 
     lines = []
-    lines.append(f"=== Coordinate Range Analysis ===")
+    lines.append("=== Coordinate Range Analysis ===")
     lines.append(f"File: {rm_file}")
     lines.append(f"Total annotations: {len(annotations)}\n")
 
@@ -138,13 +133,13 @@ def analyze_coords(rm_file: Path, output_file: Path | None = None):
                 by_parent[str(ann.parent_id)]['y'].append(point.y)
 
     if all_x:
-        lines.append(f"Overall ranges:")
+        lines.append("Overall ranges:")
         lines.append(f"  X: [{min(all_x):.2f}, {max(all_x):.2f}]")
         lines.append(f"  Y: [{min(all_y):.2f}, {max(all_y):.2f}]")
         lines.append(f"  Positive Y count: {sum(1 for y in all_y if y >= 0)}")
         lines.append(f"  Negative Y count: {sum(1 for y in all_y if y < 0)}\n")
 
-        lines.append(f"By parent_id:")
+        lines.append("By parent_id:")
         for parent_id, coords in sorted(by_parent.items()):
             lines.append(f"  {parent_id}:")
             lines.append(f"    X: [{min(coords['x']):.2f}, {max(coords['x']):.2f}]")
@@ -171,7 +166,7 @@ def analyze_baselines(rm_file: Path, output_file: Path | None = None):
         blocks = list(rmscene.read_blocks(f))
 
     lines = []
-    lines.append(f"=== Parent Baseline Mapping ===")
+    lines.append("=== Parent Baseline Mapping ===")
     lines.append(f"File: {rm_file}\n")
 
     parent_to_anchor = {}
@@ -223,7 +218,7 @@ def analyze_blocks(rm_file: Path, output_file: Path | None = None):
         block_counts[type(block).__name__] += 1
 
     lines = []
-    lines.append(f"=== Block Type Analysis ===")
+    lines.append("=== Block Type Analysis ===")
     lines.append(f"File: {rm_file}")
     lines.append(f"Total blocks: {len(blocks)}\n")
 
@@ -248,7 +243,7 @@ def analyze_text(rm_file: Path, output_file: Path | None = None):
         blocks = list(rmscene.read_blocks(f))
 
     lines = []
-    lines.append(f"=== Text Block Analysis ===")
+    lines.append("=== Text Block Analysis ===")
     lines.append(f"File: {rm_file}\n")
 
     for i, block in enumerate(blocks):
@@ -278,7 +273,7 @@ def analyze_structure(rm_file: Path, output_file: Path | None = None):
         blocks = list(rmscene.read_blocks(f))
 
     lines = []
-    lines.append(f"=== Document Structure ===")
+    lines.append("=== Document Structure ===")
     lines.append(f"File: {rm_file}\n")
 
     # Find all scene items
@@ -293,12 +288,11 @@ def analyze_structure(rm_file: Path, output_file: Path | None = None):
     tree_nodes = [b for b in blocks if isinstance(b, TreeNodeBlock)]
     lines.append(f"\nTreeNodeBlocks: {len(tree_nodes)}")
 
-    # Build parent-child map
-    children_map = defaultdict(list)
+    # Build parent-child map (for future use in extended analysis)
     for block in tree_nodes:
         if hasattr(block, 'group'):
-            node_id = str(block.group.node_id)
             # Could extract parent info here if available
+            pass
 
     output = "\n".join(lines)
     if output_file:

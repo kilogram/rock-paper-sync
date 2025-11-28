@@ -7,16 +7,13 @@ collection. Tests cover:
 - detect_ocr_corrections_for_file() coordinator
 """
 
-import pytest
-from pathlib import Path
-
+from rock_paper_sync.annotations.common.snapshots import ContentStore, SnapshotStore
+from rock_paper_sync.annotations.core.data_types import OCRCorrection, RenderConfig
 from rock_paper_sync.annotations.handlers.stroke_handler import StrokeHandler
-from rock_paper_sync.annotations.core.data_types import RenderConfig, OCRCorrection
 from rock_paper_sync.annotations.ocr_corrections import (
     detect_ocr_corrections_for_file,
     parse_paragraphs,
 )
-from rock_paper_sync.annotations.common.snapshots import SnapshotStore, ContentStore
 from rock_paper_sync.state import StateManager
 
 
@@ -237,17 +234,13 @@ class TestCoordinatorFunction:
         vault_name = "TestVault"
         file_path = "test.md"
         old_paragraph = "Text with <!-- OCR: helo --> here."
-        snapshot_store.snapshot_block(
-            vault_name, file_path, 0, old_paragraph, ["stroke"]
-        )
+        snapshot_store.snapshot_block(vault_name, file_path, 0, old_paragraph, ["stroke"])
 
         # Current markdown with corrected OCR
         current_markdown = "Text with <!-- OCR: hello --> here."
 
         # Stroke metadata
-        stroke_metadata = {
-            0: [{"annotation_id": "anno-123", "image_hash": "img-hash"}]
-        }
+        stroke_metadata = {0: [{"annotation_id": "anno-123", "image_hash": "img-hash"}]}
 
         # Detect corrections
         corrections = detect_ocr_corrections_for_file(
@@ -368,13 +361,9 @@ Third <!-- OCR: incorrect --> paragraph."""
         # Note: Current implementation assumes one OCR per paragraph
         # This test documents that limitation
         old_paragraph = "First <!-- OCR: helo --> and second <!-- OCR: wrld --> text."
-        snapshot_store.snapshot_block(
-            vault_name, file_path, 0, old_paragraph, ["stroke"]
-        )
+        snapshot_store.snapshot_block(vault_name, file_path, 0, old_paragraph, ["stroke"])
 
-        current_markdown = (
-            "First <!-- OCR: hello --> and second <!-- OCR: world --> text."
-        )
+        current_markdown = "First <!-- OCR: hello --> and second <!-- OCR: world --> text."
 
         stroke_metadata = {
             0: [
@@ -431,9 +420,7 @@ class TestIntegrationWorkflow:
         )
 
         # Verify snapshot was created
-        stored_snapshot = snapshot_store.get_block_snapshot(
-            vault_name, file_path, 0
-        )
+        stored_snapshot = snapshot_store.get_block_snapshot(vault_name, file_path, 0)
         assert stored_snapshot == initial_paragraph
 
         # STEP 2: User manually edits OCR text
@@ -441,9 +428,7 @@ class TestIntegrationWorkflow:
         edited_markdown = "Paragraph with <!-- OCR: hello world --> in it."
 
         # STEP 3: Next sync - detect correction
-        stroke_metadata = {
-            0: [{"annotation_id": "anno-abc-123", "image_hash": "hash-def-456"}]
-        }
+        stroke_metadata = {0: [{"annotation_id": "anno-abc-123", "image_hash": "hash-def-456"}]}
 
         corrections = detect_ocr_corrections_for_file(
             vault_name=vault_name,
@@ -463,7 +448,6 @@ class TestIntegrationWorkflow:
 
         # STEP 4: Store correction in database (simulating sync workflow)
         import uuid
-        import time
 
         correction_id = str(uuid.uuid4())
         state_manager.add_ocr_correction(
@@ -515,9 +499,7 @@ class TestIntegrationWorkflow:
 
         vault_name = "Vault"
         file_path = "test.md"
-        stroke_metadata = {
-            0: [{"annotation_id": "anno-1", "image_hash": "hash-1"}]
-        }
+        stroke_metadata = {0: [{"annotation_id": "anno-1", "image_hash": "hash-1"}]}
 
         # Cycle 1: Initial OCR result
         v1_markdown = "<!-- OCR: helo -->"

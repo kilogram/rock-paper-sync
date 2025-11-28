@@ -24,20 +24,18 @@ from rock_paper_sync.annotations import (
 )
 from rock_paper_sync.annotations.common.text_extraction import extract_text_blocks_from_rm
 from rock_paper_sync.coordinate_transformer import (
-    extract_text_origin,
-    build_parent_anchor_map,
-    CoordinateTransformer,
-    is_text_relative,
     NEGATIVE_Y_OFFSET,
+    build_parent_anchor_map,
+    extract_text_origin,
+    is_text_relative,
 )
 from rock_paper_sync.ocr.corrections import CorrectionManager
 from rock_paper_sync.ocr.factory import create_ocr_service
 from rock_paper_sync.ocr.markers import (
     AnnotationInfo,
-    add_ocr_markers,
-    extract_paragraph_index_mapping,
-    strip_ocr_markers,
     _hash_text,
+    add_ocr_markers,
+    strip_ocr_markers,
 )
 from rock_paper_sync.ocr.paragraph_mapper import (
     ParagraphMapper,
@@ -52,9 +50,10 @@ from rock_paper_sync.ocr.protocol import (
 from rock_paper_sync.parser import ContentBlock, parse_content
 
 if TYPE_CHECKING:
+    from rmscene.tagged_block_common import CrdtId
+
     from rock_paper_sync.config import OCRConfig
     from rock_paper_sync.state import StateManager
-    from rmscene.tagged_block_common import CrdtId
 
 logger = logging.getLogger("rock_paper_sync.ocr.integration")
 
@@ -75,7 +74,8 @@ class OCRProcessor:
         """
         self.config = config
         self.state_manager = state_manager
-        self.correction_manager = CorrectionManager(config.cache_dir, state_manager)
+        cache_dir = config.cache_dir or Path.home() / ".cache" / "rock-paper-sync"
+        self.correction_manager = CorrectionManager(cache_dir, state_manager)
 
         # Initialize paragraph mapper (can be swapped with vision model later)
         self.paragraph_mapper: ParagraphMapper = SpatialOverlapMapper()
@@ -97,8 +97,12 @@ class OCRProcessor:
         HTTP connections and other resources held by the OCR service.
         """
         if self._service is not None:
-            if hasattr(self._service, 'close'):
-                self._service.close()
+            try:
+                close_method = getattr(self._service, "close", None)
+                if close_method is not None and callable(close_method):
+                    close_method()
+            except Exception:  # pragma: no cover
+                pass
             self._service = None
             logger.debug("OCR processor cleaned up")
 
@@ -157,7 +161,9 @@ class OCRProcessor:
         logger.debug(f"Parsed markdown into {len(markdown_blocks)} content blocks")
 
         # Extract annotation images from .rm files
-        annotation_images = self._extract_annotation_images(rm_files, annotation_map, markdown_blocks)
+        annotation_images = self._extract_annotation_images(
+            rm_files, annotation_map, markdown_blocks
+        )
 
         if not annotation_images:
             logger.debug("No annotation images extracted")
@@ -177,12 +183,14 @@ class OCRProcessor:
                     paragraph_text=para_text,
                 )
 
-                requests.append(OCRRequest(
-                    image=img_data,
-                    annotation_uuid=annotation_uuid,
-                    bounding_box=bbox,
-                    context=context,
-                ))
+                requests.append(
+                    OCRRequest(
+                        image=img_data,
+                        annotation_uuid=annotation_uuid,
+                        bounding_box=bbox,
+                        context=context,
+                    )
+                )
 
                 # Store image for potential corrections
                 image_hash = self.correction_manager.store_annotation_image(
@@ -270,7 +278,9 @@ class OCRProcessor:
         """
         result: dict[int, tuple[AnnotationInfo, list[tuple[bytes, BoundingBox, str]]]] = {}
 
-        logger.debug(f"Extracting images from {len(rm_files)} .rm files for {len(annotation_map)} annotated paragraphs")
+        logger.debug(
+            f"Extracting images from {len(rm_files)} .rm files for {len(annotation_map)} annotated paragraphs"
+        )
 
         for rm_file in rm_files:
             if not rm_file.exists():
@@ -290,7 +300,9 @@ class OCRProcessor:
 
                 # Extract text blocks for position mapping
                 rm_text_blocks, text_origin_y = extract_text_blocks_from_rm(rm_file)
-                logger.debug(f"Extracted {len(rm_text_blocks)} text blocks, text_origin_y={text_origin_y}")
+                logger.debug(
+                    f"Extracted {len(rm_text_blocks)} text blocks, text_origin_y={text_origin_y}"
+                )
 
                 # Extract text origin X from RootTextBlock
                 text_origin_x = self._get_text_origin_x(rm_file)
@@ -312,7 +324,9 @@ class OCRProcessor:
 
                 # STAGE 1: Cluster annotations spatially (using absolute coordinates)
                 clusters = self._cluster_annotations_by_proximity(annotations_absolute)
-                logger.debug(f"Clustered {len(annotations_absolute)} annotations into {len(clusters)} spatial groups")
+                logger.debug(
+                    f"Clustered {len(annotations_absolute)} annotations into {len(clusters)} spatial groups"
+                )
 
                 # STAGE 2: Map each cluster to a paragraph using bounding boxes
                 for cluster_idx, cluster in enumerate(clusters):
@@ -422,9 +436,7 @@ class OCRProcessor:
                 centers.append(center)
                 valid_annotations.append(ann)
             else:
-                logger.warning(
-                    f"Skipping annotation with no valid geometry: type={ann.type}"
-                )
+                logger.warning(f"Skipping annotation with no valid geometry: type={ann.type}")
 
         # Use valid_annotations for the rest of clustering
         annotations = valid_annotations
@@ -453,7 +465,7 @@ class OCRProcessor:
                 if distance < distance_threshold:
                     graph[i].append(j)
                     graph[j].append(i)
-                    logger.debug(f"  → Connected (distance < threshold)")
+                    logger.debug("  → Connected (distance < threshold)")
 
         # Find connected components using DFS
         visited = set()
@@ -476,9 +488,7 @@ class OCRProcessor:
                 # Convert indices to annotations
                 cluster = [annotations[idx] for idx in cluster_indices]
                 clusters.append(cluster)
-                logger.debug(
-                    f"Created cluster {len(clusters)} with {len(cluster)} annotation(s)"
-                )
+                logger.debug(f"Created cluster {len(clusters)} with {len(cluster)} annotation(s)")
 
         return clusters
 
@@ -510,8 +520,11 @@ class OCRProcessor:
         return {pid: (origin.x, origin.y) for pid, origin in anchor_map.items()}
 
     def _get_parent_origin_offset(
-        self, parent_id: "CrdtId", parent_anchor_map: dict["CrdtId", tuple[float, float]],
-        text_origin_x: float, text_origin_y: float
+        self,
+        parent_id: "CrdtId | None",
+        parent_anchor_map: dict["CrdtId", tuple[float, float]],
+        text_origin_x: float,
+        text_origin_y: float,
     ) -> tuple[float, float]:
         """Get the (X, Y) anchor origin offset for a specific parent ID.
 
@@ -529,7 +542,9 @@ class OCRProcessor:
             (X, Y) origin tuple to use for this parent's coordinates
         """
         # Use parent-specific anchor origin if available, otherwise fall back to text origin
-        return parent_anchor_map.get(parent_id, (text_origin_x, text_origin_y))
+        if parent_id is not None:
+            return parent_anchor_map.get(parent_id, (text_origin_x, text_origin_y))
+        return (text_origin_x, text_origin_y)
 
     def _transform_annotations_to_absolute(
         self,
@@ -552,6 +567,7 @@ class OCRProcessor:
             List of annotations with all coordinates transformed to absolute space
         """
         from copy import deepcopy
+
         from rock_paper_sync.annotations import Point, Rectangle
 
         transformed = []
@@ -568,6 +584,11 @@ class OCRProcessor:
                 # Create a copy and transform stroke points
                 ann_copy = deepcopy(ann)
 
+                # Type guard: ann_copy.stroke should not be None since ann.stroke is checked above
+                if ann_copy.stroke is None:
+                    transformed.append(ann_copy)
+                    continue
+
                 # Get parent-specific anchor origin (X, Y)
                 anchor_x, anchor_y = self._get_parent_origin_offset(
                     ann.parent_id, parent_anchor_map, text_origin_x, text_origin_y
@@ -575,6 +596,9 @@ class OCRProcessor:
 
                 # Calculate stroke's center Y to determine which coordinate space
                 bbox = ann_copy.stroke.bounding_box
+                if bbox is None:
+                    transformed.append(ann_copy)
+                    continue
                 stroke_center_y = bbox.y + bbox.h / 2
 
                 # Determine Y offset based on coordinate space
@@ -605,9 +629,7 @@ class OCRProcessor:
                     )
 
                 transformed.append(ann_copy)
-                logger.debug(
-                    f"Transformed text-relative annotation: Y offset +{text_origin_y}"
-                )
+                logger.debug(f"Transformed text-relative annotation: Y offset +{text_origin_y}")
             else:
                 # Non-stroke annotations (highlights, etc.) - keep as-is for now
                 transformed.append(ann)
@@ -688,7 +710,9 @@ class OCRProcessor:
 
         return image_data, bbox
 
-    def _draw_stroke(self, draw: ImageDraw.Draw, stroke, offset_x: float, offset_y: float) -> None:
+    def _draw_stroke(
+        self, draw: ImageDraw.ImageDraw, stroke, offset_x: float, offset_y: float
+    ) -> None:
         """Draw a stroke on the image.
 
         Args:
@@ -702,29 +726,28 @@ class OCRProcessor:
 
         # Map color codes to RGB
         color_map = {
-            0: "black",      # Black
-            1: "gray",       # Grey
-            2: "white",      # White (will be invisible on white bg)
-            3: "yellow",     # Yellow highlighter
-            4: "green",      # Green
-            5: "pink",       # Pink
-            6: "blue",       # Blue
-            7: "red",        # Red
+            0: "black",  # Black
+            1: "gray",  # Grey
+            2: "white",  # White (will be invisible on white bg)
+            3: "yellow",  # Yellow highlighter
+            4: "green",  # Green
+            5: "pink",  # Pink
+            6: "blue",  # Blue
+            7: "red",  # Red
         }
         color = color_map.get(stroke.color, "black")
 
         # Draw lines between consecutive points
-        points = [
-            (p.x - offset_x, p.y - offset_y)
-            for p in stroke.points
-        ]
+        points = [(p.x - offset_x, p.y - offset_y) for p in stroke.points]
 
         # Calculate line width based on thickness
         line_width = max(1, int(stroke.thickness * 2))
 
         draw.line(points, fill=color, width=line_width)
 
-    def _draw_highlight(self, draw: ImageDraw.Draw, highlight, offset_x: float, offset_y: float) -> None:
+    def _draw_highlight(
+        self, draw: ImageDraw.ImageDraw, highlight, offset_x: float, offset_y: float
+    ) -> None:
         """Draw a highlight on the image.
 
         Args:
@@ -735,8 +758,8 @@ class OCRProcessor:
         """
         # Map color codes to semi-transparent colors
         color_map = {
-            3: (255, 255, 0, 128),    # Yellow
-            4: (0, 255, 0, 128),      # Green
+            3: (255, 255, 0, 128),  # Yellow
+            4: (0, 255, 0, 128),  # Green
             5: (255, 192, 203, 128),  # Pink
             6: (173, 216, 230, 128),  # Light blue
         }

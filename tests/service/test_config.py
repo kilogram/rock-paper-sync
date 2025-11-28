@@ -1,23 +1,21 @@
 """Tests for configuration module."""
 
 import os
-import pytest
-from dataclasses import replace
 from pathlib import Path
+
+import pytest
 
 from rock_paper_sync.config import (
     AppConfig,
     ConfigError,
     LayoutConfig,
-    OCRConfig,
     SyncConfig,
-    VaultConfig,
     expand_path,
     load_config,
     validate_config,
 )
 
-from ..config_helpers import make_app_config, make_vault_config, with_sync, with_layout, with_vault
+from ..config_helpers import make_app_config, make_vault_config
 
 
 class TestExpandPath:
@@ -51,7 +49,9 @@ class TestExpandPath:
 class TestLoadConfig:
     """Tests for configuration loading."""
 
-    def test_load_valid_config(self, valid_config_toml: Path, temp_vault: Path, temp_output: Path) -> None:
+    def test_load_valid_config(
+        self, valid_config_toml: Path, temp_vault: Path, temp_output: Path
+    ) -> None:
         """Test loading a valid configuration file."""
         config = load_config(valid_config_toml)
 
@@ -99,7 +99,9 @@ class TestLoadConfig:
         with pytest.raises(ConfigError, match="missing required 'path' field"):
             load_config(config_path)
 
-    def test_all_sections_present(self, tmp_path: Path, temp_vault: Path, temp_output: Path) -> None:
+    def test_all_sections_present(
+        self, tmp_path: Path, temp_vault: Path, temp_output: Path
+    ) -> None:
         """Test that all required sections must be present."""
         config_path = tmp_path / "incomplete.toml"
         config_path.write_text(f"""
@@ -138,7 +140,13 @@ class TestValidateConfig:
         """Test that nonexistent vault directory fails validation."""
         nonexistent = tmp_path / "nonexistent"
         # Create config manually to avoid auto-creating the vault
-        from rock_paper_sync.config import AppConfig, SyncConfig, LayoutConfig, CloudConfig, OCRConfig
+        from rock_paper_sync.config import (
+            AppConfig,
+            CloudConfig,
+            LayoutConfig,
+            OCRConfig,
+            SyncConfig,
+        )
 
         cache_dir = tmp_path / "cache"
         cache_dir.mkdir(exist_ok=True)
@@ -172,7 +180,13 @@ class TestValidateConfig:
         file_path.write_text("not a directory")
 
         # Create config manually to avoid auto-creating the vault
-        from rock_paper_sync.config import AppConfig, SyncConfig, LayoutConfig, CloudConfig, OCRConfig
+        from rock_paper_sync.config import (
+            AppConfig,
+            CloudConfig,
+            LayoutConfig,
+            OCRConfig,
+            SyncConfig,
+        )
 
         cache_dir = tmp_path / "cache"
         cache_dir.mkdir(exist_ok=True)
@@ -236,13 +250,18 @@ class TestValidateConfig:
         with pytest.raises(ConfigError, match="lines_per_page must be positive"):
             validate_config(config)
 
-    @pytest.mark.parametrize("margin_name,margin_value", [
-        ("margin_top", -10),
-        ("margin_bottom", -5),
-        ("margin_left", -5),
-        ("margin_right", -5),
-    ])
-    def test_validate_negative_margins(self, tmp_path: Path, margin_name: str, margin_value: int) -> None:
+    @pytest.mark.parametrize(
+        "margin_name,margin_value",
+        [
+            ("margin_top", -10),
+            ("margin_bottom", -5),
+            ("margin_left", -5),
+            ("margin_right", -5),
+        ],
+    )
+    def test_validate_negative_margins(
+        self, tmp_path: Path, margin_name: str, margin_value: int
+    ) -> None:
         """Test that negative margins fail validation."""
         config = make_app_config(tmp_path, **{margin_name: margin_value})
 

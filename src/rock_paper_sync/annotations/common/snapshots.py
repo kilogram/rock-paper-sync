@@ -50,7 +50,6 @@ import logging
 import sqlite3
 import time
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -262,7 +261,7 @@ class SnapshotStore:
         file_path: str,
         content: bytes,
         file_type: str = "markdown",
-        sync_time: Optional[int] = None
+        sync_time: int | None = None,
     ) -> str:
         """Create a snapshot of a file.
 
@@ -289,7 +288,7 @@ class SnapshotStore:
             VALUES (?, ?, ?)
             ON CONFLICT(content_hash) DO UPDATE SET last_accessed = ?
             """,
-            (content_hash, len(content), sync_time, sync_time)
+            (content_hash, len(content), sync_time, sync_time),
         )
 
         # Store snapshot metadata
@@ -299,7 +298,7 @@ class SnapshotStore:
             (vault_name, file_path, content_hash, sync_time, file_type, file_size)
             VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (vault_name, file_path, content_hash, sync_time, file_type, len(content))
+            (vault_name, file_path, content_hash, sync_time, file_type, len(content)),
         )
         self.db.commit()
 
@@ -317,7 +316,7 @@ class SnapshotStore:
         paragraph_index: int,
         block_content: str,
         annotation_types: list[str],
-        sync_time: Optional[int] = None
+        sync_time: int | None = None,
     ) -> str:
         """Create a snapshot of an annotation block.
 
@@ -336,7 +335,7 @@ class SnapshotStore:
             sync_time = int(time.time())
 
         # Store content
-        block_bytes = block_content.encode('utf-8')
+        block_bytes = block_content.encode("utf-8")
         block_hash = self.content_store.put(block_bytes)
 
         # Update content metadata
@@ -346,7 +345,7 @@ class SnapshotStore:
             VALUES (?, ?, ?)
             ON CONFLICT(content_hash) DO UPDATE SET last_accessed = ?
             """,
-            (block_hash, len(block_bytes), sync_time, sync_time)
+            (block_hash, len(block_bytes), sync_time, sync_time),
         )
 
         # Store block metadata
@@ -357,7 +356,7 @@ class SnapshotStore:
             (vault_name, file_path, paragraph_index, block_hash, annotation_types, sync_time)
             VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (vault_name, file_path, paragraph_index, block_hash, types_json, sync_time)
+            (vault_name, file_path, paragraph_index, block_hash, types_json, sync_time),
         )
         self.db.commit()
 
@@ -369,11 +368,8 @@ class SnapshotStore:
         return block_hash
 
     def restore_file(
-        self,
-        vault_name: str,
-        file_path: str,
-        sync_time: Optional[int] = None
-    ) -> Optional[bytes]:
+        self, vault_name: str, file_path: str, sync_time: int | None = None
+    ) -> bytes | None:
         """Restore a file snapshot.
 
         Args:
@@ -394,7 +390,7 @@ class SnapshotStore:
                 ORDER BY sync_time DESC
                 LIMIT 1
                 """,
-                (vault_name, file_path)
+                (vault_name, file_path),
             )
         else:
             # Get specific snapshot
@@ -404,7 +400,7 @@ class SnapshotStore:
                 FROM file_snapshots
                 WHERE vault_name = ? AND file_path = ? AND sync_time = ?
                 """,
-                (vault_name, file_path, sync_time)
+                (vault_name, file_path, sync_time),
             )
 
         row = cursor.fetchone()
@@ -422,12 +418,8 @@ class SnapshotStore:
             return None
 
     def get_block_snapshot(
-        self,
-        vault_name: str,
-        file_path: str,
-        paragraph_index: int,
-        sync_time: Optional[int] = None
-    ) -> Optional[str]:
+        self, vault_name: str, file_path: str, paragraph_index: int, sync_time: int | None = None
+    ) -> str | None:
         """Get an annotation block snapshot.
 
         Args:
@@ -449,7 +441,7 @@ class SnapshotStore:
                 ORDER BY sync_time DESC
                 LIMIT 1
                 """,
-                (vault_name, file_path, paragraph_index)
+                (vault_name, file_path, paragraph_index),
             )
         else:
             # Get specific snapshot
@@ -459,7 +451,7 @@ class SnapshotStore:
                 FROM annotation_blocks
                 WHERE vault_name = ? AND file_path = ? AND paragraph_index = ? AND sync_time = ?
                 """,
-                (vault_name, file_path, paragraph_index, sync_time)
+                (vault_name, file_path, paragraph_index, sync_time),
             )
 
         row = cursor.fetchone()
@@ -470,16 +462,12 @@ class SnapshotStore:
 
         try:
             content = self.content_store.get(block_hash)
-            return content.decode('utf-8')
+            return content.decode("utf-8")
         except FileNotFoundError:
             logger.error(f"Content missing for block snapshot: {block_hash}")
             return None
 
-    def list_file_versions(
-        self,
-        vault_name: str,
-        file_path: str
-    ) -> list[tuple[int, str, int]]:
+    def list_file_versions(self, vault_name: str, file_path: str) -> list[tuple[int, str, int]]:
         """List all snapshots for a file.
 
         Args:
@@ -496,7 +484,7 @@ class SnapshotStore:
             WHERE vault_name = ? AND file_path = ?
             ORDER BY sync_time DESC
             """,
-            (vault_name, file_path)
+            (vault_name, file_path),
         )
 
         return [(row[0], row[1], row[2]) for row in cursor.fetchall()]

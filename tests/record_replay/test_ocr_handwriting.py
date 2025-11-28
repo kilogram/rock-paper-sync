@@ -13,9 +13,10 @@ Replaying:
 """
 
 import io
+
 import pytest
 
-from rock_paper_sync.annotations import read_annotations, AnnotationType
+from rock_paper_sync.annotations import AnnotationType, read_annotations
 
 
 @pytest.mark.device
@@ -35,10 +36,7 @@ def test_ocr_handwriting(device, workspace, fixtures_dir):
     try:
         device.start_test(test_id, description="OCR handwriting samples")
     except FileNotFoundError:
-        pytest.skip(
-            f"Testdata '{test_id}' not available. "
-            f"Run with --online -s to record."
-        )
+        pytest.skip(f"Testdata '{test_id}' not available. " f"Run with --online -s to record.")
 
     # Upload document
     doc_uuid = device.upload_document(workspace.test_doc)

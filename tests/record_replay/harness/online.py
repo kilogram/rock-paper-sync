@@ -21,14 +21,14 @@ Usage:
     # Testdata saved to tests/testdata/pen_colors/
 """
 
-from pathlib import Path
-from typing import TYPE_CHECKING
 import json
 import shutil
 from datetime import datetime
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 from .protocol import DeviceInteractionManager, DocumentState
-from .testdata import TestdataStore, PhaseData
+from .testdata import PhaseData, TestdataStore
 
 if TYPE_CHECKING:
     from .logging import Bench
@@ -84,9 +84,7 @@ class OnlineDevice(DeviceInteractionManager):
         self._current_phase: int = 0
         self._phases: list[PhaseData] = []
 
-    def start_test(
-        self, test_id: str, description: str = ""
-    ) -> None:
+    def start_test(self, test_id: str, description: str = "") -> None:
         """Begin recording a test.
 
         Creates directory structure and prepares to capture artifacts.
@@ -125,10 +123,7 @@ class OnlineDevice(DeviceInteractionManager):
 
         # Save initial vault state (phase 0)
         self._capture_phase(
-            phase_num=0,
-            phase_name="initial",
-            action="setup",
-            prompt="Initial vault state saved"
+            phase_num=0, phase_name="initial", action="setup", prompt="Initial vault state saved"
         )
 
         # Run sync to upload document
@@ -140,7 +135,7 @@ class OnlineDevice(DeviceInteractionManager):
 
         doc_uuid = self.workspace.get_document_uuid()
         if not doc_uuid:
-            self.bench.error(f"Document UUID not found after sync")
+            self.bench.error("Document UUID not found after sync")
             self.bench.observe(f"Workspace dir: {self.workspace.workspace_dir}")
             self.bench.observe(f"State dir: {self.workspace.state_dir}")
             if self.workspace.state_dir.exists():
@@ -161,9 +156,7 @@ class OnlineDevice(DeviceInteractionManager):
 
         return doc_uuid
 
-    def wait_for_annotations(
-        self, doc_uuid: str, timeout: float = 300.0
-    ) -> DocumentState:
+    def wait_for_annotations(self, doc_uuid: str, timeout: float = 300.0) -> DocumentState:
         """Wait for user to annotate on device, then capture phase.
 
         Displays user prompt and waits for them to press Enter after
@@ -224,7 +217,7 @@ class OnlineDevice(DeviceInteractionManager):
                 break
 
             if attempt < max_attempts:
-                self.bench.observe(f"No annotations yet, waiting 5s before retry...")
+                self.bench.observe("No annotations yet, waiting 5s before retry...")
                 time.sleep(5)
 
         if not annotations_found:
@@ -243,7 +236,7 @@ class OnlineDevice(DeviceInteractionManager):
             phase_num=self._current_phase,
             phase_name=phase_name,
             action="annotation_download",
-            prompt=f"Annotations captured at phase {self._current_phase}"
+            prompt=f"Annotations captured at phase {self._current_phase}",
         )
 
         self._current_phase += 1
@@ -323,10 +316,7 @@ class OnlineDevice(DeviceInteractionManager):
 
         # Save manifest with all phases
         self._save_manifest()
-        self.bench.ok(
-            f"Recording complete: {test_id} "
-            f"({len(self._phases)} phases)"
-        )
+        self.bench.ok(f"Recording complete: {test_id} " f"({len(self._phases)} phases)")
 
         self._current_test_id = None
         self._current_description = None
@@ -347,11 +337,7 @@ class OnlineDevice(DeviceInteractionManager):
         )
 
     def _capture_phase(
-        self,
-        phase_num: int,
-        phase_name: str,
-        action: str,
-        prompt: str = ""
+        self, phase_num: int, phase_name: str, action: str, prompt: str = ""
     ) -> None:
         """Capture vault state for a phase.
 
@@ -399,9 +385,7 @@ class OnlineDevice(DeviceInteractionManager):
             "has_annotations": len(cached_files) > 0,
         }
 
-        (phase_dir / "device_state.json").write_text(
-            json.dumps(device_state, indent=2)
-        )
+        (phase_dir / "device_state.json").write_text(json.dumps(device_state, indent=2))
 
         # Save .rm files
         if cached_files:
@@ -420,9 +404,7 @@ class OnlineDevice(DeviceInteractionManager):
             "vault_files": [f.name for f in (vault_snapshot).iterdir() if f.is_file()],
         }
 
-        (phase_dir / "phase_info.json").write_text(
-            json.dumps(phase_info, indent=2)
-        )
+        (phase_dir / "phase_info.json").write_text(json.dumps(phase_info, indent=2))
 
         self.bench.ok(f"Captured phase {phase_num} ({phase_name}): {prompt}")
         self._phases.append(
@@ -460,7 +442,7 @@ class OnlineDevice(DeviceInteractionManager):
             "test_id": self._current_test_id,
             "created_at": datetime.now().isoformat(),
             "doc_uuid": doc_uuid or "",  # Required by TestManifest
-            "page_uuids": page_uuids,    # Required by TestManifest
+            "page_uuids": page_uuids,  # Required by TestManifest
             "description": self._current_description or "",
             "annotations_count": len(page_uuids),  # Count of annotated pages
             "source_document": "source.md",
@@ -471,14 +453,14 @@ class OnlineDevice(DeviceInteractionManager):
                     "action": p.phase_info.get("action", ""),
                     "vault_files": p.phase_info.get("vault_files", []),
                     "device_state": p.device_state,
-                    "has_rm_files": bool(p.device_state and p.device_state.get("rm_files_count", 0) > 0),
+                    "has_rm_files": bool(
+                        p.device_state and p.device_state.get("rm_files_count", 0) > 0
+                    ),
                 }
                 for p in self._phases
             ],
         }
 
-        (test_dir / "manifest.json").write_text(
-            json.dumps(manifest, indent=2)
-        )
+        (test_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
 
         self.bench.ok(f"Saved manifest: {test_dir / 'manifest.json'}")

@@ -5,12 +5,12 @@ container and process requests correctly.
 """
 
 import io
-import pytest
+
 from PIL import Image
 
 from rock_paper_sync.ocr.protocol import (
-    OCRRequest,
     BoundingBox,
+    OCRRequest,
     ParagraphContext,
 )
 
@@ -32,19 +32,16 @@ class TestLocalOCRService:
     def test_recognize_single_image(self, ocr_service):
         """Test recognizing text in a single image."""
         # Create a simple test image
-        img = Image.new('RGB', (100, 100), color='white')
+        img = Image.new("RGB", (100, 100), color="white")
         img_bytes = io.BytesIO()
-        img.save(img_bytes, format='PNG')
+        img.save(img_bytes, format="PNG")
 
         request = OCRRequest(
             image=img_bytes.getvalue(),
             annotation_uuid="test-single-1",
             bounding_box=BoundingBox(x=10, y=10, width=80, height=80),
             context=ParagraphContext(
-                document_id="doc-1",
-                page_number=1,
-                paragraph_index=0,
-                paragraph_text="test text"
+                document_id="doc-1", page_number=1, paragraph_index=0, paragraph_text="test text"
             ),
         )
 
@@ -61,9 +58,9 @@ class TestLocalOCRService:
         # Create multiple test images
         requests = []
         for i in range(3):
-            img = Image.new('RGB', (100 + i * 10, 100 + i * 10), color='white')
+            img = Image.new("RGB", (100 + i * 10, 100 + i * 10), color="white")
             img_bytes = io.BytesIO()
-            img.save(img_bytes, format='PNG')
+            img.save(img_bytes, format="PNG")
 
             request = OCRRequest(
                 image=img_bytes.getvalue(),
@@ -73,7 +70,7 @@ class TestLocalOCRService:
                     document_id="doc-batch",
                     page_number=1,
                     paragraph_index=i,
-                    paragraph_text=f"text {i}"
+                    paragraph_text=f"text {i}",
                 ),
             )
             requests.append(request)
@@ -92,9 +89,9 @@ class TestLocalOCRService:
         # Create the same image twice
         img_bytes_list = []
         for _ in range(2):
-            img = Image.new('RGB', (100, 100), color='white')
+            img = Image.new("RGB", (100, 100), color="white")
             img_bytes = io.BytesIO()
-            img.save(img_bytes, format='PNG')
+            img.save(img_bytes, format="PNG")
             img_bytes_list.append(img_bytes.getvalue())
 
         # Process both images
@@ -103,10 +100,7 @@ class TestLocalOCRService:
             annotation_uuid="test-deterministic-1",
             bounding_box=BoundingBox(x=0, y=0, width=100, height=100),
             context=ParagraphContext(
-                document_id="doc-1",
-                page_number=1,
-                paragraph_index=0,
-                paragraph_text="test"
+                document_id="doc-1", page_number=1, paragraph_index=0, paragraph_text="test"
             ),
         )
 
@@ -115,10 +109,7 @@ class TestLocalOCRService:
             annotation_uuid="test-deterministic-2",
             bounding_box=BoundingBox(x=0, y=0, width=100, height=100),
             context=ParagraphContext(
-                document_id="doc-1",
-                page_number=1,
-                paragraph_index=0,
-                paragraph_text="test"
+                document_id="doc-1", page_number=1, paragraph_index=0, paragraph_text="test"
             ),
         )
 

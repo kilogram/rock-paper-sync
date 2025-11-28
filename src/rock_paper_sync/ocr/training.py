@@ -6,9 +6,7 @@ using DVC for reproducible ML workflows.
 
 import json
 import logging
-import os
 import subprocess
-import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -79,9 +77,7 @@ class DatasetManager:
         pending = self.state_manager.get_pending_ocr_corrections()
 
         if len(pending) < min_samples:
-            logger.info(
-                f"Insufficient corrections for dataset: {len(pending)}/{min_samples}"
-            )
+            logger.info(f"Insufficient corrections for dataset: {len(pending)}/{min_samples}")
             return None
 
         # Generate version string
@@ -106,9 +102,7 @@ class DatasetManager:
             json.dump(manifest, f, indent=2)
 
         # Mark corrections as assigned
-        self.state_manager.assign_corrections_to_dataset(
-            [c["id"] for c in pending], version
-        )
+        self.state_manager.assign_corrections_to_dataset([c["id"] for c in pending], version)
 
         logger.info(f"Created dataset {version} with {len(pending)} samples")
 
@@ -156,14 +150,16 @@ class DatasetManager:
             output_path: Output parquet file path
         """
         # Build table schema
-        schema = pa.schema([
-            ("id", pa.string()),
-            ("image_path", pa.string()),
-            ("original_text", pa.string()),
-            ("corrected_text", pa.string()),
-            ("paragraph_context", pa.string()),
-            ("created_at", pa.int64()),
-        ])
+        schema = pa.schema(
+            [
+                ("id", pa.string()),
+                ("image_path", pa.string()),
+                ("original_text", pa.string()),
+                ("corrected_text", pa.string()),
+                ("paragraph_context", pa.string()),
+                ("created_at", pa.int64()),
+            ]
+        )
 
         # Build arrays
         arrays = [
@@ -216,6 +212,7 @@ class ModelRegistry:
         self.models_dir.mkdir(parents=True, exist_ok=True)
 
         self.registry_path = self.models_dir / "registry.json"
+        self._registry: dict = {}
         self._load_registry()
 
     def _load_registry(self) -> None:
@@ -325,7 +322,7 @@ class TrainingPipeline:
         """
         self.config = config
         self.state_manager = state_manager
-        self.cache_dir = config.cache_dir
+        self.cache_dir = config.cache_dir or Path.home() / ".cache" / "rock-paper-sync"
 
         self.dataset_manager = DatasetManager(self.cache_dir, state_manager)
         self.model_registry = ModelRegistry(self.cache_dir)
@@ -379,8 +376,10 @@ class TrainingPipeline:
             runtime,
             "run",
             "--rm",
-            "-v", data_mount,
-            "-v", checkpoints_mount,
+            "-v",
+            data_mount,
+            "-v",
+            checkpoints_mount,
         ]
 
         # Add GPU support if available
@@ -390,12 +389,16 @@ class TrainingPipeline:
             else:
                 cmd.extend(["--gpus", f"device={self.config.local_gpu_device}"])
 
-        cmd.extend([
-            image,
-            "train",
-            "--dataset", dataset_version,
-            "--output", output_version,
-        ])
+        cmd.extend(
+            [
+                image,
+                "train",
+                "--dataset",
+                dataset_version,
+                "--output",
+                output_version,
+            ]
+        )
 
         logger.info(f"Running training: {' '.join(cmd)}")
 
@@ -457,8 +460,10 @@ class TrainingPipeline:
             "dvc",
             "repro",
             "-s",  # Single stage
-            f"--set-param", f"version={dataset_version}",
-            f"--set-param", f"output_version={output_version}",
+            "--set-param",
+            f"version={dataset_version}",
+            "--set-param",
+            f"output_version={output_version}",
         ]
 
         logger.info(f"Running DVC pipeline: {' '.join(cmd)}")

@@ -19,7 +19,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger("rock_paper_sync.audit")
 
@@ -46,11 +46,11 @@ class AuditEvent:
     timestamp_iso: str
     operation: str
     status: str
-    vault_name: Optional[str] = None
-    file_path: Optional[str] = None
+    vault_name: str | None = None
+    file_path: str | None = None
     details: dict[str, Any] = field(default_factory=dict)
-    error: Optional[str] = None
-    user_action: Optional[str] = None
+    error: str | None = None
+    user_action: str | None = None
 
     def to_json(self) -> str:
         """Convert to JSON string for logging."""
@@ -64,7 +64,7 @@ class AuditLogger:
     providing enough information for forensic analysis and debugging.
     """
 
-    def __init__(self, audit_file: Optional[Path] = None):
+    def __init__(self, audit_file: Path | None = None):
         """Initialize audit logger.
 
         Args:
@@ -80,11 +80,11 @@ class AuditLogger:
         event_type: str,
         operation: str,
         status: str,
-        vault_name: Optional[str] = None,
-        file_path: Optional[str] = None,
-        details: Optional[dict[str, Any]] = None,
-        error: Optional[str] = None,
-        user_action: Optional[str] = None,
+        vault_name: str | None = None,
+        file_path: str | None = None,
+        details: dict[str, Any] | None = None,
+        error: str | None = None,
+        user_action: str | None = None,
     ) -> AuditEvent:
         """Create audit event with current timestamp."""
         now = time.time()
@@ -125,7 +125,7 @@ class AuditLogger:
         file_path: str,
         file_hash: str,
         file_size: int,
-        user_action: Optional[str] = None,
+        user_action: str | None = None,
     ) -> None:
         """Log start of file sync operation.
 
@@ -157,8 +157,8 @@ class AuditLogger:
         remarkable_uuid: str,
         page_count: int,
         file_hash: str,
-        previous_uuid: Optional[str] = None,
-        user_action: Optional[str] = None,
+        previous_uuid: str | None = None,
+        user_action: str | None = None,
     ) -> None:
         """Log successful file sync.
 
@@ -198,8 +198,8 @@ class AuditLogger:
         vault_name: str,
         file_path: str,
         error: str,
-        file_hash: Optional[str] = None,
-        user_action: Optional[str] = None,
+        file_hash: str | None = None,
+        user_action: str | None = None,
     ) -> None:
         """Log failed file sync.
 
@@ -232,8 +232,8 @@ class AuditLogger:
         file_count: int,
         total_size: int,
         broadcast: bool,
-        vault_name: Optional[str] = None,
-        file_path: Optional[str] = None,
+        vault_name: str | None = None,
+        file_path: str | None = None,
     ) -> None:
         """Log cloud API upload operation.
 
@@ -263,8 +263,8 @@ class AuditLogger:
     def log_cloud_delete(
         self,
         doc_uuid: str,
-        vault_name: Optional[str] = None,
-        file_path: Optional[str] = None,
+        vault_name: str | None = None,
+        file_path: str | None = None,
         broadcast: bool = True,
     ) -> None:
         """Log cloud API delete operation.
@@ -294,7 +294,7 @@ class AuditLogger:
         files_removed: int,
         files_deleted_from_cloud: int,
         delete_from_cloud: bool,
-        user_action: Optional[str] = None,
+        user_action: str | None = None,
     ) -> None:
         """Log vault unsync operation.
 
@@ -346,7 +346,7 @@ class AuditLogger:
 
     def log_state_reset(
         self,
-        user_action: Optional[str] = None,
+        user_action: str | None = None,
     ) -> None:
         """Log state database reset.
 
@@ -364,7 +364,7 @@ class AuditLogger:
 
 
 # Global audit logger instance
-_audit_logger: Optional[AuditLogger] = None
+_audit_logger: AuditLogger | None = None
 
 
 def get_audit_logger() -> AuditLogger:
@@ -379,7 +379,7 @@ def get_audit_logger() -> AuditLogger:
     return _audit_logger
 
 
-def initialize_audit_logger(audit_file: Optional[Path] = None) -> None:
+def initialize_audit_logger(audit_file: Path | None = None) -> None:
     """Initialize global audit logger with optional dedicated file.
 
     Args:

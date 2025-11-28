@@ -8,14 +8,22 @@ ensuring that:
 4. Empty roots are handled correctly
 """
 
-import pytest
 from pathlib import Path
 
-from rock_paper_sync.config import AppConfig, CloudConfig, LayoutConfig, OCRConfig, SyncConfig, VaultConfig
+import pytest
+
+from rock_paper_sync.config import (
+    AppConfig,
+    CloudConfig,
+    LayoutConfig,
+    OCRConfig,
+    SyncConfig,
+    VaultConfig,
+)
 from rock_paper_sync.converter import SyncEngine
-from rock_paper_sync.state import StateManager
 from rock_paper_sync.rm_cloud_client import RmCloudClient
 from rock_paper_sync.rm_cloud_sync import RmCloudSync
+from rock_paper_sync.state import StateManager
 
 
 def get_test_credentials() -> str:
@@ -61,9 +69,7 @@ def rmfakecloud_config(tmp_path: Path, rmfakecloud: str):
             state_database=db,
             debounce_seconds=1,
         ),
-        cloud=CloudConfig(
-            base_url=rmfakecloud
-        ),
+        cloud=CloudConfig(base_url=rmfakecloud),
         layout=LayoutConfig(
             lines_per_page=45,
             margin_top=50,
@@ -81,10 +87,14 @@ def rmfakecloud_config(tmp_path: Path, rmfakecloud: str):
     device_token = get_test_credentials()
 
     # Create temp credentials file for RmCloudClient
-    import tempfile
     import json
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-        json.dump({"device_token": device_token, "device_id": "rock-paper-sync-test-001", "user_id": ""}, f)
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        json.dump(
+            {"device_token": device_token, "device_id": "rock-paper-sync-test-001", "user_id": ""},
+            f,
+        )
         temp_creds_path = Path(f.name)
 
     rm_client = RmCloudClient(base_url=rmfakecloud, credentials_path=temp_creds_path)
@@ -154,7 +164,9 @@ class TestFolderDeletion:
 
         # Verify folder was also deleted (should happen automatically when empty)
         folders_remaining = state.get_all_folders("test-vault")
-        assert len(folders_remaining) == 0, f"Expected no folders, found {len(folders_remaining)}: {folders_remaining}"
+        assert (
+            len(folders_remaining) == 0
+        ), f"Expected no folders, found {len(folders_remaining)}: {folders_remaining}"
 
         state.close()
 
@@ -239,7 +251,7 @@ class TestFolderDeletion:
         doc1.unlink()
 
         # Re-sync vault (should delete doc1 but keep folder)
-        synced = engine.sync_vault(vault_config)
+        engine.sync_vault(vault_config)
 
         # Folder should still exist (doc2 is still there)
         assert state.get_folder_uuid("test-vault", "projects") is not None
@@ -250,7 +262,7 @@ class TestFolderDeletion:
 
         # Now folder should be gone
         folders_remaining = state.get_all_folders("test-vault")
-        assert len(folders_remaining) == 0, f"Expected no folders after deleting all files"
+        assert len(folders_remaining) == 0, "Expected no folders after deleting all files"
 
         state.close()
 

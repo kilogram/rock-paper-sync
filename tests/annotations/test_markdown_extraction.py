@@ -6,11 +6,9 @@ Tests handler-based extraction of annotations from markdown:
 - RenderConfig: Configurable rendering styles
 """
 
-import pytest
-
+from rock_paper_sync.annotations.core.data_types import ExtractedAnnotation, RenderConfig
 from rock_paper_sync.annotations.handlers.highlight_handler import HighlightHandler
 from rock_paper_sync.annotations.handlers.stroke_handler import StrokeHandler
-from rock_paper_sync.annotations.core.data_types import RenderConfig, ExtractedAnnotation
 
 
 class TestHighlightExtraction:
@@ -203,7 +201,6 @@ class TestMixedAnnotations:
     def test_different_configs_for_handlers(self):
         """Test handlers respecting their own config settings."""
         highlight_handler = HighlightHandler()
-        stroke_handler = StrokeHandler()
 
         # Different configs
         config1 = RenderConfig(highlight_style="mark", stroke_style="comment")
@@ -231,10 +228,7 @@ class TestExtractedAnnotation:
     def test_extracted_annotation_fields(self):
         """Test ExtractedAnnotation has correct fields."""
         extracted = ExtractedAnnotation(
-            text="sample text",
-            annotation_type="highlight",
-            start_offset=10,
-            end_offset=25
+            text="sample text", annotation_type="highlight", start_offset=10, end_offset=25
         )
 
         assert extracted.text == "sample text"
@@ -244,10 +238,7 @@ class TestExtractedAnnotation:
 
     def test_extracted_annotation_defaults(self):
         """Test ExtractedAnnotation default values."""
-        extracted = ExtractedAnnotation(
-            text="text",
-            annotation_type="stroke"
-        )
+        extracted = ExtractedAnnotation(text="text", annotation_type="stroke")
 
         assert extracted.start_offset == -1
         assert extracted.end_offset == -1
@@ -265,10 +256,7 @@ class TestRenderConfig:
 
     def test_render_config_custom(self):
         """Test RenderConfig with custom values."""
-        config = RenderConfig(
-            highlight_style="bold",
-            stroke_style="footnote"
-        )
+        config = RenderConfig(highlight_style="bold", stroke_style="footnote")
 
         assert config.highlight_style == "bold"
         assert config.stroke_style == "footnote"

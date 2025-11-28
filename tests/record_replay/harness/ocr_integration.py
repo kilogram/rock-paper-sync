@@ -8,14 +8,14 @@ Allows tests to:
 """
 
 import json
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
-from datetime import datetime
 
 if TYPE_CHECKING:
-    from .base import DeviceTestCase
+    pass
 
 
 @dataclass
@@ -102,11 +102,11 @@ class OCRIntegrationMixin:
     def setup(self) -> None:
         """Setup OCR mocking before test execution."""
         # Call parent setup if it exists
-        if hasattr(super(), 'setup'):
+        if hasattr(super(), "setup"):
             super().setup()
 
         # Skip if OCR not required
-        if not getattr(self, 'requires_ocr', False):
+        if not getattr(self, "requires_ocr", False):
             return
 
         # Create and inject mocked OCR service
@@ -114,8 +114,9 @@ class OCRIntegrationMixin:
 
     def _setup_ocr_service(self) -> None:
         """Create and patch the mocked OCR service."""
-        from rock_paper_sync.ocr.protocol import OCRResult as OCRResultProto
         from unittest.mock import patch
+
+        from rock_paper_sync.ocr.protocol import OCRResult as OCRResultProto
 
         # Create mock service
         self._ocr_service_mock = MagicMock()
@@ -126,7 +127,9 @@ class OCRIntegrationMixin:
             import hashlib
 
             # Record request
-            image_hash = hashlib.sha256(request.image if isinstance(request.image, bytes) else b"").hexdigest()[:8]
+            image_hash = hashlib.sha256(
+                request.image if isinstance(request.image, bytes) else b""
+            ).hexdigest()[:8]
             self._ocr_recording.requests.append(
                 OCRRequest(
                     annotation_uuid=request.annotation_uuid,
@@ -183,15 +186,15 @@ class OCRIntegrationMixin:
     def teardown(self) -> None:
         """Verify OCR results and save recordings after test execution."""
         # Call parent teardown if it exists
-        if hasattr(super(), 'teardown'):
+        if hasattr(super(), "teardown"):
             super().teardown()
 
         # Stop OCR patching
-        if hasattr(self, '_ocr_patch'):
+        if hasattr(self, "_ocr_patch"):
             self._ocr_patch.stop()
 
         # Skip verification if OCR not required
-        if not getattr(self, 'requires_ocr', False):
+        if not getattr(self, "requires_ocr", False):
             return
 
         # Verify OCR results
@@ -221,16 +224,24 @@ class OCRIntegrationMixin:
             else:
                 self.bench.error(f"✗ Missing expected OCR: '{expected_text}'")
 
-        success_rate = verified_count / len(self.ocr_expected_texts) if self.ocr_expected_texts else 0
-        self.bench.observe(f"OCR verification: {verified_count}/{len(self.ocr_expected_texts)} ({success_rate*100:.0f}%)")
+        success_rate = (
+            verified_count / len(self.ocr_expected_texts) if self.ocr_expected_texts else 0
+        )
+        self.bench.observe(
+            f"OCR verification: {verified_count}/{len(self.ocr_expected_texts)} ({success_rate*100:.0f}%)"
+        )
 
         if success_rate < 1.0:
-            self.bench.warn(f"Only {verified_count}/{len(self.ocr_expected_texts)} expected OCR texts found")
+            self.bench.warn(
+                f"Only {verified_count}/{len(self.ocr_expected_texts)} expected OCR texts found"
+            )
 
     def _save_ocr_recording(self) -> None:
         """Save OCR recording to testdata directory."""
         # Get testdata directory from workspace
-        testdata_dir = Path(self.workspace.workspace_dir).parent / "testdata" / "record_replay" / "ocr_results"
+        testdata_dir = (
+            Path(self.workspace.workspace_dir).parent / "testdata" / "record_replay" / "ocr_results"
+        )
         testdata_dir.mkdir(parents=True, exist_ok=True)
 
         # Save recording

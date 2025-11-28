@@ -1,6 +1,5 @@
 """Tests for sync engine / converter module."""
 
-import json
 from pathlib import Path
 
 import pytest
@@ -25,7 +24,9 @@ def test_vault_config(temp_vault: Path) -> VaultConfig:
 class TestSyncEngine:
     """Test sync engine orchestration."""
 
-    def test_init(self, sample_config: AppConfig, state_manager: StateManager, mock_cloud_sync) -> None:
+    def test_init(
+        self, sample_config: AppConfig, state_manager: StateManager, mock_cloud_sync
+    ) -> None:
         """Test sync engine initialization."""
         engine = SyncEngine(sample_config, state_manager, cloud_sync=mock_cloud_sync)
         assert engine.config == sample_config
@@ -58,7 +59,12 @@ class TestSyncEngine:
         assert mock_cloud_sync.upload_document.called
 
     def test_sync_file_not_found(
-        self, sample_config: AppConfig, state_manager: StateManager, temp_vault: Path, test_vault_config: VaultConfig, mock_cloud_sync
+        self,
+        sample_config: AppConfig,
+        state_manager: StateManager,
+        temp_vault: Path,
+        test_vault_config: VaultConfig,
+        mock_cloud_sync,
     ) -> None:
         """Test sync fails gracefully for non-existent file."""
         nonexistent = temp_vault / "nonexistent.md"
@@ -72,7 +78,12 @@ class TestSyncEngine:
         assert "not found" in result.error.lower()
 
     def test_sync_file_outside_vault(
-        self, sample_config: AppConfig, state_manager: StateManager, tmp_path: Path, test_vault_config: VaultConfig, mock_cloud_sync
+        self,
+        sample_config: AppConfig,
+        state_manager: StateManager,
+        tmp_path: Path,
+        test_vault_config: VaultConfig,
+        mock_cloud_sync,
     ) -> None:
         """Test sync fails for file outside vault."""
         outside_file = tmp_path / "outside.md"
@@ -392,10 +403,7 @@ class TestSyncResult:
     def test_sync_result_failure(self) -> None:
         """Test failed sync result."""
         result = SyncResult(
-            vault_name="test-vault",
-            path=Path("/test/file.md"),
-            success=False,
-            error="Test error"
+            vault_name="test-vault", path=Path("/test/file.md"), success=False, error="Test error"
         )
 
         assert result.vault_name == "test-vault"
@@ -455,8 +463,8 @@ class TestUnsync:
         file2.write_text("# Test 2")
 
         engine = SyncEngine(sample_config, state_manager, cloud_sync=mock_cloud_sync)
-        result1 = engine.sync_file(test_vault_config, file1)
-        result2 = engine.sync_file(test_vault_config, file2)
+        engine.sync_file(test_vault_config, file1)
+        engine.sync_file(test_vault_config, file2)
 
         # Verify files are synced
         assert len(state_manager.get_all_synced_files("test-vault")) == 2
@@ -503,13 +511,15 @@ class TestUnsync:
 
         # Make atomic update raise a generation conflict (concurrent cloud modification)
         from rock_paper_sync.sync_v3 import GenerationConflictError
+
         mock_cloud_sync.apply_virtual_state.side_effect = GenerationConflictError(
             expected=0, actual=1
         )
 
-        # Unsync with deletion should raise ResyncRequired for generation conflicts
-        from rock_paper_sync.converter import ResyncRequired
-        with pytest.raises(ResyncRequired, match="generation conflict"):
+        # Unsync with deletion should raise ResyncRequiredError for generation conflicts
+        from rock_paper_sync.converter import ResyncRequiredError
+
+        with pytest.raises(ResyncRequiredError, match="generation conflict"):
             engine.unsync_vault("test-vault", delete_from_cloud=True)
 
     def test_unsync_all_vaults(

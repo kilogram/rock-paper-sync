@@ -29,26 +29,26 @@ Usage:
 from .base import (
     DeviceTestCase,
     DeviceTestResult,
+    SkipTestError,
     device_test,
     requires_ocr,
-    SkipTest,
 )
 from .logging import Bench
-from .output import Colors
-from .offline import OfflineEmulator
 from .ocr_integration import OCRIntegrationMixin, OCRTestRecording
+from .offline import OfflineEmulator
 from .online import OnlineDevice
+from .output import Colors
 from .prompts import user_confirm, user_prompt
 from .protocol import (
+    DeviceInteractionManager,  # Backward compatibility
     DeviceInteractionProtocol,
     DeviceProtocol,  # Backward compatibility
-    DeviceInteractionManager,  # Backward compatibility
     DocumentState,
 )
 from .testdata import TestArtifacts, TestdataStore, TestManifest
 from .vault_manager import VaultInteractionManager, VaultOperation
-from .vault_online import OnlineVault
 from .vault_offline import OfflineVault
+from .vault_online import OnlineVault
 from .workspace import WorkspaceManager
 
 __all__ = [
@@ -57,7 +57,7 @@ __all__ = [
     "DeviceTestResult",
     "device_test",
     "requires_ocr",
-    "SkipTest",
+    "SkipTestError",
     # Device protocol and implementations
     "DeviceInteractionProtocol",  # Primary protocol
     "DeviceProtocol",  # Backward compatibility alias

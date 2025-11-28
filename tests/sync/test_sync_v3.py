@@ -5,17 +5,17 @@ and reMarkable devices.
 """
 
 import json
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import Mock, patch
 
 import pytest
 import requests
 
 from rock_paper_sync.sync_v3 import (
-    BlobEntry,
     DOC_TYPE,
     FILE_TYPE,
-    GenerationConflictError,
     SCHEMA_VERSION,
+    BlobEntry,
+    GenerationConflictError,
     SyncV3Client,
 )
 
@@ -408,9 +408,7 @@ class TestUploadDocumentFiles:
         import hashlib
 
         sorted_entries = sorted(file_entries, key=lambda e: e.entry_name)
-        file_hashes_binary = b"".join(
-            bytes.fromhex(entry.hash) for entry in sorted_entries
-        )
+        file_hashes_binary = b"".join(bytes.fromhex(entry.hash) for entry in sorted_entries)
         expected_hash = hashlib.sha256(file_hashes_binary).hexdigest()
 
         assert hash_of_hashes == expected_hash
@@ -463,17 +461,13 @@ class TestMergeDocumentIntoRoot:
     ):
         """Existing document should be updated in root."""
         mock_get_gen.return_value = ("old-root", 5)
-        mock_get_docs.return_value = [
-            BlobEntry("old-hash", DOC_TYPE, "existing-uuid", 3, 0)
-        ]
+        mock_get_docs.return_value = [BlobEntry("old-hash", DOC_TYPE, "existing-uuid", 3, 0)]
         mock_upload_idx.return_value = ("new-root-hash", b"index")
         mock_update_root.return_value = 6
 
         client = SyncV3Client("http://localhost:3000", "token")
 
-        client.merge_document_into_root(
-            "existing-uuid", "new-hash-of-hashes", 4, broadcast=True
-        )
+        client.merge_document_into_root("existing-uuid", "new-hash-of-hashes", 4, broadcast=True)
 
         # Should have uploaded index with updated entry
         call_args = mock_upload_idx.call_args[0][0]
@@ -504,9 +498,7 @@ class TestMergeDocumentIntoRoot:
 
         client = SyncV3Client("http://localhost:3000", "token")
 
-        new_gen = client.merge_document_into_root(
-            "doc-uuid", "hash", 3, max_retries=3
-        )
+        new_gen = client.merge_document_into_root("doc-uuid", "hash", 3, max_retries=3)
 
         assert new_gen == 7
         assert mock_update_root.call_count == 2
@@ -584,9 +576,7 @@ class TestDeleteDocument:
     def test_delete_document_not_found(self, mock_get_gen, mock_get_docs):
         """Should return early if document not in root."""
         mock_get_gen.return_value = ("root", 5)
-        mock_get_docs.return_value = [
-            BlobEntry("hash", DOC_TYPE, "other-doc", 2, 0)
-        ]
+        mock_get_docs.return_value = [BlobEntry("hash", DOC_TYPE, "other-doc", 2, 0)]
 
         client = SyncV3Client("http://localhost:3000", "token")
 
@@ -602,9 +592,7 @@ class TestDeleteDocument:
     ):
         """Should retry deletion on conflict."""
         mock_get_gen.side_effect = [("root1", 5), ("root2", 6)]
-        mock_get_docs.return_value = [
-            BlobEntry("hash", DOC_TYPE, "doc-uuid", 2, 0)
-        ]
+        mock_get_docs.return_value = [BlobEntry("hash", DOC_TYPE, "doc-uuid", 2, 0)]
         mock_upload_idx.return_value = ("new-root", b"index")
         mock_update_root.side_effect = [
             GenerationConflictError(5, 6),
@@ -756,9 +744,7 @@ class TestGetDocumentPageUUIDs:
     @patch.object(SyncV3Client, "get_root_documents")
     def test_get_page_uuids_formatversion_2(self, mock_get_docs, mock_download):
         """Should extract UUIDs from formatVersion 2 cPages."""
-        mock_get_docs.return_value = [
-            BlobEntry("doc-hash", DOC_TYPE, "doc-uuid", 3, 0)
-        ]
+        mock_get_docs.return_value = [BlobEntry("doc-hash", DOC_TYPE, "doc-uuid", 3, 0)]
 
         # Mock document index
         doc_index = b"3\nfile-hash:0:doc-uuid.content:0:100"
@@ -801,9 +787,7 @@ class TestGetDocumentPageUUIDs:
     @patch.object(SyncV3Client, "get_root_documents")
     def test_get_page_uuids_no_content_file(self, mock_get_docs, mock_download):
         """Should return empty list if no .content file."""
-        mock_get_docs.return_value = [
-            BlobEntry("doc-hash", DOC_TYPE, "doc-uuid", 2, 0)
-        ]
+        mock_get_docs.return_value = [BlobEntry("doc-hash", DOC_TYPE, "doc-uuid", 2, 0)]
 
         # Mock document index without .content file
         doc_index = b"3\nhash:0:doc-uuid.metadata:0:50"
@@ -817,13 +801,9 @@ class TestGetDocumentPageUUIDs:
 
     @patch.object(SyncV3Client, "download_blob")
     @patch.object(SyncV3Client, "get_root_documents")
-    def test_get_page_uuids_formatversion_1_fallback(
-        self, mock_get_docs, mock_download
-    ):
+    def test_get_page_uuids_formatversion_1_fallback(self, mock_get_docs, mock_download):
         """Should handle formatVersion 1 pages array."""
-        mock_get_docs.return_value = [
-            BlobEntry("doc-hash", DOC_TYPE, "doc-uuid", 2, 0)
-        ]
+        mock_get_docs.return_value = [BlobEntry("doc-hash", DOC_TYPE, "doc-uuid", 2, 0)]
 
         doc_index = b"3\nfile-hash:0:doc-uuid.content:0:100"
         content_json = {"formatVersion": 1, "pages": ["page-a", "page-b"]}

@@ -15,9 +15,10 @@ Replaying:
 """
 
 import io
+
 import pytest
 
-from rock_paper_sync.annotations import read_annotations, AnnotationType
+from rock_paper_sync.annotations import AnnotationType, read_annotations
 from rock_paper_sync.annotations.handlers.stroke_handler import StrokeHandler
 
 
@@ -41,7 +42,9 @@ def test_stroke_anchors_comprehensive(device, workspace, fixtures_dir):
     workspace.test_doc.write_text(fixture_doc.read_text())
 
     try:
-        device.start_test(test_id, description="Create stroke annotations for comprehensive anchor testing")
+        device.start_test(
+            test_id, description="Create stroke annotations for comprehensive anchor testing"
+        )
     except FileNotFoundError:
         pytest.skip(f"Testdata '{test_id}' not available. Run with --online -s to record.")
 
@@ -66,10 +69,7 @@ def test_stroke_anchors_comprehensive(device, workspace, fixtures_dir):
             # Create anchor
             paragraph_text = f"Paragraph {i} with handwritten content"
             anchor = handler.create_anchor(
-                annotation=stroke,
-                paragraph_text=paragraph_text,
-                paragraph_index=i,
-                page_num=0
+                annotation=stroke, paragraph_text=paragraph_text, paragraph_index=i, page_num=0
             )
 
             # Verify basic anchor structure
@@ -78,8 +78,8 @@ def test_stroke_anchors_comprehensive(device, workspace, fixtures_dir):
             assert anchor.bbox is not None
 
             # Verify position
-            assert isinstance(anchor.page.x, (int, float))
-            assert isinstance(anchor.page.y, (int, float))
+            assert isinstance(anchor.page.x, int | float)
+            assert isinstance(anchor.page.y, int | float)
 
             # Verify bounding box dimensions are positive
             assert anchor.bbox.width > 0, f"Expected positive width, got {anchor.bbox.width}"
@@ -91,58 +91,72 @@ def test_stroke_anchors_comprehensive(device, workspace, fixtures_dir):
 
     # Use first anchor for behavioral tests
     test_anchor, original_stroke = all_anchors[0]
-    original_bbox = original_stroke.stroke.bounding_box
 
     # Test 1: Exact Position Match
     # Stroke at same position should score high
     exact_score = test_anchor.match_score(
         position=(test_anchor.page.x, test_anchor.page.y),
-        bbox=(test_anchor.bbox.x, test_anchor.bbox.y, test_anchor.bbox.width, test_anchor.bbox.height)
+        bbox=(
+            test_anchor.bbox.x,
+            test_anchor.bbox.y,
+            test_anchor.bbox.width,
+            test_anchor.bbox.height,
+        ),
     )
-    assert exact_score > 0.7, \
-        f"Exact position/bbox match should score high, got {exact_score:.2f}"
+    assert exact_score > 0.7, f"Exact position/bbox match should score high, got {exact_score:.2f}"
 
     # Test 2: Small Position Shift
     # Stroke moved slightly should still match (tolerance)
     small_shift = 10.0  # pixels
     shifted_score = test_anchor.match_score(
         position=(test_anchor.page.x + small_shift, test_anchor.page.y + small_shift),
-        bbox=(test_anchor.bbox.x + small_shift, test_anchor.bbox.y + small_shift,
-              test_anchor.bbox.width, test_anchor.bbox.height)
+        bbox=(
+            test_anchor.bbox.x + small_shift,
+            test_anchor.bbox.y + small_shift,
+            test_anchor.bbox.width,
+            test_anchor.bbox.height,
+        ),
     )
-    assert shifted_score > 0.6, \
-        f"Small position shift should still match, got {shifted_score:.2f}"
+    assert shifted_score > 0.6, f"Small position shift should still match, got {shifted_score:.2f}"
 
     # Test 3: Bounding Box Resize
     # Slightly different bbox size should still match (partial overlap)
     resize_factor = 1.2
     resized_score = test_anchor.match_score(
         position=(test_anchor.page.x, test_anchor.page.y),
-        bbox=(test_anchor.bbox.x, test_anchor.bbox.y,
-              test_anchor.bbox.width * resize_factor, test_anchor.bbox.height * resize_factor)
+        bbox=(
+            test_anchor.bbox.x,
+            test_anchor.bbox.y,
+            test_anchor.bbox.width * resize_factor,
+            test_anchor.bbox.height * resize_factor,
+        ),
     )
-    assert resized_score > 0.4, \
-        f"Resized bbox should partially match (IoU overlap), got {resized_score:.2f}"
+    assert (
+        resized_score > 0.4
+    ), f"Resized bbox should partially match (IoU overlap), got {resized_score:.2f}"
 
     # Test 4: Large Position Shift - No Match
     # Stroke far away should not match
     large_shift = 500.0  # pixels
     distant_score = test_anchor.match_score(
         position=(test_anchor.page.x + large_shift, test_anchor.page.y + large_shift),
-        bbox=(test_anchor.bbox.x + large_shift, test_anchor.bbox.y + large_shift,
-              test_anchor.bbox.width, test_anchor.bbox.height)
+        bbox=(
+            test_anchor.bbox.x + large_shift,
+            test_anchor.bbox.y + large_shift,
+            test_anchor.bbox.width,
+            test_anchor.bbox.height,
+        ),
     )
-    assert distant_score < 0.3, \
-        f"Distant stroke should not match, got {distant_score:.2f}"
+    assert distant_score < 0.3, f"Distant stroke should not match, got {distant_score:.2f}"
 
     # Test 5: Position-Only Match
     # Position without bbox should still work (weighted lower)
     position_only_score = test_anchor.match_score(
-        position=(test_anchor.page.x, test_anchor.page.y),
-        bbox=None
+        position=(test_anchor.page.x, test_anchor.page.y), bbox=None
     )
-    assert position_only_score > 0.5, \
-        f"Position-only match should work, got {position_only_score:.2f}"
+    assert (
+        position_only_score > 0.5
+    ), f"Position-only match should work, got {position_only_score:.2f}"
 
     # Test 6: Bounding Box IoU
     # Test IoU calculation directly
@@ -153,14 +167,17 @@ def test_stroke_anchors_comprehensive(device, workspace, fixtures_dir):
 
         # Non-overlapping bbox = IoU of 0.0
         from rock_paper_sync.annotations.common.anchors import BoundingBox
+
         distant_bbox = BoundingBox(
             x=test_anchor.bbox.x + 1000,
             y=test_anchor.bbox.y + 1000,
             width=test_anchor.bbox.width,
-            height=test_anchor.bbox.height
+            height=test_anchor.bbox.height,
         )
         no_overlap_iou = test_anchor.bbox.iou(distant_bbox)
-        assert no_overlap_iou == 0.0, f"Non-overlapping bbox should have IoU=0.0, got {no_overlap_iou:.2f}"
+        assert (
+            no_overlap_iou == 0.0
+        ), f"Non-overlapping bbox should have IoU=0.0, got {no_overlap_iou:.2f}"
 
     # Test 7: Best Match Selection
     # When multiple candidate positions, should pick the best match
@@ -176,13 +193,11 @@ def test_stroke_anchors_comprehensive(device, workspace, fixtures_dir):
             (test_anchor2.page.x, test_anchor2.page.y),
         ]
 
-        scores = [
-            test_anchor.match_score(position=pos, bbox=None)
-            for pos in candidates
-        ]
+        scores = [test_anchor.match_score(position=pos, bbox=None) for pos in candidates]
 
         best_index = scores.index(max(scores))
-        assert best_index == 1, \
-            f"Should identify exact position (index 1) as best match, got index {best_index} with scores {scores}"
+        assert (
+            best_index == 1
+        ), f"Should identify exact position (index 1) as best match, got index {best_index} with scores {scores}"
 
     device.end_test(test_id)

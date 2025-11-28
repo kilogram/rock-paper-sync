@@ -12,6 +12,7 @@ class RenderConfig:
         highlight_style: How to render highlights ("mark", "bold", "italic")
         stroke_style: How to render strokes/OCR ("footnote", "comment")
     """
+
     highlight_style: Literal["mark", "bold", "italic"] = "mark"
     stroke_style: Literal["footnote", "comment"] = "comment"
 
@@ -26,6 +27,7 @@ class ExtractedAnnotation:
         start_offset: Character offset in paragraph where annotation starts
         end_offset: Character offset in paragraph where annotation ends
     """
+
     text: str
     annotation_type: str
     start_offset: int = -1

@@ -7,7 +7,6 @@ import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
 
 # Python 3.11+ has tomllib built-in, 3.10 needs tomli
 if sys.version_info >= (3, 11):
@@ -16,9 +15,7 @@ else:  # pragma: no cover (Python 3.10 compatibility)
     try:
         import tomli as tomllib  # type: ignore[import-not-found,no-redef]
     except ImportError:
-        raise ImportError(
-            "tomli is required for Python < 3.11. Install with: pip install tomli"
-        )
+        raise ImportError("tomli is required for Python < 3.11. Install with: pip install tomli")
 
 
 class ConfigError(Exception):
@@ -33,7 +30,7 @@ class VaultConfig:
 
     name: str
     path: Path
-    remarkable_folder: Optional[str]  # None = files go to root
+    remarkable_folder: str | None  # None = files go to root
     include_patterns: list[str]
     exclude_patterns: list[str]
 
@@ -106,9 +103,9 @@ class OCRConfig:
     container_runtime: str = "podman"
     local_image: str = "rock-paper-sync/ocr:latest"
     local_gpu_device: str = "0"
-    runpods_endpoint_id: Optional[str] = None
-    runpods_api_key: Optional[str] = None
-    cache_dir: Optional[Path] = None
+    runpods_endpoint_id: str | None = None
+    runpods_api_key: str | None = None
+    cache_dir: Path | None = None
     min_corrections_for_dataset: int = 100
     auto_fine_tune: bool = False
     base_model: str = "microsoft/trocr-base-handwritten"
@@ -362,9 +359,7 @@ def validate_config(config: AppConfig) -> None:
             )
 
         if not vault.path.is_dir():
-            raise ConfigError(
-                f"Vault '{vault.name}' path is not a directory: {vault.path}"
-            )
+            raise ConfigError(f"Vault '{vault.name}' path is not a directory: {vault.path}")
 
         if not os.access(vault.path, os.R_OK):
             raise ConfigError(
@@ -386,15 +381,11 @@ def validate_config(config: AppConfig) -> None:
         try:
             db_dir.mkdir(parents=True, exist_ok=True)
         except Exception as e:
-            raise ConfigError(
-                f"Cannot create state database directory: {db_dir}\n"
-                f"Error: {e}"
-            )
+            raise ConfigError(f"Cannot create state database directory: {db_dir}\n" f"Error: {e}")
 
     if not os.access(db_dir, os.W_OK):
         raise ConfigError(
-            f"State database directory is not writable: {db_dir}\n"
-            "Please check file permissions."
+            f"State database directory is not writable: {db_dir}\n" "Please check file permissions."
         )
 
     # Validate log file directory is writable (create if needed)
@@ -403,26 +394,19 @@ def validate_config(config: AppConfig) -> None:
         try:
             log_dir.mkdir(parents=True, exist_ok=True)
         except Exception as e:
-            raise ConfigError(
-                f"Cannot create log file directory: {log_dir}\n" f"Error: {e}"
-            )
+            raise ConfigError(f"Cannot create log file directory: {log_dir}\n" f"Error: {e}")
 
     if not os.access(log_dir, os.W_OK):
         raise ConfigError(
-            f"Log file directory is not writable: {log_dir}\n"
-            "Please check file permissions."
+            f"Log file directory is not writable: {log_dir}\n" "Please check file permissions."
         )
 
     # Validate numeric values are positive
     if config.sync.debounce_seconds < 0:
-        raise ConfigError(
-            f"debounce_seconds must be positive, got: {config.sync.debounce_seconds}"
-        )
+        raise ConfigError(f"debounce_seconds must be positive, got: {config.sync.debounce_seconds}")
 
     if config.layout.lines_per_page <= 0:
-        raise ConfigError(
-            f"lines_per_page must be positive, got: {config.layout.lines_per_page}"
-        )
+        raise ConfigError(f"lines_per_page must be positive, got: {config.layout.lines_per_page}")
 
     for margin_name in ["margin_top", "margin_bottom", "margin_left", "margin_right"]:
         margin_value = getattr(config.layout, margin_name)
@@ -467,9 +451,7 @@ def validate_config(config: AppConfig) -> None:
             )
 
         if config.ocr.timeout <= 0:
-            raise ConfigError(
-                f"OCR timeout must be positive, got: {config.ocr.timeout}"
-            )
+            raise ConfigError(f"OCR timeout must be positive, got: {config.ocr.timeout}")
 
         valid_runtimes = ["podman", "docker"]
         if config.ocr.container_runtime not in valid_runtimes:
@@ -489,8 +471,7 @@ def validate_config(config: AppConfig) -> None:
                 config.cache_dir.mkdir(parents=True, exist_ok=True)
             except Exception as e:
                 raise ConfigError(
-                    f"Cannot create cache directory: {config.cache_dir}\n"
-                    f"Error: {e}"
+                    f"Cannot create cache directory: {config.cache_dir}\n" f"Error: {e}"
                 )
 
         # Create OCR cache directory if it doesn't exist
@@ -499,7 +480,5 @@ def validate_config(config: AppConfig) -> None:
                 config.ocr.cache_dir.mkdir(parents=True, exist_ok=True)
             except Exception as e:
                 raise ConfigError(
-                    f"Cannot create OCR cache directory: {config.ocr.cache_dir}\n"
-                    f"Error: {e}"
+                    f"Cannot create OCR cache directory: {config.ocr.cache_dir}\n" f"Error: {e}"
                 )
-

@@ -36,13 +36,12 @@ allowing precise rendering while preserving plain text for search/indexing.
 """
 
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Optional
-
-import re
+from typing import Any
 
 import mistune
 import yaml
@@ -60,6 +59,7 @@ def _strip_annotation_markers(content: str) -> str:
     content = _MARKER_END_PATTERN.sub("", content)
     content = re.sub(r"\n{3,}", "\n\n", content)
     return content.strip()
+
 
 logger = logging.getLogger("rock_paper_sync.parser")
 
@@ -182,8 +182,7 @@ def parse_markdown_file(file_path: Path) -> MarkdownDocument:
     last_modified = datetime.fromtimestamp(file_path.stat().st_mtime)
 
     logger.debug(
-        f"Parsed {len(blocks)} blocks from {file_path.name}, "
-        f"hash: {content_hash[:8]}..."
+        f"Parsed {len(blocks)} blocks from {file_path.name}, " f"hash: {content_hash[:8]}..."
     )
 
     return MarkdownDocument(
@@ -270,11 +269,14 @@ def parse_content(markdown_text: str) -> list[ContentBlock]:
     # Convert AST nodes to content blocks
     blocks: list[ContentBlock] = []
     for node in ast:
+        # Skip non-dict nodes (mistune AST should only contain dicts)
+        if not isinstance(node, dict):
+            continue
         result = ast_node_to_block(node)
         if result is not None:
             # Handle both single blocks and lists of blocks
             if isinstance(result, list):
-                blocks.extend(result)
+                blocks.extend(list(result))
             else:
                 blocks.append(result)
 
@@ -297,21 +299,16 @@ def ast_node_to_block(
 
     if node_type == "paragraph":
         text, formatting = extract_text_and_formatting(node.get("children", []))
-        return ContentBlock(
-            type=BlockType.PARAGRAPH, level=0, text=text, formatting=formatting
-        )
+        return ContentBlock(type=BlockType.PARAGRAPH, level=0, text=text, formatting=formatting)
 
     elif node_type == "heading":
         text, formatting = extract_text_and_formatting(node.get("children", []))
         level = node.get("attrs", {}).get("level", 1)
-        return ContentBlock(
-            type=BlockType.HEADER, level=level, text=text, formatting=formatting
-        )
+        return ContentBlock(type=BlockType.HEADER, level=level, text=text, formatting=formatting)
 
     elif node_type == "list":
         # Process list items
         items: list[ContentBlock] = []
-        ordered = node.get("attrs", {}).get("ordered", False)
 
         for item_node in node.get("children", []):
             if item_node.get("type") == "list_item":
@@ -322,9 +319,7 @@ def ast_node_to_block(
                     child_type = child.get("type")
                     if child_type in ("paragraph", "block_text"):
                         # Extract text from paragraph or block_text
-                        text, formatting = extract_text_and_formatting(
-                            child.get("children", [])
-                        )
+                        text, formatting = extract_text_and_formatting(child.get("children", []))
                         items.append(
                             ContentBlock(
                                 type=BlockType.LIST_ITEM,
@@ -337,7 +332,7 @@ def ast_node_to_block(
                         # Nested list - recursively process with increased level
                         nested_result = ast_node_to_block(child, list_level + 1)
                         if isinstance(nested_result, list):
-                            items.extend(nested_result)
+                            items.extend(list(nested_result))
                         elif nested_result is not None:  # pragma: no cover (defensive code)
                             items.append(nested_result)
 
@@ -350,9 +345,7 @@ def ast_node_to_block(
         # Include language info in the text if present
         if lang:
             code_text = f"[{lang}]\n{code_text}"
-        return ContentBlock(
-            type=BlockType.CODE_BLOCK, level=0, text=code_text, formatting=[]
-        )
+        return ContentBlock(type=BlockType.CODE_BLOCK, level=0, text=code_text, formatting=[])
 
     elif node_type == "block_quote":
         # Blockquotes contain child blocks
@@ -361,26 +354,20 @@ def ast_node_to_block(
             # Take the first child (usually a paragraph)
             first_child = quote_children[0]
             if first_child.get("type") == "paragraph":
-                text, formatting = extract_text_and_formatting(
-                    first_child.get("children", [])
-                )
+                text, formatting = extract_text_and_formatting(first_child.get("children", []))
                 return ContentBlock(
                     type=BlockType.BLOCKQUOTE, level=0, text=text, formatting=formatting
                 )
 
     elif node_type == "thematic_break":
-        return ContentBlock(
-            type=BlockType.HORIZONTAL_RULE, level=0, text="---", formatting=[]
-        )
+        return ContentBlock(type=BlockType.HORIZONTAL_RULE, level=0, text="---", formatting=[])
 
     # Unknown or unhandled node type
     logger.debug(f"Unhandled AST node type: {node_type}")
     return None
 
 
-def extract_text_and_formatting(
-    children: list[dict[str, Any]]
-) -> tuple[str, list[TextFormat]]:
+def extract_text_and_formatting(children: list[dict[str, Any]]) -> tuple[str, list[TextFormat]]:
     """Extract plain text and formatting ranges from inline AST nodes.
 
     This is the most critical function for preserving exact character positions
@@ -408,16 +395,12 @@ def extract_text_and_formatting(
         elif child_type == "strong":
             # Bold text
             start_pos = current_pos
-            inner_text, inner_fmt = extract_text_and_formatting(
-                child.get("children", [])
-            )
+            inner_text, inner_fmt = extract_text_and_formatting(child.get("children", []))
             text_parts.append(inner_text)
 
             # Add bold formatting for this range
             formatting.append(
-                TextFormat(
-                    start=start_pos, end=start_pos + len(inner_text), style=FormatStyle.BOLD
-                )
+                TextFormat(start=start_pos, end=start_pos + len(inner_text), style=FormatStyle.BOLD)
             )
 
             # Include any nested formatting, adjusted for position
@@ -436,9 +419,7 @@ def extract_text_and_formatting(
         elif child_type == "emphasis":
             # Italic text
             start_pos = current_pos
-            inner_text, inner_fmt = extract_text_and_formatting(
-                child.get("children", [])
-            )
+            inner_text, inner_fmt = extract_text_and_formatting(child.get("children", []))
             text_parts.append(inner_text)
 
             # Add italic formatting for this range
@@ -470,9 +451,7 @@ def extract_text_and_formatting(
             text_parts.append(code_text)
 
             formatting.append(
-                TextFormat(
-                    start=start_pos, end=start_pos + len(code_text), style=FormatStyle.CODE
-                )
+                TextFormat(start=start_pos, end=start_pos + len(code_text), style=FormatStyle.CODE)
             )
 
             current_pos += len(code_text)
@@ -480,9 +459,7 @@ def extract_text_and_formatting(
         elif child_type == "link":
             # Link - extract text and append URL in parentheses
             start_pos = current_pos
-            inner_text, inner_fmt = extract_text_and_formatting(
-                child.get("children", [])
-            )
+            inner_text, inner_fmt = extract_text_and_formatting(child.get("children", []))
             url = child.get("attrs", {}).get("url", "")
 
             # Format as "text (URL)"
@@ -522,9 +499,7 @@ def extract_text_and_formatting(
         elif child_type == "strikethrough":
             # Strikethrough text
             start_pos = current_pos
-            inner_text, inner_fmt = extract_text_and_formatting(
-                child.get("children", [])
-            )
+            inner_text, inner_fmt = extract_text_and_formatting(child.get("children", []))
             text_parts.append(inner_text)
 
             formatting.append(

@@ -4,7 +4,6 @@ This module tests the generator that converts markdown documents into
 reMarkable v6 format files with pagination and rmscene integration.
 """
 
-import json
 from pathlib import Path
 
 import pytest
@@ -83,9 +82,7 @@ def long_markdown_doc(tmp_path: Path) -> MarkdownDocument:
     # Generate enough content for multiple pages (45 lines per page)
     for i in range(30):
         content.append(f"\n## Section {i + 1}\n")
-        content.append(
-            f"This is paragraph {i + 1}. " * 10
-        )  # Long paragraph
+        content.append(f"This is paragraph {i + 1}. " * 10)  # Long paragraph
 
     md_file.write_text("".join(content))
     return parse_markdown_file(md_file)
@@ -117,9 +114,7 @@ class TestRemarkableGenerator:
         self, generator: RemarkableGenerator, sample_markdown_doc: MarkdownDocument
     ) -> None:
         """Should set parent UUID when provided."""
-        doc = generator.generate_document(
-            sample_markdown_doc, parent_uuid="parent-123"
-        )
+        doc = generator.generate_document(sample_markdown_doc, parent_uuid="parent-123")
 
         assert doc.parent_uuid == "parent-123"
 
@@ -138,18 +133,14 @@ class TestRemarkableGenerator:
 class TestPagination:
     """Tests for content pagination logic."""
 
-    def test_paginate_empty_content(
-        self, generator: RemarkableGenerator
-    ) -> None:
+    def test_paginate_empty_content(self, generator: RemarkableGenerator) -> None:
         """Empty content should result in one empty page."""
         pages = generator.paginate_content([])
 
         assert len(pages) == 1
         assert pages[0] == []
 
-    def test_paginate_single_block(
-        self, generator: RemarkableGenerator
-    ) -> None:
+    def test_paginate_single_block(self, generator: RemarkableGenerator) -> None:
         """Single block should fit on one page."""
         blocks = [
             ContentBlock(
@@ -165,9 +156,7 @@ class TestPagination:
         assert len(pages) == 1
         assert len(pages[0]) == 1
 
-    def test_paginate_multiple_pages(
-        self, generator: RemarkableGenerator
-    ) -> None:
+    def test_paginate_multiple_pages(self, generator: RemarkableGenerator) -> None:
         """Many blocks should split across multiple pages."""
         # Create blocks that will exceed one page
         blocks = []
@@ -188,9 +177,7 @@ class TestPagination:
         for page in pages:
             assert len(page) > 0
 
-    def test_header_near_bottom_starts_new_page(
-        self, generator: RemarkableGenerator
-    ) -> None:
+    def test_header_near_bottom_starts_new_page(self, generator: RemarkableGenerator) -> None:
         """Headers near page bottom should start new page."""
         blocks = []
 
@@ -222,9 +209,7 @@ class TestPagination:
         # Last page should start with the header
         assert pages[-1][0].type == BlockType.HEADER
 
-    def test_blocks_not_split(
-        self, generator: RemarkableGenerator
-    ) -> None:
+    def test_blocks_not_split(self, generator: RemarkableGenerator) -> None:
         """Blocks should never be split across pages."""
         blocks = [
             ContentBlock(
@@ -281,9 +266,7 @@ class TestEstimateBlockLines:
         lines = generator.estimate_block_lines(block)
         assert lines > 10  # Should wrap many times
 
-    def test_header_extra_spacing(
-        self, generator: RemarkableGenerator
-    ) -> None:
+    def test_header_extra_spacing(self, generator: RemarkableGenerator) -> None:
         """Headers should have extra spacing."""
         para = ContentBlock(
             type=BlockType.PARAGRAPH,
@@ -299,9 +282,7 @@ class TestEstimateBlockLines:
         )
 
         # Header should take more lines due to spacing
-        assert generator.estimate_block_lines(header) > generator.estimate_block_lines(
-            para
-        )
+        assert generator.estimate_block_lines(header) > generator.estimate_block_lines(para)
 
     def test_code_block_line_count(self, generator: RemarkableGenerator) -> None:
         """Code blocks should count newlines plus spacing."""
@@ -365,9 +346,7 @@ class TestBlocksToTextItems:
         assert len(items) == 2
         assert items[1].y > items[0].y
 
-    def test_list_item_indentation(
-        self, generator: RemarkableGenerator
-    ) -> None:
+    def test_list_item_indentation(self, generator: RemarkableGenerator) -> None:
         """List items should be indented."""
         blocks = [
             ContentBlock(
@@ -387,9 +366,7 @@ class TestBlocksToTextItems:
         # Should have bullet
         assert item.text.startswith("•")
 
-    def test_nested_list_more_indented(
-        self, generator: RemarkableGenerator
-    ) -> None:
+    def test_nested_list_more_indented(self, generator: RemarkableGenerator) -> None:
         """Nested lists should have more indentation."""
         blocks = [
             ContentBlock(
@@ -410,9 +387,7 @@ class TestBlocksToTextItems:
 
         assert items[1].x > items[0].x
 
-    def test_horizontal_rule_skipped(
-        self, generator: RemarkableGenerator
-    ) -> None:
+    def test_horizontal_rule_skipped(self, generator: RemarkableGenerator) -> None:
         """Horizontal rules should not create text items."""
         blocks = [
             ContentBlock(
@@ -428,9 +403,7 @@ class TestBlocksToTextItems:
         # No text item, just spacing
         assert len(items) == 0
 
-    def test_formatting_preserved(
-        self, generator: RemarkableGenerator
-    ) -> None:
+    def test_formatting_preserved(self, generator: RemarkableGenerator) -> None:
         """Formatting information should be preserved."""
         formatting = [TextFormat(start=0, end=4, style=FormatStyle.BOLD)]
         blocks = [
@@ -451,9 +424,7 @@ class TestBlocksToTextItems:
 class TestGenerateRmFile:
     """Tests for .rm file generation with rmscene."""
 
-    def test_generates_valid_rm_file(
-        self, generator: RemarkableGenerator
-    ) -> None:
+    def test_generates_valid_rm_file(self, generator: RemarkableGenerator) -> None:
         """Generated .rm file should be valid v6 format."""
         page = RemarkablePage(
             uuid="test-page",
@@ -476,9 +447,7 @@ class TestGenerateRmFile:
         # Should start with v6 header
         assert rm_bytes.startswith(b"reMarkable .lines file, version=6")
 
-    def test_generated_file_is_parseable(
-        self, generator: RemarkableGenerator
-    ) -> None:
+    def test_generated_file_is_parseable(self, generator: RemarkableGenerator) -> None:
         """Generated .rm file should be readable by rmscene."""
         import io
 
@@ -511,9 +480,7 @@ class TestGenerateRmFile:
         # Should still generate valid file
         assert len(rm_bytes) > 0
 
-    def test_multiple_text_items(
-        self, generator: RemarkableGenerator
-    ) -> None:
+    def test_multiple_text_items(self, generator: RemarkableGenerator) -> None:
         """Page with multiple text items should generate file."""
         page = RemarkablePage(
             uuid="multi-page",
@@ -528,9 +495,7 @@ class TestGenerateRmFile:
 
         assert len(rm_bytes) > 0
 
-    def test_newline_format_codes(
-        self, generator: RemarkableGenerator, tmp_path: Path
-    ) -> None:
+    def test_newline_format_codes(self, generator: RemarkableGenerator, tmp_path: Path) -> None:
         """Verify format code 10 (newline) is written to .rm file binary.
 
         This test validates our workaround for rmscene not supporting
@@ -542,16 +507,11 @@ class TestGenerateRmFile:
         the binary directly.
         """
         import io
-        import struct
 
         # Create markdown with known newline count
         md_file = tmp_path / "test.md"
         # This will create text with exactly 3 newlines after processing
-        md_file.write_text(
-            "First paragraph.\n\n"
-            "Second paragraph.\n\n"
-            "Third paragraph."
-        )
+        md_file.write_text("First paragraph.\n\n" "Second paragraph.\n\n" "Third paragraph.")
 
         # Parse and generate
         md_doc = parse_markdown_file(md_file)
@@ -564,9 +524,7 @@ class TestGenerateRmFile:
 
         # Verify basic file structure
         assert len(rm_bytes) > 0, "Generated file is empty"
-        assert rm_bytes.startswith(
-            b"reMarkable .lines file, version=6"
-        ), "Invalid file header"
+        assert rm_bytes.startswith(b"reMarkable .lines file, version=6"), "Invalid file header"
 
         # Extract text to count expected newlines
         blocks = list(rmscene.read_blocks(io.BytesIO(rm_bytes)))
@@ -609,7 +567,7 @@ class TestGenerateRmFile:
         # small documents like our test.
 
         # Count newline bytes in the entire file
-        total_0x0a = rm_bytes.count(b'\x0a')
+        total_0x0a = rm_bytes.count(b"\x0a")
 
         # Count newline bytes in text content (these are actual '\n' chars)
         text_newlines = expected_newline_count
@@ -635,5 +593,3 @@ class TestGenerateRmFile:
         # ✓ Generated .rm files are valid v6 format
         # ✓ Binary contains format code 10 bytes (0x0A) beyond text newlines
         # ✓ Format code count matches expected newline count
-
-

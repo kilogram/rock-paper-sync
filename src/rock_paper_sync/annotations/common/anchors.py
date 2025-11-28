@@ -31,9 +31,9 @@ Example:
         ...
 """
 
-from dataclasses import dataclass, field
-from typing import Literal, Optional
 import difflib
+from dataclasses import dataclass, field
+from typing import Literal
 
 
 @dataclass(frozen=True)
@@ -48,6 +48,7 @@ class PagePosition:
         x: X coordinate in page space (0-1404 for reMarkable)
         y: Y coordinate in page space (0-1872 for reMarkable)
     """
+
     page_num: int
     x: float
     y: float
@@ -95,6 +96,7 @@ class BoundingBox:
         width: Box width
         height: Box height
     """
+
     x: float
     y: float
     width: float
@@ -118,10 +120,10 @@ class BoundingBox:
     def overlaps(self, other: "BoundingBox") -> bool:
         """Check if this box overlaps with another."""
         return not (
-            self.x + self.width < other.x or
-            other.x + other.width < self.x or
-            self.y + self.height < other.y or
-            other.y + other.height < self.y
+            self.x + self.width < other.x
+            or other.x + other.width < self.x
+            or self.y + self.height < other.y
+            or other.y + other.height < self.y
         )
 
     def overlap_area(self, other: "BoundingBox") -> float:
@@ -168,18 +170,15 @@ class TextAnchor:
         word_offset: Word offset within paragraph (0-based)
         char_offset: Character offset within paragraph (0-based)
     """
+
     content: str
     context_before: str = ""
     context_after: str = ""
-    paragraph_index: Optional[int] = None
-    word_offset: Optional[int] = None
-    char_offset: Optional[int] = None
+    paragraph_index: int | None = None
+    word_offset: int | None = None
+    char_offset: int | None = None
 
-    def match_in_text(
-        self,
-        text: str,
-        fuzzy_threshold: float = 0.8
-    ) -> Optional[int]:
+    def match_in_text(self, text: str, fuzzy_threshold: float = 0.8) -> int | None:
         """Find this anchor's content in the given text.
 
         Args:
@@ -226,18 +225,14 @@ class TextAnchor:
 
         # Check context before
         if self.context_before:
-            actual_before = text[max(0, offset - 50):offset]
-            before_sim = difflib.SequenceMatcher(
-                None, self.context_before, actual_before
-            ).ratio()
+            actual_before = text[max(0, offset - 50) : offset]
+            before_sim = difflib.SequenceMatcher(None, self.context_before, actual_before).ratio()
             context_score += before_sim * 0.5
 
         # Check context after
         if self.context_after:
-            actual_after = text[offset + len(self.content):offset + len(self.content) + 50]
-            after_sim = difflib.SequenceMatcher(
-                None, self.context_after, actual_after
-            ).ratio()
+            actual_after = text[offset + len(self.content) : offset + len(self.content) + 50]
+            after_sim = difflib.SequenceMatcher(None, self.context_after, actual_after).ratio()
             context_score += after_sim * 0.5
 
         # Combine content match (1.0) with context match (0.0-1.0)
@@ -268,11 +263,12 @@ class AnnotationAnchor:
         text: Text anchoring (if text-based)
         metadata: Type-specific metadata (confidence scores, colors, etc.)
     """
+
     annotation_id: str
     annotation_type: AnnotationTypeHint
     page: PagePosition
-    bbox: Optional[BoundingBox] = None
-    text: Optional[TextAnchor] = None
+    bbox: BoundingBox | None = None
+    text: TextAnchor | None = None
     metadata: dict = field(default_factory=dict)
 
     @classmethod
@@ -281,11 +277,11 @@ class AnnotationAnchor:
         highlight_text: str,
         page_num: int,
         position: tuple[float, float],
-        bounding_box: Optional[tuple[float, float, float, float]] = None,
-        paragraph_index: Optional[int] = None,
+        bounding_box: tuple[float, float, float, float] | None = None,
+        paragraph_index: int | None = None,
         context_before: str = "",
         context_after: str = "",
-        color: Optional[int] = None,
+        color: int | None = None,
     ) -> "AnnotationAnchor":
         """Create anchor from highlight annotation.
 
@@ -312,17 +308,14 @@ class AnnotationAnchor:
         bbox_obj = None
         if bounding_box:
             bbox_obj = BoundingBox(
-                x=bounding_box[0],
-                y=bounding_box[1],
-                width=bounding_box[2],
-                height=bounding_box[3]
+                x=bounding_box[0], y=bounding_box[1], width=bounding_box[2], height=bounding_box[3]
             )
 
         text_anchor = TextAnchor(
             content=highlight_text,
             context_before=context_before,
             context_after=context_after,
-            paragraph_index=paragraph_index
+            paragraph_index=paragraph_index,
         )
 
         metadata = {}
@@ -335,7 +328,7 @@ class AnnotationAnchor:
             page=page,
             bbox=bbox_obj,
             text=text_anchor,
-            metadata=metadata
+            metadata=metadata,
         )
 
     @classmethod
@@ -344,12 +337,12 @@ class AnnotationAnchor:
         page_num: int,
         position: tuple[float, float],
         bounding_box: tuple[float, float, float, float],
-        paragraph_index: Optional[int] = None,
-        ocr_text: Optional[str] = None,
+        paragraph_index: int | None = None,
+        ocr_text: str | None = None,
         context_before: str = "",
         context_after: str = "",
-        image_hash: Optional[str] = None,
-        confidence: Optional[float] = None,
+        image_hash: str | None = None,
+        confidence: float | None = None,
     ) -> "AnnotationAnchor":
         """Create anchor from stroke annotation.
 
@@ -375,10 +368,7 @@ class AnnotationAnchor:
         page = PagePosition(page_num=page_num, x=position[0], y=position[1])
 
         bbox_obj = BoundingBox(
-            x=bounding_box[0],
-            y=bounding_box[1],
-            width=bounding_box[2],
-            height=bounding_box[3]
+            x=bounding_box[0], y=bounding_box[1], width=bounding_box[2], height=bounding_box[3]
         )
 
         text_anchor = None
@@ -387,7 +377,7 @@ class AnnotationAnchor:
                 content=ocr_text,
                 context_before=context_before,
                 context_after=context_after,
-                paragraph_index=paragraph_index
+                paragraph_index=paragraph_index,
             )
 
         metadata = {}
@@ -402,14 +392,14 @@ class AnnotationAnchor:
             page=page,
             bbox=bbox_obj,
             text=text_anchor,
-            metadata=metadata
+            metadata=metadata,
         )
 
     def match_score(
         self,
-        paragraph_text: Optional[str] = None,
-        position: Optional[tuple[float, float]] = None,
-        bbox: Optional[tuple[float, float, float, float]] = None,
+        paragraph_text: str | None = None,
+        position: tuple[float, float] | None = None,
+        bbox: tuple[float, float, float, float] | None = None,
     ) -> float:
         """Calculate comprehensive match score against new annotation data.
 
@@ -435,11 +425,7 @@ class AnnotationAnchor:
 
         # Position matching
         if position:
-            new_page_pos = PagePosition(
-                page_num=self.page.page_num,
-                x=position[0],
-                y=position[1]
-            )
+            new_page_pos = PagePosition(page_num=self.page.page_num, x=position[0], y=position[1])
             pos_score = self.page.similarity_score(new_page_pos)
             scores.append(pos_score)
             weights.append(0.3)

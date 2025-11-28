@@ -13,9 +13,10 @@ Replaying:
 """
 
 import io
+
 import pytest
 
-from rock_paper_sync.annotations import read_annotations, AnnotationType
+from rock_paper_sync.annotations import AnnotationType, read_annotations
 
 
 @pytest.mark.device
@@ -35,10 +36,7 @@ def test_pen_widths(device, workspace, fixtures_dir):
     try:
         device.start_test(test_id, description="Annotations with varying pen widths")
     except FileNotFoundError:
-        pytest.skip(
-            f"Testdata '{test_id}' not available. "
-            f"Run with --online -s to record."
-        )
+        pytest.skip(f"Testdata '{test_id}' not available. " f"Run with --online -s to record.")
 
     # Upload document
     doc_uuid = device.upload_document(workspace.test_doc)
@@ -60,17 +58,16 @@ def test_pen_widths(device, workspace, fixtures_dir):
                 thicknesses.add(a.stroke.thickness)
 
                 # Verify all thicknesses are positive floats
-                assert a.stroke.thickness > 0, (
-                    f"Thickness should be positive, got: {a.stroke.thickness}"
-                )
-                assert isinstance(a.stroke.thickness, float), (
-                    f"Thickness should be float, got: {type(a.stroke.thickness)}"
-                )
+                assert (
+                    a.stroke.thickness > 0
+                ), f"Thickness should be positive, got: {a.stroke.thickness}"
+                assert isinstance(
+                    a.stroke.thickness, float
+                ), f"Thickness should be float, got: {type(a.stroke.thickness)}"
 
     # Should have multiple thickness values
     assert len(thicknesses) >= 2, (
-        f"Expected multiple thickness values, found {len(thicknesses)}: "
-        f"{sorted(thicknesses)}"
+        f"Expected multiple thickness values, found {len(thicknesses)}: " f"{sorted(thicknesses)}"
     )
 
     # Finalize test

@@ -1,17 +1,13 @@
 """Comprehensive tests for the markdown parser module."""
 
-import hashlib
 from pathlib import Path
 
 import pytest
 
 from rock_paper_sync.parser import (
     BlockType,
-    ContentBlock,
     FormatStyle,
-    MarkdownDocument,
     TextFormat,
-    ast_node_to_block,
     extract_frontmatter,
     extract_text_and_formatting,
     parse_content,
@@ -600,7 +596,7 @@ class TestContentHash:
 
         # Verify hash is valid SHA-256 (64 hex characters)
         assert len(doc.content_hash) == 64
-        assert all(c in '0123456789abcdef' for c in doc.content_hash)
+        assert all(c in "0123456789abcdef" for c in doc.content_hash)
 
         # Verify hash matches semantic hash of content
         expected_hash = compute_semantic_hash(doc.content)

@@ -10,10 +10,10 @@ Tests the new anchor abstractions that hide RM v6 format complexity:
 import pytest
 
 from rock_paper_sync.annotations.common.anchors import (
-    PagePosition,
-    BoundingBox,
-    TextAnchor,
     AnnotationAnchor,
+    BoundingBox,
+    PagePosition,
+    TextAnchor,
 )
 
 
@@ -130,9 +130,7 @@ class TestTextAnchor:
     def test_match_in_text_exact(self):
         """Test exact text matching."""
         anchor = TextAnchor(
-            content="brown fox",
-            context_before="The quick ",
-            context_after=" jumps"
+            content="brown fox", context_before="The quick ", context_after=" jumps"
         )
 
         text = "The quick brown fox jumps over the lazy dog"
@@ -143,9 +141,7 @@ class TestTextAnchor:
     def test_match_in_text_fuzzy(self):
         """Test fuzzy text matching."""
         anchor = TextAnchor(
-            content="brown fox",
-            context_before="The quick ",
-            context_after=" jumps"
+            content="brown fox", context_before="The quick ", context_after=" jumps"
         )
 
         # Slightly modified text
@@ -156,11 +152,7 @@ class TestTextAnchor:
 
     def test_match_in_text_no_match(self):
         """Test no match when text differs too much."""
-        anchor = TextAnchor(
-            content="elephant",
-            context_before="",
-            context_after=""
-        )
+        anchor = TextAnchor(content="elephant", context_before="", context_after="")
 
         text = "The quick brown fox jumps over the lazy dog"
         offset = anchor.match_in_text(text)
@@ -170,9 +162,7 @@ class TestTextAnchor:
     def test_similarity_score_perfect(self):
         """Test similarity score for perfect match."""
         anchor = TextAnchor(
-            content="brown fox",
-            context_before="The quick ",
-            context_after=" jumps"
+            content="brown fox", context_before="The quick ", context_after=" jumps"
         )
 
         text = "The quick brown fox jumps over the lazy dog"
@@ -182,11 +172,7 @@ class TestTextAnchor:
 
     def test_similarity_score_no_match(self):
         """Test similarity score when no match found."""
-        anchor = TextAnchor(
-            content="elephant",
-            context_before="",
-            context_after=""
-        )
+        anchor = TextAnchor(content="elephant", context_before="", context_after="")
 
         text = "The quick brown fox jumps over the lazy dog"
         score = anchor.similarity_score(text)
@@ -207,7 +193,7 @@ class TestAnnotationAnchor:
             paragraph_index=5,
             context_before="This is an ",
             context_after=" in the text",
-            color=3
+            color=3,
         )
 
         assert anchor.annotation_type == "highlight"
@@ -231,7 +217,7 @@ class TestAnnotationAnchor:
             context_before="Before ",
             context_after=" after",
             image_hash="abc123",
-            confidence=0.95
+            confidence=0.95,
         )
 
         assert anchor.annotation_type == "stroke"
@@ -250,13 +236,11 @@ class TestAnnotationAnchor:
             position=(100.0, 200.0),
             paragraph_index=5,
             context_before="This is an ",
-            context_after=" in the text"
+            context_after=" in the text",
         )
 
         # Perfect text match
-        score = anchor.match_score(
-            paragraph_text="This is an important phrase in the text"
-        )
+        score = anchor.match_score(paragraph_text="This is an important phrase in the text")
 
         assert score > 0.8  # Strong match due to text
 
@@ -268,13 +252,12 @@ class TestAnnotationAnchor:
             position=(100.0, 200.0),
             paragraph_index=5,
             context_before="This is an ",
-            context_after=" in the text"
+            context_after=" in the text",
         )
 
         # Same position and text
         score = anchor.match_score(
-            paragraph_text="This is an important phrase in the text",
-            position=(100.0, 200.0)
+            paragraph_text="This is an important phrase in the text", position=(100.0, 200.0)
         )
 
         assert score > 0.9  # Very strong match
@@ -288,14 +271,14 @@ class TestAnnotationAnchor:
             bounding_box=(90.0, 180.0, 120.0, 40.0),
             paragraph_index=5,
             context_before="This is an ",
-            context_after=" in the text"
+            context_after=" in the text",
         )
 
         # Perfect match on all dimensions
         score = anchor.match_score(
             paragraph_text="This is an important phrase in the text",
             position=(100.0, 200.0),
-            bbox=(90.0, 180.0, 120.0, 40.0)
+            bbox=(90.0, 180.0, 120.0, 40.0),
         )
 
         assert score > 0.95  # Near-perfect match
@@ -306,13 +289,12 @@ class TestAnnotationAnchor:
             highlight_text="important phrase",
             page_num=0,
             position=(100.0, 200.0),
-            paragraph_index=5
+            paragraph_index=5,
         )
 
         # Different text, different position
         score = anchor.match_score(
-            paragraph_text="Completely different text here",
-            position=(500.0, 600.0)
+            paragraph_text="Completely different text here", position=(500.0, 600.0)
         )
 
         assert score < 0.3  # Poor match
@@ -320,17 +302,11 @@ class TestAnnotationAnchor:
     def test_content_derived_id_stability(self):
         """Test that content-derived IDs are stable."""
         anchor1 = AnnotationAnchor.from_highlight(
-            highlight_text="same text",
-            page_num=0,
-            position=(100.0, 200.0),
-            paragraph_index=5
+            highlight_text="same text", page_num=0, position=(100.0, 200.0), paragraph_index=5
         )
 
         anchor2 = AnnotationAnchor.from_highlight(
-            highlight_text="same text",
-            page_num=0,
-            position=(100.0, 200.0),
-            paragraph_index=5
+            highlight_text="same text", page_num=0, position=(100.0, 200.0), paragraph_index=5
         )
 
         # IDs should be identical for same content/position
@@ -339,17 +315,11 @@ class TestAnnotationAnchor:
     def test_content_derived_id_different(self):
         """Test that different content produces different IDs."""
         anchor1 = AnnotationAnchor.from_highlight(
-            highlight_text="text one",
-            page_num=0,
-            position=(100.0, 200.0),
-            paragraph_index=5
+            highlight_text="text one", page_num=0, position=(100.0, 200.0), paragraph_index=5
         )
 
         anchor2 = AnnotationAnchor.from_highlight(
-            highlight_text="text two",
-            page_num=0,
-            position=(100.0, 200.0),
-            paragraph_index=5
+            highlight_text="text two", page_num=0, position=(100.0, 200.0), paragraph_index=5
         )
 
         # IDs should differ for different content

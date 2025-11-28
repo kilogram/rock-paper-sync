@@ -6,8 +6,6 @@ required by reMarkable v6 format.
 
 import time
 
-import pytest
-
 from rock_paper_sync.metadata import (
     current_rm_timestamp,
     generate_content_metadata,

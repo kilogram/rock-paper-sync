@@ -7,8 +7,6 @@ Tests the content-addressable snapshot storage for:
 """
 
 import sqlite3
-import tempfile
-from pathlib import Path
 
 import pytest
 
@@ -140,10 +138,7 @@ class TestSnapshotStore:
         content = b"# Document\n\nContent here."
 
         content_hash = snapshot_store.snapshot_file(
-            vault_name="test-vault",
-            file_path="Notes/Doc.md",
-            content=content,
-            sync_time=1000
+            vault_name="test-vault", file_path="Notes/Doc.md", content=content, sync_time=1000
         )
 
         assert len(content_hash) == 64
@@ -151,7 +146,7 @@ class TestSnapshotStore:
         # Verify metadata stored
         cursor = snapshot_store.db.execute(
             "SELECT * FROM file_snapshots WHERE vault_name = ? AND file_path = ?",
-            ("test-vault", "Notes/Doc.md")
+            ("test-vault", "Notes/Doc.md"),
         )
         row = cursor.fetchone()
         assert row is not None
@@ -167,22 +162,13 @@ class TestSnapshotStore:
 
         # Create three snapshots
         snapshot_store.snapshot_file(
-            vault_name="vault",
-            file_path="file.md",
-            content=content_v1,
-            sync_time=1000
+            vault_name="vault", file_path="file.md", content=content_v1, sync_time=1000
         )
         snapshot_store.snapshot_file(
-            vault_name="vault",
-            file_path="file.md",
-            content=content_v2,
-            sync_time=2000
+            vault_name="vault", file_path="file.md", content=content_v2, sync_time=2000
         )
         snapshot_store.snapshot_file(
-            vault_name="vault",
-            file_path="file.md",
-            content=content_v3,
-            sync_time=3000
+            vault_name="vault", file_path="file.md", content=content_v3, sync_time=3000
         )
 
         # List versions
@@ -200,16 +186,10 @@ class TestSnapshotStore:
         content_v2 = b"Latest version"
 
         snapshot_store.snapshot_file(
-            vault_name="vault",
-            file_path="file.md",
-            content=content_v1,
-            sync_time=1000
+            vault_name="vault", file_path="file.md", content=content_v1, sync_time=1000
         )
         snapshot_store.snapshot_file(
-            vault_name="vault",
-            file_path="file.md",
-            content=content_v2,
-            sync_time=2000
+            vault_name="vault", file_path="file.md", content=content_v2, sync_time=2000
         )
 
         # Restore latest (no sync_time specified)
@@ -222,16 +202,10 @@ class TestSnapshotStore:
         content_v2 = b"Version 2"
 
         snapshot_store.snapshot_file(
-            vault_name="vault",
-            file_path="file.md",
-            content=content_v1,
-            sync_time=1000
+            vault_name="vault", file_path="file.md", content=content_v1, sync_time=1000
         )
         snapshot_store.snapshot_file(
-            vault_name="vault",
-            file_path="file.md",
-            content=content_v2,
-            sync_time=2000
+            vault_name="vault", file_path="file.md", content=content_v2, sync_time=2000
         )
 
         # Restore specific version
@@ -253,15 +227,14 @@ class TestSnapshotStore:
             paragraph_index=5,
             block_content=block_content,
             annotation_types=["highlight"],
-            sync_time=1000
+            sync_time=1000,
         )
 
         assert len(block_hash) == 64
 
         # Verify metadata
         cursor = snapshot_store.db.execute(
-            "SELECT * FROM annotation_blocks WHERE paragraph_index = ?",
-            (5,)
+            "SELECT * FROM annotation_blocks WHERE paragraph_index = ?", (5,)
         )
         row = cursor.fetchone()
         assert row is not None
@@ -280,7 +253,7 @@ class TestSnapshotStore:
             paragraph_index=3,
             block_content=block_v1,
             annotation_types=["highlight"],
-            sync_time=1000
+            sync_time=1000,
         )
         snapshot_store.snapshot_block(
             vault_name="vault",
@@ -288,7 +261,7 @@ class TestSnapshotStore:
             paragraph_index=3,
             block_content=block_v2,
             annotation_types=["highlight"],
-            sync_time=2000
+            sync_time=2000,
         )
 
         # Get latest
@@ -309,7 +282,7 @@ class TestSnapshotStore:
             paragraph_index=0,
             block_content=block_content,
             annotation_types=["highlight", "stroke"],
-            sync_time=1000
+            sync_time=1000,
         )
 
         cursor = snapshot_store.db.execute(
@@ -326,22 +299,14 @@ class TestSnapshotStore:
         assert stats["block_snapshots"] == 0
 
         # Add snapshots
-        snapshot_store.snapshot_file(
-            vault_name="vault",
-            file_path="file1.md",
-            content=b"Content 1"
-        )
-        snapshot_store.snapshot_file(
-            vault_name="vault",
-            file_path="file2.md",
-            content=b"Content 2"
-        )
+        snapshot_store.snapshot_file(vault_name="vault", file_path="file1.md", content=b"Content 1")
+        snapshot_store.snapshot_file(vault_name="vault", file_path="file2.md", content=b"Content 2")
         snapshot_store.snapshot_block(
             vault_name="vault",
             file_path="file1.md",
             paragraph_index=0,
             block_content="Block 1",
-            annotation_types=["highlight"]
+            annotation_types=["highlight"],
         )
 
         stats = snapshot_store.get_storage_stats()
@@ -355,16 +320,10 @@ class TestSnapshotStore:
 
         # Snapshot same content in different files
         hash1 = snapshot_store.snapshot_file(
-            vault_name="vault",
-            file_path="file1.md",
-            content=content,
-            sync_time=1000
+            vault_name="vault", file_path="file1.md", content=content, sync_time=1000
         )
         hash2 = snapshot_store.snapshot_file(
-            vault_name="vault",
-            file_path="file2.md",
-            content=content,
-            sync_time=2000
+            vault_name="vault", file_path="file2.md", content=content, sync_time=2000
         )
 
         # Same content -> same hash
@@ -394,11 +353,7 @@ class TestStateManagerIntegration:
 
         # Snapshots are usable
         content = b"Test content"
-        content_hash = snapshots.snapshot_file(
-            vault_name="vault",
-            file_path="test.md",
-            content=content
-        )
+        snapshots.snapshot_file(vault_name="vault", file_path="test.md", content=content)
 
         # Restore works
         restored = snapshots.restore_file("vault", "test.md")

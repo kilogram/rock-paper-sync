@@ -14,10 +14,11 @@ Replaying:
 """
 
 import io
-import pytest
 
+import pytest
 from rmscene.scene_items import Pen
-from rock_paper_sync.annotations import read_annotations, AnnotationType
+
+from rock_paper_sync.annotations import AnnotationType, read_annotations
 
 
 @pytest.mark.device
@@ -37,10 +38,7 @@ def test_pen_tools(device, workspace, fixtures_dir):
     try:
         device.start_test(test_id, description="Annotations using different pen tools")
     except FileNotFoundError:
-        pytest.skip(
-            f"Testdata '{test_id}' not available. "
-            f"Run with --online -s to record."
-        )
+        pytest.skip(f"Testdata '{test_id}' not available. " f"Run with --online -s to record.")
 
     # Upload document
     doc_uuid = device.upload_document(workspace.test_doc)
@@ -62,20 +60,16 @@ def test_pen_tools(device, workspace, fixtures_dir):
                 tools_found.add(a.stroke.tool)
 
     # Should have multiple tools
-    assert len(tools_found) >= 2, (
-        f"Expected multiple tools, found {len(tools_found)}: {tools_found}"
-    )
+    assert (
+        len(tools_found) >= 2
+    ), f"Expected multiple tools, found {len(tools_found)}: {tools_found}"
 
     # Map to names
     tool_names = [t.name for t in Pen if t.value in tools_found]
-    assert len(tool_names) >= 2, (
-        f"Expected multiple tool names, found: {tool_names}"
-    )
+    assert len(tool_names) >= 2, f"Expected multiple tool names, found: {tool_names}"
 
     # Ballpoint is most commonly used
-    assert Pen.BALLPOINT_2.value in tools_found, (
-        f"Ballpoint tool not found, found: {tools_found}"
-    )
+    assert Pen.BALLPOINT_2.value in tools_found, f"Ballpoint tool not found, found: {tools_found}"
 
     # Finalize test
     device.end_test(test_id)

@@ -31,9 +31,7 @@ def get_credentials() -> dict:
     """
     creds_path = get_credentials_path()
     if not creds_path.exists():
-        raise FileNotFoundError(
-            f"rmfakecloud credentials not found at {creds_path}"
-        )
+        raise FileNotFoundError(f"rmfakecloud credentials not found at {creds_path}")
     return json.loads(creds_path.read_text())
 
 

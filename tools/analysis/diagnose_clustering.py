@@ -17,11 +17,12 @@ import logging
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from rock_paper_sync.annotations import read_annotations, AnnotationType
 from rock_paper_sync.annotation_mapper import extract_text_blocks_from_rm
-from rock_paper_sync.parser import parse_content
+
+from rock_paper_sync.annotations import AnnotationType, read_annotations
 from rock_paper_sync.config import OCRConfig
 from rock_paper_sync.ocr.integration import OCRProcessor
+from rock_paper_sync.parser import parse_content
 
 # Setup logging - disable debug noise
 logging.basicConfig(
@@ -154,7 +155,7 @@ def main():
                 print(f"    • ✅ Mapped to paragraph {para_idx}: {md_block.type.name}")
                 print(f"       \"{preview}...\"")
             else:
-                print(f"    • ❌ No paragraph mapping found")
+                print("    • ❌ No paragraph mapping found")
 
             # Save PNG image
             if image_data:
@@ -168,10 +169,10 @@ def main():
     print("=" * 80)
     print(f"\n📊 Total clusters across all files: {total_clusters}")
     print(f"📂 PNG images saved to: {OUTPUT_DIR}")
-    print(f"\n🔍 Next steps:")
-    print(f"   1. Review PNG images to verify clustering quality")
-    print(f"   2. Check paragraph mappings are correct")
-    print(f"   3. If clustering looks good, proceed to OCR service test")
+    print("\n🔍 Next steps:")
+    print("   1. Review PNG images to verify clustering quality")
+    print("   2. Check paragraph mappings are correct")
+    print("   3. If clustering looks good, proceed to OCR service test")
 
 
 if __name__ == "__main__":

@@ -4,19 +4,18 @@ Tests that markers are added at correct paragraph boundaries using
 ContentBlock list from parser, not naive newline splitting.
 """
 
-import pytest
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
-from rock_paper_sync.annotation_mapper import AnnotationInfo
 from rock_paper_sync.annotation_markers_v2 import (
     add_annotation_markers_aligned,
-    strip_annotation_markers,
-    has_annotation_markers,
     count_annotation_markers,
     format_marker,
+    has_annotation_markers,
+    strip_annotation_markers,
 )
-from rock_paper_sync.parser import parse_markdown_file, ContentBlock, BlockType
+from rock_paper_sync.annotations.core.data_types import AnnotationInfo
+from rock_paper_sync.parser import BlockType, parse_markdown_file
 
 
 class TestParagraphAlignment:
@@ -34,7 +33,7 @@ Paragraph 1
 Paragraph 2
 """
 
-        with NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+        with NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
             f.write(markdown)
             f_path = Path(f.name)
 
@@ -59,25 +58,28 @@ Paragraph 2
             assert "Paragraph 1" in marked
 
             # Parse marked text to verify structure
-            with NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f2:
+            with NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f2:
                 f2.write(marked)
                 f2_path = Path(f2.name)
 
             try:
                 # Verify marker appears before "Paragraph 1"
-                lines = marked.split('\n')
-                marker_line = next(i for i, line in enumerate(lines) if 'ANNOTATED' in line)
-                para1_line = next(i for i, line in enumerate(lines) if 'Paragraph 1' in line)
+                lines = marked.split("\n")
+                marker_line = next(i for i, line in enumerate(lines) if "ANNOTATED" in line)
+                para1_line = next(i for i, line in enumerate(lines) if "Paragraph 1" in line)
 
                 assert marker_line < para1_line, "Marker should appear before paragraph"
 
                 # Verify marker does NOT appear around list items
-                list_section = '\n'.join([
-                    line for line in lines
-                    if 'List item' in line or
-                    (lines.index(line) > 0 and 'List item' in lines[lines.index(line) - 1])
-                ])
-                assert 'ANNOTATED' not in list_section, "Marker should not be around list items"
+                list_section = "\n".join(
+                    [
+                        line
+                        for line in lines
+                        if "List item" in line
+                        or (lines.index(line) > 0 and "List item" in lines[lines.index(line) - 1])
+                    ]
+                )
+                assert "ANNOTATED" not in list_section, "Marker should not be around list items"
 
             finally:
                 f2_path.unlink()
@@ -96,7 +98,7 @@ Paragraph 3
 Paragraph 4
 """
 
-        with NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+        with NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
             f.write(markdown)
             f_path = Path(f.name)
 
@@ -106,18 +108,18 @@ Paragraph 4
             # Annotate blocks 0 and 2 (Paragraph 1 and 3)
             annotation_map = {
                 0: AnnotationInfo(highlights=1),
-                2: AnnotationInfo(highlights=2, strokes=1)
+                2: AnnotationInfo(highlights=2, strokes=1),
             }
 
             marked = add_annotation_markers_aligned(doc.content, annotation_map)
 
             # Should have 2 pairs of markers (4 total marker lines)
-            assert marked.count('<!-- ANNOTATED') == 2
-            assert marked.count('<!-- /ANNOTATED') == 2
+            assert marked.count("<!-- ANNOTATED") == 2
+            assert marked.count("<!-- /ANNOTATED") == 2
 
             # Verify both paragraphs are marked
-            assert 'Paragraph 1' in marked
-            assert 'Paragraph 3' in marked
+            assert "Paragraph 1" in marked
+            assert "Paragraph 3" in marked
 
         finally:
             f_path.unlink()
@@ -142,7 +144,7 @@ code_block = True
 Final paragraph.
 """
 
-        with NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+        with NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
             f.write(markdown)
             f_path = Path(f.name)
 
@@ -152,7 +154,7 @@ Final paragraph.
             # Find index of "Another paragraph with bold text"
             para_idx = None
             for i, block in enumerate(doc.content):
-                if block.type == BlockType.PARAGRAPH and 'bold' in block.text:
+                if block.type == BlockType.PARAGRAPH and "bold" in block.text:
                     para_idx = i
                     break
 
@@ -164,18 +166,18 @@ Final paragraph.
             marked = add_annotation_markers_aligned(doc.content, annotation_map)
 
             # Verify marker appears around correct paragraph
-            assert 'ANNOTATED' in marked
-            assert 'bold' in marked  # The marked paragraph
+            assert "ANNOTATED" in marked
+            assert "bold" in marked  # The marked paragraph
 
             # Verify markers don't appear around code or lists
-            lines = marked.split('\n')
+            lines = marked.split("\n")
             for i, line in enumerate(lines):
-                if 'code_block' in line or 'List item' in line:
+                if "code_block" in line or "List item" in line:
                     # Check surrounding lines don't have markers
                     if i > 0:
-                        assert 'ANNOTATED' not in lines[i-1]
+                        assert "ANNOTATED" not in lines[i - 1]
                     if i < len(lines) - 1:
-                        assert 'ANNOTATED' not in lines[i+1]
+                        assert "ANNOTATED" not in lines[i + 1]
 
         finally:
             f_path.unlink()
@@ -227,21 +229,21 @@ Paragraph 3
         clean = strip_annotation_markers(marked_content)
 
         # Markers should be removed
-        assert 'ANNOTATED' not in clean
+        assert "ANNOTATED" not in clean
 
         # Content should remain
-        assert 'Paragraph 1' in clean
-        assert 'Paragraph 2' in clean
-        assert 'Paragraph 3' in clean
+        assert "Paragraph 1" in clean
+        assert "Paragraph 2" in clean
+        assert "Paragraph 3" in clean
 
         # Should have reasonable paragraph spacing
-        assert '\n\n' in clean
+        assert "\n\n" in clean
 
     def test_strip_markers_preserves_content(self):
         """Verify content is unchanged after stripping markers."""
         original_content = "# Header\n\nParagraph 1\n\nParagraph 2"
 
-        with NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+        with NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
             f.write(original_content)
             f_path = Path(f.name)
 
@@ -256,7 +258,7 @@ Paragraph 3
             clean = strip_annotation_markers(marked)
 
             # Parse both original and cleaned
-            with NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f2:
+            with NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f2:
                 f2.write(clean)
                 f2_path = Path(f2.name)
 
@@ -266,6 +268,7 @@ Paragraph 3
 
                 # Should have same semantic hash
                 from rock_paper_sync.hashing import compute_semantic_hash
+
                 hash_original = compute_semantic_hash(doc_original.content)
                 hash_clean = compute_semantic_hash(doc_clean.content)
 

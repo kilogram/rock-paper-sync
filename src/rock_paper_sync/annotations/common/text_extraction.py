@@ -66,7 +66,7 @@ def extract_text_blocks_from_rm(rm_file_path: Path) -> tuple[list[RmTextBlock], 
                 # Split into lines and create separate blocks
                 # Each line becomes a separate text block with estimated Y-position
                 if full_text:
-                    lines = full_text.split('\n')
+                    lines = full_text.split("\n")
                     current_y = text_origin_y
 
                     line_height = RM_TEXT_BLOCK_LINE_HEIGHT
@@ -79,11 +79,7 @@ def extract_text_blocks_from_rm(rm_file_path: Path) -> tuple[list[RmTextBlock], 
                             y_end = current_y + line_height
 
                             text_blocks.append(
-                                RmTextBlock(
-                                    content=line_text,
-                                    y_start=y_start,
-                                    y_end=y_end
-                                )
+                                RmTextBlock(content=line_text, y_start=y_start, y_end=y_end)
                             )
 
                         # Move to next line position

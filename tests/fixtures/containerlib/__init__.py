@@ -7,12 +7,11 @@ containerized services in tests.
 import shutil
 import subprocess
 import time
-from typing import Optional
 
 import requests
 
 
-def get_container_runtime() -> Optional[str]:
+def get_container_runtime() -> str | None:
     """Detect available container runtime.
 
     Returns:
@@ -26,10 +25,7 @@ def get_container_runtime() -> Optional[str]:
 
 
 def wait_for_http_ready(
-    url: str,
-    timeout: float = 30.0,
-    interval: float = 0.5,
-    endpoint: str = "/health"
+    url: str, timeout: float = 30.0, interval: float = 0.5, endpoint: str = "/health"
 ) -> bool:
     """Wait for HTTP service to become ready.
 
@@ -73,9 +69,9 @@ def start_container(
     image: str,
     container_name: str,
     port_mapping: str,
-    volume_mapping: Optional[str] = None,
-    env_vars: Optional[dict[str, str]] = None,
-    extra_args: Optional[list[str]] = None
+    volume_mapping: str | None = None,
+    env_vars: dict[str, str] | None = None,
+    extra_args: list[str] | None = None,
 ) -> subprocess.CompletedProcess:
     """Start a container with specified configuration.
 
@@ -92,9 +88,13 @@ def start_container(
         CompletedProcess result from container start
     """
     cmd = [
-        runtime, "run", "-d",
-        "--name", container_name,
-        "-p", port_mapping,
+        runtime,
+        "run",
+        "-d",
+        "--name",
+        container_name,
+        "-p",
+        port_mapping,
     ]
 
     # Add environment variables

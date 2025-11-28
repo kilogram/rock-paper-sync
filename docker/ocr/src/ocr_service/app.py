@@ -5,7 +5,6 @@ import io
 import logging
 import time
 from datetime import datetime
-from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from PIL import Image
@@ -111,23 +110,27 @@ async def run_async(request: dict):
                 text, confidence = inference_engine.recognize(image)
                 inference_time = int((time.time() - start_time) * 1000)
 
-                results.append({
-                    "uuid": img_data["uuid"],
-                    "text": text,
-                    "confidence": confidence,
-                    "model_version": inference_engine.model_version,
-                    "inference_time_ms": inference_time,
-                })
+                results.append(
+                    {
+                        "uuid": img_data["uuid"],
+                        "text": text,
+                        "confidence": confidence,
+                        "model_version": inference_engine.model_version,
+                        "inference_time_ms": inference_time,
+                    }
+                )
 
             except Exception as e:
                 logger.error(f"Error processing image {img_data['uuid']}: {e}")
-                results.append({
-                    "uuid": img_data["uuid"],
-                    "text": "",
-                    "confidence": 0.0,
-                    "model_version": inference_engine.model_version,
-                    "error": str(e),
-                })
+                results.append(
+                    {
+                        "uuid": img_data["uuid"],
+                        "text": "",
+                        "confidence": 0.0,
+                        "model_version": inference_engine.model_version,
+                        "error": str(e),
+                    }
+                )
 
         return {
             "id": f"batch-{int(time.time())}",

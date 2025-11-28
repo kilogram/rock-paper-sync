@@ -14,6 +14,8 @@ Key components:
 - integration.py: Converter sync flow integration
 """
 
+from rock_paper_sync.ocr.factory import create_ocr_service
+from rock_paper_sync.ocr.integration import OCRProcessor
 from rock_paper_sync.ocr.protocol import (
     BoundingBox,
     ModelInfo,
@@ -23,8 +25,6 @@ from rock_paper_sync.ocr.protocol import (
     ParagraphContext,
     TrainingJob,
 )
-from rock_paper_sync.ocr.factory import create_ocr_service
-from rock_paper_sync.ocr.integration import OCRProcessor
 
 __all__ = [
     "BoundingBox",

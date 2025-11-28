@@ -9,14 +9,11 @@ Tests cover:
 """
 
 import hashlib
-import os
 import time
-import pytest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from rock_paper_sync.config import OCRConfig
-from rock_paper_sync.state import StateManager
+import pytest
 
 
 class TestOCRMarkersParsing:
@@ -79,7 +76,7 @@ line three
 
     def test_generate_ocr_block(self):
         """Test generating OCR marker block."""
-        from rock_paper_sync.ocr.markers import generate_ocr_block, AnnotationInfo
+        from rock_paper_sync.ocr.markers import AnnotationInfo, generate_ocr_block
 
         annotation = AnnotationInfo(paragraph_index=0, highlights=3, strokes=2)
         original = "Test paragraph content."
@@ -134,7 +131,7 @@ line three
 
     def test_add_ocr_markers_to_content(self):
         """Test adding OCR markers to markdown content."""
-        from rock_paper_sync.ocr.markers import add_ocr_markers, AnnotationInfo
+        from rock_paper_sync.ocr.markers import AnnotationInfo, add_ocr_markers
 
         content = """# Title
 
@@ -146,10 +143,7 @@ Third paragraph.
 """
         # Add OCR result for paragraph index 1 (Second paragraph)
         ocr_results = {
-            1: (
-                AnnotationInfo(paragraph_index=1, highlights=1, strokes=1),
-                ["ocr text here"]
-            )
+            1: (AnnotationInfo(paragraph_index=1, highlights=1, strokes=1), ["ocr text here"])
         }
 
         result = add_ocr_markers(content, ocr_results)
@@ -261,7 +255,7 @@ ocr text
 
     def test_store_correction(self, state_manager, ocr_config):
         """Test storing a correction record."""
-        from rock_paper_sync.ocr.corrections import CorrectionManager, Correction
+        from rock_paper_sync.ocr.corrections import Correction, CorrectionManager
 
         manager = CorrectionManager(ocr_config.cache_dir, state_manager)
 
@@ -400,10 +394,7 @@ class TestOCRStateManagement:
             )
 
         # Assign to dataset
-        state_manager.assign_corrections_to_dataset(
-            ["corr-0", "corr-1"],
-            "v1"
-        )
+        state_manager.assign_corrections_to_dataset(["corr-0", "corr-1"], "v1")
 
         # Check pending (should only have corr-2)
         pending = state_manager.get_pending_ocr_corrections()
@@ -511,8 +502,9 @@ class TestTrainingPipeline:
 
     def test_model_registry(self, ocr_config):
         """Test model registry operations."""
-        from rock_paper_sync.ocr.training import ModelRegistry, ModelVersion
         from datetime import datetime
+
+        from rock_paper_sync.ocr.training import ModelRegistry, ModelVersion
 
         registry = ModelRegistry(ocr_config.cache_dir)
 
@@ -536,8 +528,9 @@ class TestTrainingPipeline:
 
     def test_model_activation(self, ocr_config):
         """Test model activation and retrieval."""
-        from rock_paper_sync.ocr.training import ModelRegistry, ModelVersion
         from datetime import datetime
+
+        from rock_paper_sync.ocr.training import ModelRegistry, ModelVersion
 
         registry = ModelRegistry(ocr_config.cache_dir)
 
@@ -599,7 +592,9 @@ class TestOCRIntegration:
         processor = OCRProcessor(ocr_config, state_manager)
         assert processor.config == ocr_config
 
-    def test_strip_ocr_markers_integration(self, ocr_config, state_manager, markdown_with_ocr_markers):
+    def test_strip_ocr_markers_integration(
+        self, ocr_config, state_manager, markdown_with_ocr_markers
+    ):
         """Test stripping OCR markers through processor."""
         from rock_paper_sync.ocr.integration import OCRProcessor
 
@@ -644,9 +639,7 @@ class TestOCRIntegration:
         processor = OCRProcessor(ocr_config, state_manager)
 
         # Mock annotation data
-        annotation_map = {
-            0: AnnotationInfo(paragraph_index=0, highlights=1, strokes=1)
-        }
+        annotation_map = {0: AnnotationInfo(paragraph_index=0, highlights=1, strokes=1)}
 
         # This would need actual .rm files to work fully
         # For now, test that the method runs without error
@@ -737,8 +730,8 @@ class TestRunpodsService:
 
     def test_service_initialization_without_credentials(self):
         """Test that service raises error without credentials."""
-        from rock_paper_sync.ocr.runpods import RunpodsOCRService
         from rock_paper_sync.ocr.protocol import OCRServiceError
+        from rock_paper_sync.ocr.runpods import RunpodsOCRService
 
         with pytest.raises(OCRServiceError, match="endpoint ID required"):
             RunpodsOCRService()
@@ -859,9 +852,7 @@ text
 {corrected}
 <!-- RPS:END -->"""
 
-            corrections, _ = manager.process_markdown_file(
-                "test-vault", path, markdown
-            )
+            corrections, _ = manager.process_markdown_file("test-vault", path, markdown)
             corrections_total += len(corrections)
 
         assert corrections_total == 3
@@ -878,12 +869,12 @@ class TestRunpodsServiceMethods:
     @patch("httpx.Client.get")
     def test_recognize_batch(self, mock_get, mock_post):
         """Test batch recognition with mocked HTTP."""
-        from rock_paper_sync.ocr.runpods import RunpodsOCRService
         from rock_paper_sync.ocr.protocol import (
             BoundingBox,
             OCRRequest,
             ParagraphContext,
         )
+        from rock_paper_sync.ocr.runpods import RunpodsOCRService
 
         # Mock job submission
         mock_post_response = MagicMock()
@@ -992,8 +983,8 @@ class TestRunpodsServiceMethods:
     @patch("httpx.Client.get")
     def test_get_training_job_status(self, mock_get):
         """Test training job status retrieval."""
-        from rock_paper_sync.ocr.runpods import RunpodsOCRService
         from rock_paper_sync.ocr.protocol import JobStatus
+        from rock_paper_sync.ocr.runpods import RunpodsOCRService
 
         mock_response = MagicMock()
         mock_response.json.return_value = {
@@ -1037,8 +1028,10 @@ class TestRealPNGImages:
 
     def test_store_real_png_image(self, state_manager, ocr_config):
         """Test storing actual PNG data."""
-        from PIL import Image
         import io
+
+        from PIL import Image
+
         from rock_paper_sync.ocr.corrections import CorrectionManager
 
         # Create real PNG image
@@ -1061,8 +1054,10 @@ class TestRealPNGImages:
 
     def test_store_multiple_images(self, state_manager, ocr_config):
         """Test storing multiple images with deduplication."""
-        from PIL import Image
         import io
+
+        from PIL import Image
+
         from rock_paper_sync.ocr.corrections import CorrectionManager
 
         manager = CorrectionManager(ocr_config.cache_dir, state_manager)
@@ -1085,8 +1080,10 @@ class TestRealPNGImages:
 
     def test_image_deduplication(self, state_manager, ocr_config):
         """Test that identical images are deduplicated."""
-        from PIL import Image
         import io
+
+        from PIL import Image
+
         from rock_paper_sync.ocr.corrections import CorrectionManager
 
         manager = CorrectionManager(ocr_config.cache_dir, state_manager)
@@ -1113,13 +1110,15 @@ class TestAnnotationImageRendering:
 
     def test_render_stroke_to_image(self):
         """Test rendering stroke annotations to PNG."""
-        from rock_paper_sync.ocr.integration import OCRProcessor
-        from rock_paper_sync.annotations import Annotation, AnnotationType, Stroke, Point
-        from rock_paper_sync.config import OCRConfig
-        from PIL import Image
         import io
         from pathlib import Path
         from unittest.mock import MagicMock
+
+        from PIL import Image
+
+        from rock_paper_sync.annotations import Annotation, AnnotationType, Point, Stroke
+        from rock_paper_sync.config import OCRConfig
+        from rock_paper_sync.ocr.integration import OCRProcessor
 
         # Create OCRProcessor with mock state manager
         config = OCRConfig(enabled=True, cache_dir=Path("/tmp/test-ocr"))
@@ -1155,7 +1154,12 @@ class TestAnnotationImageRendering:
 
     def test_render_highlight_to_image(self):
         """Test rendering highlight annotations to PNG."""
-        from rock_paper_sync.ocr.integration import OCRProcessor
+        import io
+        from pathlib import Path
+        from unittest.mock import MagicMock
+
+        from PIL import Image
+
         from rock_paper_sync.annotations import (
             Annotation,
             AnnotationType,
@@ -1163,10 +1167,7 @@ class TestAnnotationImageRendering:
             Rectangle,
         )
         from rock_paper_sync.config import OCRConfig
-        from PIL import Image
-        import io
-        from pathlib import Path
-        from unittest.mock import MagicMock
+        from rock_paper_sync.ocr.integration import OCRProcessor
 
         config = OCRConfig(enabled=True, cache_dir=Path("/tmp/test-ocr"))
         mock_state = MagicMock()
@@ -1192,20 +1193,22 @@ class TestAnnotationImageRendering:
 
     def test_render_multiple_annotations(self):
         """Test rendering multiple annotations to single image."""
-        from rock_paper_sync.ocr.integration import OCRProcessor
-        from rock_paper_sync.annotations import (
-            Annotation,
-            AnnotationType,
-            Stroke,
-            Highlight,
-            Point,
-            Rectangle,
-        )
-        from rock_paper_sync.config import OCRConfig
-        from PIL import Image
         import io
         from pathlib import Path
         from unittest.mock import MagicMock
+
+        from PIL import Image
+
+        from rock_paper_sync.annotations import (
+            Annotation,
+            AnnotationType,
+            Highlight,
+            Point,
+            Rectangle,
+            Stroke,
+        )
+        from rock_paper_sync.config import OCRConfig
+        from rock_paper_sync.ocr.integration import OCRProcessor
 
         config = OCRConfig(enabled=True, cache_dir=Path("/tmp/test-ocr"))
         mock_state = MagicMock()
@@ -1245,10 +1248,11 @@ class TestAnnotationImageRendering:
 
     def test_render_empty_annotations(self):
         """Test rendering with no annotations."""
-        from rock_paper_sync.ocr.integration import OCRProcessor
-        from rock_paper_sync.config import OCRConfig
         from pathlib import Path
         from unittest.mock import MagicMock
+
+        from rock_paper_sync.config import OCRConfig
+        from rock_paper_sync.ocr.integration import OCRProcessor
 
         config = OCRConfig(enabled=True, cache_dir=Path("/tmp/test-ocr"))
         mock_state = MagicMock()
@@ -1264,7 +1268,9 @@ class TestAnnotationImageRendering:
 class TestOCRVaultIntegration:
     """Integration tests: OCR processing with vault file output."""
 
-    def test_ocr_markers_in_vault_output_with_testdata(self, sample_config_with_ocr, state_manager, mock_ocr_service, tmp_path):
+    def test_ocr_markers_in_vault_output_with_testdata(
+        self, sample_config_with_ocr, state_manager, mock_ocr_service, tmp_path
+    ):
         """Full integration: real .rm testdata → clustering → mocked OCR → vault output with markers.
 
         This test:
@@ -1279,7 +1285,6 @@ class TestOCRVaultIntegration:
         """
         from rock_paper_sync.ocr.integration import OCRProcessor
         from rock_paper_sync.ocr.markers import AnnotationInfo
-        from rock_paper_sync.annotations import read_annotations
         from rock_paper_sync.ocr.protocol import OCRResult
 
         # Load real testdata
@@ -1304,14 +1309,12 @@ This is the conclusion."""
         vault_file.write_text(original_content)
 
         # Create annotation map - simple case
-        annotation_map = {
-            1: AnnotationInfo(paragraph_index=1, highlights=1, strokes=1)
-        }
+        annotation_map = {1: AnnotationInfo(paragraph_index=1, highlights=1, strokes=1)}
 
         paragraph_texts = [
             "This is the introduction paragraph.",
             "This is the second paragraph with annotations.",
-            "This is the conclusion."
+            "This is the conclusion.",
         ]
 
         # Configure mock OCR service to return specific text
@@ -1330,7 +1333,9 @@ This is the conclusion."""
             return [mock_recognize_with_custom_text(req) for req in requests]
 
         mock_ocr_service.recognize = MagicMock(side_effect=mock_recognize_with_custom_text)
-        mock_ocr_service.recognize_batch = MagicMock(side_effect=mock_recognize_batch_with_custom_text)
+        mock_ocr_service.recognize_batch = MagicMock(
+            side_effect=mock_recognize_batch_with_custom_text
+        )
 
         # Run OCR processing with mocked service
         processor = OCRProcessor(sample_config_with_ocr.ocr, state_manager)
@@ -1354,15 +1359,18 @@ This is the conclusion."""
         assert "<!-- RPS:OCR -->" in result, "Should contain OCR text marker"
         assert "recognized text from device" in result, "Should contain mocked OCR text"
 
-    def test_ocr_markers_in_vault_with_mocked_annotations(self, sample_config_with_ocr, state_manager, mock_ocr_service):
+    def test_ocr_markers_in_vault_with_mocked_annotations(
+        self, sample_config_with_ocr, state_manager, mock_ocr_service
+    ):
         """Integration test: mocked annotation images → mocked OCR → vault output with markers.
 
         Mocks the annotation image extraction to avoid needing real .rm files.
         """
+        from unittest.mock import MagicMock
+
         from rock_paper_sync.ocr.integration import OCRProcessor
         from rock_paper_sync.ocr.markers import AnnotationInfo
         from rock_paper_sync.ocr.protocol import BoundingBox
-        from unittest.mock import MagicMock
 
         vault_dir = sample_config_with_ocr.sync.vaults[0].path
         vault_file = vault_dir / "simple_test.md"
@@ -1376,18 +1384,12 @@ Third paragraph."""
         vault_file.write_text(original_content)
 
         # Create annotation map
-        annotation_map = {
-            1: AnnotationInfo(
-                paragraph_index=1,
-                highlights=1,
-                strokes=2
-            )
-        }
+        annotation_map = {1: AnnotationInfo(paragraph_index=1, highlights=1, strokes=2)}
 
         paragraph_texts = [
             "First paragraph here.",
             "Second paragraph with handwriting.",
-            "Third paragraph."
+            "Third paragraph.",
         ]
 
         # Configure mock OCR service with custom text
@@ -1418,11 +1420,7 @@ Third paragraph."""
 
         # Mock _extract_annotation_images to return fake image data
         fake_image_data = b"fake PNG image data"
-        mock_annotation_info = AnnotationInfo(
-            paragraph_index=1,
-            highlights=1,
-            strokes=2
-        )
+        mock_annotation_info = AnnotationInfo(paragraph_index=1, highlights=1, strokes=2)
         fake_bbox = BoundingBox(x=10, y=20, width=100, height=50)
 
         # Return dict: paragraph_index -> (AnnotationInfo, [(image_bytes, bbox, uuid)])
@@ -1430,7 +1428,9 @@ Third paragraph."""
             1: (mock_annotation_info, [(fake_image_data, fake_bbox, "mocked-uuid-1")])
         }
 
-        with patch.object(processor, "_extract_annotation_images", return_value=mock_extract_return):
+        with patch.object(
+            processor, "_extract_annotation_images", return_value=mock_extract_return
+        ):
             result = processor.process_annotations(
                 vault_name=sample_config_with_ocr.sync.vaults[0].name,
                 obsidian_path="simple_test.md",

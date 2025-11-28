@@ -4,7 +4,6 @@ import json
 import logging
 import time
 from pathlib import Path
-from typing import Optional
 
 from .audit import get_audit_logger
 from .rm_cloud_client import RmCloudClient
@@ -51,7 +50,7 @@ class RmCloudSync:
     def __init__(
         self,
         base_url: str,
-        client: Optional[RmCloudClient] = None,
+        client: RmCloudClient | None = None,
     ):
         """
         Initialize rm_cloud sync.
@@ -64,9 +63,7 @@ class RmCloudSync:
         self.client = client or RmCloudClient(base_url=base_url)
 
         if not self.client.is_registered():
-            raise ValueError(
-                "Device not registered. Run: rock-paper-sync register <code>"
-            )
+            raise ValueError("Device not registered. Run: rock-paper-sync register <code>")
 
         # Get user token from device token
         logger.debug("Getting user token from device token")
@@ -78,12 +75,10 @@ class RmCloudSync:
             device_token=user_token,  # Actually a user token, not device token
         )
 
-        logger.info(f"rm_cloud Sync v3 initialized")
+        logger.info("rm_cloud Sync v3 initialized")
         logger.info(f"Connected to: {base_url}")
 
-    def _create_metadata_file(
-        self, doc_uuid: str, document_name: str, parent_uuid: str
-    ) -> bytes:
+    def _create_metadata_file(self, doc_uuid: str, document_name: str, parent_uuid: str) -> bytes:
         """Create .metadata file content."""
         now_ms = int(time.time() * 1000)
         metadata = {
@@ -118,11 +113,9 @@ class RmCloudSync:
             in milliseconds and is the primary signal to xochitl that content has changed.
         """
         import uuid as uuid_module
-        from datetime import datetime, timezone
 
         page_count = len(page_uuids)
         device_uuid = str(uuid_module.uuid4())  # Simulate device UUID
-        timestamp_now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         # Current time in milliseconds - used for "modifed" field (note the typo!)
         # This is how the device signals that content has been updated
@@ -130,22 +123,14 @@ class RmCloudSync:
 
         # Generate CRDT pages structure
         # Use lexicographically sortable idx values: "ba", "bb", "bc", etc.
-        cPages = {
+        c_pages = {
             "lastOpened": {
                 "timestamp": "0:0",  # Static, doesn't change on updates
-                "value": ""
+                "value": "",
             },
-            "original": {
-                "timestamp": "0:0",
-                "value": -1
-            },
+            "original": {"timestamp": "0:0", "value": -1},
             "pages": [],
-            "uuids": [
-                {
-                    "first": device_uuid,
-                    "second": 1
-                }
-            ]
+            "uuids": [{"first": device_uuid, "second": 1}],
         }
 
         # Generate idx values like "ba", "bb", "bc", ... "bz", "ca", "cb", etc.
@@ -172,23 +157,25 @@ class RmCloudSync:
                 "id": page_uuid,
                 "idx": {
                     "timestamp": f"1:{page_counter + 1}",  # e.g., "1:2" for first page
-                    "value": generate_idx(i)
+                    "value": generate_idx(i),
                 },
                 # CRITICAL: "modifed" field (typo is intentional!) with current time in ms
                 # This is what tells xochitl the content has been updated!
-                "modifed": str(current_time_ms)
+                "modifed": str(current_time_ms),
             }
 
             # Add template field (matching device behavior)
             page_entry["template"] = {
                 "timestamp": f"1:{page_counter}",  # e.g., "1:1" for first page
-                "value": "Blank"
+                "value": "Blank",
             }
 
-            cPages["pages"].append(page_entry)
+            pages_list = c_pages.get("pages")
+            if isinstance(pages_list, list):
+                pages_list.append(page_entry)
 
         content = {
-            "cPages": cPages,
+            "cPages": c_pages,
             "coverPageNumber": 0,
             "customZoomCenterX": 0,
             "customZoomCenterY": 936,
@@ -338,22 +325,20 @@ class RmCloudSync:
         """Check if sync is enabled (device registered)."""
         return self.client.is_registered()
 
-    def get_root_state(self) -> tuple[list, str, int]:
+    def get_root_state(self) -> tuple[list, str | None, int]:
         """
         Get complete current cloud state for virtual device state initialization.
 
         Returns:
             Tuple of (root_entries, root_hash, generation)
             - root_entries: List of document entries in root
-            - root_hash: Current root hash
+            - root_hash: Current root hash (or None if no root exists)
             - generation: Current generation number
             If no root exists, returns ([], None, 0)
         """
         return self.sync_client.get_root_state()
 
-    def update_root(
-        self, root_hash: str, generation: int, broadcast: bool = True
-    ) -> int:
+    def update_root(self, root_hash: str, generation: int, broadcast: bool = True) -> int:
         """
         Update the root hash tree with optimistic concurrency control.
 
@@ -491,9 +476,7 @@ class RmCloudSync:
 
         return rm_file_paths
 
-    def upload_folder(
-        self, folder_uuid: str, folder_name: str, parent_uuid: str = ""
-    ) -> None:
+    def upload_folder(self, folder_uuid: str, folder_name: str, parent_uuid: str = "") -> None:
         """
         Upload a folder (CollectionType) using Sync v3 protocol.
 
@@ -566,9 +549,7 @@ class RmCloudSync:
             broadcast=True,
         )
 
-    def delete_documents_batch(
-        self, doc_uuids: list[str], broadcast: bool = True
-    ) -> None:
+    def delete_documents_batch(self, doc_uuids: list[str], broadcast: bool = True) -> None:
         """
         Delete multiple documents from rm_cloud in a single operation.
 

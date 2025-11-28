@@ -170,8 +170,7 @@ class SpatialOverlapMapper(ParagraphMapper):
 
         # Weighted combination
         total_score = (
-            self.intersection_weight * intersection_score
-            + self.proximity_weight * proximity_score
+            self.intersection_weight * intersection_score + self.proximity_weight * proximity_score
         )
 
         return total_score

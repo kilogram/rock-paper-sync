@@ -3,9 +3,7 @@
 Runs the FastAPI server on port 8000.
 """
 
-import sys
 import uvicorn
-
 
 if __name__ == "__main__":
     # Start FastAPI server

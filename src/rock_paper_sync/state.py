@@ -9,7 +9,6 @@ import sqlite3
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 from rock_paper_sync.annotations.common.snapshots import ContentStore, SnapshotStore
 
@@ -33,7 +32,7 @@ class SyncRecord:
     last_sync_time: int
     page_count: int
     status: str  # 'synced', 'pending', 'error'
-    file_hash_with_markers: Optional[str] = None  # Hash of file including markers (schema v4)
+    file_hash_with_markers: str | None = None  # Hash of file including markers (schema v4)
 
 
 class StateManager:
@@ -61,7 +60,7 @@ class StateManager:
             raise StateError(f"Failed to initialize state database: {e}")
 
         # Initialize snapshot store (lazy-loaded)
-        self._snapshot_store: Optional[SnapshotStore] = None
+        self._snapshot_store: SnapshotStore | None = None
 
     def _ensure_schema(self) -> None:
         """Create database tables if they don't exist."""
@@ -158,7 +157,7 @@ class StateManager:
                 """
             )
 
-    def get_file_state(self, vault_name: str, obsidian_path: str) -> Optional[SyncRecord]:
+    def get_file_state(self, vault_name: str, obsidian_path: str) -> SyncRecord | None:
         """Get sync state for a file.
 
         Args:
@@ -220,7 +219,7 @@ class StateManager:
             )
         logger.debug(f"Deleted sync state for {vault_name}:{obsidian_path}")
 
-    def get_folder_uuid(self, vault_name: str, folder_path: str) -> Optional[str]:
+    def get_folder_uuid(self, vault_name: str, folder_path: str) -> str | None:
         """Get reMarkable UUID for an Obsidian folder.
 
         Args:
@@ -252,7 +251,7 @@ class StateManager:
             )
         logger.debug(f"Created folder mapping: {vault_name}:{folder_path} -> {uuid}")
 
-    def get_all_synced_files(self, vault_name: Optional[str] = None) -> list[SyncRecord]:
+    def get_all_synced_files(self, vault_name: str | None = None) -> list[SyncRecord]:
         """Get all files in sync state.
 
         Args:
@@ -286,7 +285,7 @@ class StateManager:
             WHERE vault_name = ?
             ORDER BY LENGTH(obsidian_folder) DESC
             """,
-            (vault_name,)
+            (vault_name,),
         )
         return [(row[0], row[1]) for row in cursor.fetchall()]
 
@@ -300,7 +299,7 @@ class StateManager:
         with self.conn:
             self.conn.execute(
                 "DELETE FROM folder_mapping WHERE vault_name = ? AND obsidian_folder = ?",
-                (vault_name, folder_path)
+                (vault_name, folder_path),
             )
         logger.debug(f"Deleted folder mapping: {vault_name}:{folder_path}")
 
@@ -378,9 +377,7 @@ class StateManager:
         logger.info(f"Found {len(changed)} changed files in vault '{vault_name}'")
         return changed
 
-    def find_deleted_files(
-        self, vault_name: str, vault_path: Path
-    ) -> list[tuple[str, str]]:
+    def find_deleted_files(self, vault_name: str, vault_path: Path) -> list[tuple[str, str]]:
         """Find files that have been deleted from vault but still exist in state.
 
         Returns list of (relative_path, remarkable_uuid) tuples for deleted files.
@@ -410,9 +407,7 @@ class StateManager:
         logger.info(f"Found {len(deleted)} deleted files in vault '{vault_name}'")
         return deleted
 
-    def _is_excluded(
-        self, file_path: Path, vault_path: Path, exclude_patterns: list[str]
-    ) -> bool:
+    def _is_excluded(self, file_path: Path, vault_path: Path, exclude_patterns: list[str]) -> bool:
         """Check if file matches any exclude pattern.
 
         Args:
@@ -429,9 +424,7 @@ class StateManager:
                 return True
         return False
 
-    def log_sync_action(
-        self, vault_name: str, path: str, action: str, details: str = ""
-    ) -> None:
+    def log_sync_action(self, vault_name: str, path: str, action: str, details: str = "") -> None:
         """Record sync action in history.
 
         Args:
@@ -448,7 +441,7 @@ class StateManager:
         logger.debug(f"Logged action: {action} for {vault_name}:{path}")
 
     def get_recent_history(
-        self, limit: int = 10, vault_name: Optional[str] = None
+        self, limit: int = 10, vault_name: str | None = None
     ) -> list[tuple[str, str, str, int, str]]:
         """Get recent sync history entries.
 
@@ -473,7 +466,7 @@ class StateManager:
             )
         return cursor.fetchall()
 
-    def get_stats(self, vault_name: Optional[str] = None) -> dict[str, int]:
+    def get_stats(self, vault_name: str | None = None) -> dict[str, int]:
         """Get sync statistics.
 
         Args:
@@ -488,9 +481,7 @@ class StateManager:
                 (vault_name,),
             )
         else:
-            cursor = self.conn.execute(
-                "SELECT status, COUNT(*) FROM sync_state GROUP BY status"
-            )
+            cursor = self.conn.execute("SELECT status, COUNT(*) FROM sync_state GROUP BY status")
         return {row[0]: row[1] for row in cursor.fetchall()}
 
     def reset(self) -> None:
@@ -508,7 +499,7 @@ class StateManager:
 
     def get_paragraph_state(
         self, vault_name: str, obsidian_path: str, paragraph_index: int
-    ) -> Optional[dict]:
+    ) -> dict | None:
         """Get annotation state for a specific paragraph.
 
         Args:
@@ -580,9 +571,7 @@ class StateManager:
             f"({annotation_count} annotations)"
         )
 
-    def get_all_paragraph_states(
-        self, vault_name: str, obsidian_path: str
-    ) -> dict[int, dict]:
+    def get_all_paragraph_states(self, vault_name: str, obsidian_path: str) -> dict[int, dict]:
         """Get annotation state for all paragraphs in a document.
 
         Args:
@@ -681,7 +670,7 @@ class StateManager:
 
     def get_ocr_result(
         self, vault_name: str, obsidian_path: str, annotation_uuid: str
-    ) -> Optional[dict]:
+    ) -> dict | None:
         """Get OCR result for an annotation.
 
         Args:
@@ -716,9 +705,7 @@ class StateManager:
             }
         return None
 
-    def get_all_ocr_results(
-        self, vault_name: str, obsidian_path: str
-    ) -> dict[int, dict]:
+    def get_all_ocr_results(self, vault_name: str, obsidian_path: str) -> dict[int, dict]:
         """Get all OCR results for a document.
 
         Args:

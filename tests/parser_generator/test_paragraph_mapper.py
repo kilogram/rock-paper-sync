@@ -6,17 +6,18 @@ Tests the new cluster-first paragraph mapping system with:
 - Coordinate transformation validation
 """
 
-import pytest
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from rock_paper_sync.annotation_mapper import RmTextBlock
+import pytest
+
+from rock_paper_sync.annotations.common.text_extraction import RmTextBlock
 from rock_paper_sync.ocr.paragraph_mapper import (
-    SpatialOverlapMapper,
     ParagraphMapper,
+    SpatialOverlapMapper,
 )
 from rock_paper_sync.ocr.protocol import BoundingBox
-from rock_paper_sync.parser import ContentBlock, BlockType, parse_content
+from rock_paper_sync.parser import BlockType, ContentBlock, parse_content
 
 
 class TestSpatialOverlapMapper:
@@ -152,8 +153,12 @@ class TestTextMatching:
         rm_block = RmTextBlock(content="This is a test paragraph", y_start=100, y_end=120)
         markdown_blocks = [
             ContentBlock(type=BlockType.PARAGRAPH, text="Different text", level=0, formatting=[]),
-            ContentBlock(type=BlockType.PARAGRAPH, text="This is a test paragraph", level=0, formatting=[]),
-            ContentBlock(type=BlockType.PARAGRAPH, text="Another paragraph", level=0, formatting=[]),
+            ContentBlock(
+                type=BlockType.PARAGRAPH, text="This is a test paragraph", level=0, formatting=[]
+            ),
+            ContentBlock(
+                type=BlockType.PARAGRAPH, text="Another paragraph", level=0, formatting=[]
+            ),
         ]
 
         result = mapper._match_rm_block_to_markdown(rm_block, markdown_blocks)
@@ -171,7 +176,7 @@ class TestTextMatching:
                 type=BlockType.PARAGRAPH,
                 text="This is a test paragraph with more words",
                 level=0,
-                formatting=[]
+                formatting=[],
             ),
         ]
 
@@ -184,16 +189,14 @@ class TestTextMatching:
         mapper = SpatialOverlapMapper()
 
         rm_block = RmTextBlock(
-            content="This is a very long paragraph that starts the same",
-            y_start=100,
-            y_end=120
+            content="This is a very long paragraph that starts the same", y_start=100, y_end=120
         )
         markdown_blocks = [
             ContentBlock(
                 type=BlockType.PARAGRAPH,
                 text="This is a very long paragraph with different ending",
                 level=0,
-                formatting=[]
+                formatting=[],
             ),
         ]
 
@@ -205,18 +208,14 @@ class TestTextMatching:
         """Blockquote content is matched (issue from logs)."""
         mapper = SpatialOverlapMapper()
 
-        rm_block = RmTextBlock(
-            content="─────────────────────────────",
-            y_start=100,
-            y_end=120
-        )
+        rm_block = RmTextBlock(content="─────────────────────────────", y_start=100, y_end=120)
         markdown_blocks = [
             ContentBlock(type=BlockType.HEADER, text="Test Header", level=1, formatting=[]),
             ContentBlock(
                 type=BlockType.BLOCKQUOTE,
                 text="─────────────────────────────\n\n[Write here with strokes]\n\n─────────────────────────────",
                 level=0,
-                formatting=[]
+                formatting=[],
             ),
         ]
 
@@ -238,8 +237,7 @@ class TestIntegrationWithRealData:
         """Check if testdata exists."""
         rm_files_dir = testdata_dir / "rm_files"
         return testdata_dir.exists() and (
-            list(testdata_dir.glob("*.rm")) or
-            list(rm_files_dir.glob("*.rm"))
+            list(testdata_dir.glob("*.rm")) or list(rm_files_dir.glob("*.rm"))
         )
 
     def test_cluster_mapping_with_real_annotations(self, testdata_dir, has_testdata):
@@ -247,11 +245,12 @@ class TestIntegrationWithRealData:
         if not has_testdata:
             pytest.skip("No testdata available")
 
-        from rock_paper_sync.annotations import read_annotations
-        from rock_paper_sync.annotation_mapper import extract_text_blocks_from_rm
-
         # Load test metadata
         import json
+
+        from rock_paper_sync.annotations import read_annotations
+        from rock_paper_sync.annotations.common.text_extraction import extract_text_blocks_from_rm
+
         manifest_path = testdata_dir / "manifest.json"
         if not manifest_path.exists():
             pytest.skip("No manifest.json in testdata")
@@ -289,8 +288,8 @@ class TestIntegrationWithRealData:
                 for ann in annotations:
                     # Create simple cluster from annotation
                     test_bbox = BoundingBox(
-                        x=ann.center_x() if hasattr(ann, 'center_x') else 100,
-                        y=ann.center_y() if hasattr(ann, 'center_y') else 100,
+                        x=ann.center_x() if hasattr(ann, "center_x") else 100,
+                        y=ann.center_y() if hasattr(ann, "center_y") else 100,
                         width=50,
                         height=20,
                     )
@@ -303,7 +302,9 @@ class TestIntegrationWithRealData:
 
                     if result is not None:
                         mapped_count += 1
-                        assert 0 <= result < len(markdown_blocks), f"Invalid paragraph index {result}"
+                        assert (
+                            0 <= result < len(markdown_blocks)
+                        ), f"Invalid paragraph index {result}"
 
                 # At least some annotations should map (not all, as some may be margin notes)
                 # We just verify the mapper doesn't crash and returns valid indices when it does map
@@ -315,11 +316,13 @@ class TestCoordinateTransformation:
 
     def test_absolute_coordinates_unchanged(self):
         """Annotations in absolute space are not transformed."""
-        from rock_paper_sync.ocr.integration import OCRProcessor
-        from rock_paper_sync.annotations import Annotation, AnnotationType, Stroke, Point
-        from rock_paper_sync.config import OCRConfig
         from pathlib import Path
+
         from rmscene.tagged_block_common import CrdtId
+
+        from rock_paper_sync.annotations import Annotation, AnnotationType, Point, Stroke
+        from rock_paper_sync.config import OCRConfig
+        from rock_paper_sync.ocr.integration import OCRProcessor
 
         config = OCRConfig(enabled=True, cache_dir=Path("/tmp/test"))
         processor = OCRProcessor(config, MagicMock())
@@ -355,11 +358,13 @@ class TestCoordinateTransformation:
 
     def test_text_relative_coordinates_transformed(self):
         """Annotations in text-relative space are transformed to absolute."""
-        from rock_paper_sync.ocr.integration import OCRProcessor
-        from rock_paper_sync.annotations import Annotation, AnnotationType, Stroke, Point
-        from rock_paper_sync.config import OCRConfig
         from pathlib import Path
+
         from rmscene.tagged_block_common import CrdtId
+
+        from rock_paper_sync.annotations import Annotation, AnnotationType, Point, Stroke
+        from rock_paper_sync.config import OCRConfig
+        from rock_paper_sync.ocr.integration import OCRProcessor
 
         config = OCRConfig(enabled=True, cache_dir=Path("/tmp/test"))
         processor = OCRProcessor(config, MagicMock())
@@ -390,7 +395,9 @@ class TestCoordinateTransformation:
         result = transformed[0]
         assert result.stroke is not None
         # Y should be transformed: 200 + 5 = 205
-        assert result.stroke.points[0].y == 205, f"Expected y=205 (200+5), got {result.stroke.points[0].y}"
+        assert (
+            result.stroke.points[0].y == 205
+        ), f"Expected y=205 (200+5), got {result.stroke.points[0].y}"
         assert result.stroke.points[0].x == 10, "X coordinate should not change"
 
 

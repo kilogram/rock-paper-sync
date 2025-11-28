@@ -2,8 +2,9 @@
 
 import hashlib
 import time
-import pytest
 from pathlib import Path
+
+import pytest
 
 from rock_paper_sync.state import StateError, StateManager, SyncRecord
 
@@ -77,6 +78,7 @@ class TestStateManagerInit:
     def test_init_database_connection_error(self, tmp_path: Path, mocker) -> None:
         """Test that initialization fails gracefully when database connection fails."""
         import sqlite3
+
         from rock_paper_sync.state import StateError
 
         # Mock sqlite3.connect to raise an exception

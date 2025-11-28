@@ -5,11 +5,10 @@ This is a minimal, focused implementation for collecting training data only.
 """
 
 import logging
-from pathlib import Path
 
-from rock_paper_sync.annotations.handlers.stroke_handler import StrokeHandler
-from rock_paper_sync.annotations.core.data_types import RenderConfig, OCRCorrection
 from rock_paper_sync.annotations.common.snapshots import SnapshotStore
+from rock_paper_sync.annotations.core.data_types import OCRCorrection, RenderConfig
+from rock_paper_sync.annotations.handlers.stroke_handler import StrokeHandler
 
 logger = logging.getLogger(__name__)
 
@@ -106,9 +105,7 @@ def detect_ocr_corrections_for_file(
         old_para = snapshot_store.get_block_snapshot(vault_name, file_path, para_idx)
 
         if not old_para:
-            logger.debug(
-                f"No snapshot for {vault_name}:{file_path}[{para_idx}], skipping"
-            )
+            logger.debug(f"No snapshot for {vault_name}:{file_path}[{para_idx}], skipping")
             continue
 
         # Check each stroke in this paragraph

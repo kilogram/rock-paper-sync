@@ -6,13 +6,11 @@ the rmscene library.
 """
 
 import io
-import json
 import logging
 import time
 import uuid as uuid_module
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 from uuid import uuid4
 
 import rmscene
@@ -34,16 +32,13 @@ from .annotations import (
     HeuristicTextAnchor,
     TextBlock,
     WordWrapLayoutEngine,
-    associate_annotations_with_content,
-    calculate_position_mapping,
-    read_annotations,
 )
 from .config import LayoutConfig
 from .coordinate_transformer import (
     apply_y_offset_to_block,
     get_annotation_center_y,
 )
-from .parser import BlockType, ContentBlock, FormatStyle, MarkdownDocument, TextFormat
+from .parser import BlockType, ContentBlock, MarkdownDocument, TextFormat
 
 logger = logging.getLogger("rock_paper_sync.generator")
 
@@ -85,7 +80,7 @@ class RemarkablePage:
     text_blocks: list[TextBlock] = field(default_factory=list)
     annotations: list[Annotation] = field(default_factory=list)
     annotation_blocks: list = field(default_factory=list)
-    original_rm_path: Optional[Path] = None
+    original_rm_path: Path | None = None
 
 
 @dataclass
@@ -161,7 +156,7 @@ class RemarkableGenerator:
     # Text area dimensions for 1.0x display (optimized for Paper Pro)
     TEXT_WIDTH = 750.0  # Width that displays at 1.0x zoom
     TEXT_POS_X = -375.0  # Centered: -TEXT_WIDTH/2
-    TEXT_POS_Y = 94.0   # Top margin: ~2 lines worth (was 234.0 = 5 lines)
+    TEXT_POS_Y = 94.0  # Top margin: ~2 lines worth (was 234.0 = 5 lines)
 
     # Calculated default lines per page based on actual device measurements
     # Visible lines on Paper Pro: 26 lines
@@ -182,17 +177,14 @@ class RemarkableGenerator:
         self.char_width = self.CHAR_WIDTH
 
         # Initialize annotation adjustment strategies (Phase 1)
-        self.text_anchor_strategy = HeuristicTextAnchor(
-            context_window=50,
-            fuzzy_threshold=0.8
-        )
+        self.text_anchor_strategy = HeuristicTextAnchor(context_window=50, fuzzy_threshold=0.8)
         self.layout_engine = WordWrapLayoutEngine(
-            text_width=self.TEXT_WIDTH,
-            avg_char_width=self.CHAR_WIDTH,
-            line_height=self.LINE_HEIGHT
+            text_width=self.TEXT_WIDTH, avg_char_width=self.CHAR_WIDTH, line_height=self.LINE_HEIGHT
         )
 
-        logger.info("RemarkableGenerator initialized with rmscene integration and Phase 1 annotation anchoring")
+        logger.info(
+            "RemarkableGenerator initialized with rmscene integration and Phase 1 annotation anchoring"
+        )
 
     def generate_document(
         self,
@@ -242,9 +234,7 @@ class RemarkableGenerator:
 
             text_items, text_blocks = self.blocks_to_text_items(blocks)
             pages.append(
-                RemarkablePage(
-                    uuid=page_uuid, text_items=text_items, text_blocks=text_blocks
-                )
+                RemarkablePage(uuid=page_uuid, text_items=text_items, text_blocks=text_blocks)
             )
 
         # Preserve annotations from existing .rm files if provided
@@ -290,16 +280,18 @@ class RemarkableGenerator:
             if rm_file_path and Path(rm_file_path).exists():
                 _, _, page_text = self._extract_text_blocks_from_rm(rm_file_path)
                 old_full_text_parts.append(page_text)
-        old_full_text = '\n\n'.join(old_full_text_parts)  # Join pages with double newline
+        old_full_text = "\n\n".join(old_full_text_parts)  # Join pages with double newline
 
         # Compute FULL DOCUMENT text from all new pages
         new_full_text_parts = []
         for page in pages:
-            page_text = '\n'.join(block.content for block in page.text_blocks)
+            page_text = "\n".join(block.content for block in page.text_blocks)
             new_full_text_parts.append(page_text)
-        new_full_text = '\n\n'.join(new_full_text_parts)  # Join pages with double newline
+        new_full_text = "\n\n".join(new_full_text_parts)  # Join pages with double newline
 
-        logger.debug(f"Full document text: old={len(old_full_text)} chars, new={len(new_full_text)} chars")
+        logger.debug(
+            f"Full document text: old={len(old_full_text)} chars, new={len(new_full_text)} chars"
+        )
 
         for i, (page, rm_file_path) in enumerate(zip(pages, existing_rm_files)):
             if rm_file_path is None or not Path(rm_file_path).exists():
@@ -308,13 +300,14 @@ class RemarkableGenerator:
 
             try:
                 # Read all blocks from existing file using rmscene
-                with open(rm_file_path, 'rb') as f:
+                with open(rm_file_path, "rb") as f:
                     existing_blocks = list(rmscene.read_blocks(f))
 
                 # Extract annotation blocks (Lines and Glyphs)
                 annotation_blocks = [
-                    block for block in existing_blocks
-                    if 'Line' in type(block).__name__ or 'Glyph' in type(block).__name__
+                    block
+                    for block in existing_blocks
+                    if "Line" in type(block).__name__ or "Glyph" in type(block).__name__
                 ]
 
                 if not annotation_blocks:
@@ -322,7 +315,9 @@ class RemarkableGenerator:
                     continue
 
                 # Extract old text blocks for spatial positioning (per-page)
-                old_text_blocks, old_text_origin_y, _ = self._extract_text_blocks_from_rm(rm_file_path)
+                old_text_blocks, old_text_origin_y, _ = self._extract_text_blocks_from_rm(
+                    rm_file_path
+                )
                 new_text_blocks = page.text_blocks
                 new_text_origin_y = self.TEXT_POS_Y  # New documents use TEXT_POS_Y constant
 
@@ -350,8 +345,14 @@ class RemarkableGenerator:
                 adjusted_blocks = []
                 for block in annotation_blocks:
                     adjusted_block = self._adjust_annotation_block_position(
-                        block, old_text, new_text, old_text_blocks, new_text_blocks,
-                        position_map, old_text_origin_y, new_text_origin_y
+                        block,
+                        old_text,
+                        new_text,
+                        old_text_blocks,
+                        new_text_blocks,
+                        position_map,
+                        old_text_origin_y,
+                        new_text_origin_y,
                     )
                     adjusted_blocks.append(adjusted_block)
 
@@ -364,9 +365,7 @@ class RemarkableGenerator:
                 )
 
             except Exception as e:
-                logger.warning(
-                    f"Page {i}: Failed to preserve annotations from {rm_file_path}: {e}"
-                )
+                logger.warning(f"Page {i}: Failed to preserve annotations from {rm_file_path}: {e}")
 
     def _extract_text_blocks_from_rm(
         self, rm_file_path: Path
@@ -388,7 +387,7 @@ class RemarkableGenerator:
             - full_text: Full text content as a single string
         """
         try:
-            with open(rm_file_path, 'rb') as f:
+            with open(rm_file_path, "rb") as f:
                 blocks = list(rmscene.read_blocks(f))
 
             text_blocks = []
@@ -397,7 +396,7 @@ class RemarkableGenerator:
 
             # Find RootTextBlock to get text content and position
             for block in blocks:
-                if 'RootText' in type(block).__name__:
+                if "RootText" in type(block).__name__:
                     text_data = block.value
                     text_origin_y = text_data.pos_y  # Capture the actual text origin
 
@@ -405,14 +404,14 @@ class RemarkableGenerator:
                     # The text is in the 'value' field of each CrdtSequenceItem
                     text_parts = []
                     for item in text_data.items.sequence_items():
-                        if hasattr(item, 'value') and isinstance(item.value, str):
+                        if hasattr(item, "value") and isinstance(item.value, str):
                             text_parts.append(item.value)
 
                     # Full text for content anchoring (join without splitting first)
-                    full_text = ''.join(text_parts)
+                    full_text = "".join(text_parts)
 
                     # Split into lines for TextBlock creation
-                    lines = full_text.split('\n')
+                    lines = full_text.split("\n")
 
                     # Create TextBlock for each line with estimated Y positions
                     y_pos = text_data.pos_y
@@ -423,7 +422,7 @@ class RemarkableGenerator:
                                     content=line,
                                     y_start=y_pos,
                                     y_end=y_pos + self.line_height,
-                                    block_type="paragraph"
+                                    block_type="paragraph",
                                 )
                             )
                             y_pos += self.line_height
@@ -443,7 +442,7 @@ class RemarkableGenerator:
         new_text_blocks: list[TextBlock],
         position_map: dict[int, int],
         old_text_origin_y: float,
-        new_text_origin_y: float
+        new_text_origin_y: float,
     ):
         """Adjust rmscene annotation block coordinates based on text repositioning.
 
@@ -467,11 +466,13 @@ class RemarkableGenerator:
             Modified block with adjusted coordinates
         """
         # Check if this is a Glyph (highlight) - use content anchoring
-        if 'Glyph' in type(block).__name__:
+        if "Glyph" in type(block).__name__:
             return self._adjust_glyph_with_content_anchoring(
-                block, old_text, new_text,
+                block,
+                old_text,
+                new_text,
                 (self.TEXT_POS_X, old_text_origin_y),
-                (self.TEXT_POS_X, new_text_origin_y)
+                (self.TEXT_POS_X, new_text_origin_y),
             )
 
         # For Lines (strokes), use spatial Y-only approach
@@ -484,7 +485,7 @@ class RemarkableGenerator:
 
         # Find the nearest old text block to this annotation (both in absolute coords)
         nearest_old_idx = None
-        min_distance = float('inf')
+        min_distance = float("inf")
 
         for idx, text_block in enumerate(old_text_blocks):
             # Calculate distance from annotation center to text block center
@@ -509,7 +510,9 @@ class RemarkableGenerator:
             return block
 
         # Calculate Y offset between old and new text block positions (absolute coords)
-        old_block_y = (old_text_blocks[nearest_old_idx].y_start + old_text_blocks[nearest_old_idx].y_end) / 2
+        old_block_y = (
+            old_text_blocks[nearest_old_idx].y_start + old_text_blocks[nearest_old_idx].y_end
+        ) / 2
         new_block_y = (new_text_blocks[new_idx].y_start + new_text_blocks[new_idx].y_end) / 2
         y_offset = new_block_y - old_block_y
 
@@ -529,14 +532,13 @@ class RemarkableGenerator:
 
         return block
 
-
     def _adjust_glyph_with_content_anchoring(
         self,
         glyph_block,
         old_text: str,
         new_text: str,
         old_origin: tuple[float, float],
-        new_origin: tuple[float, float]
+        new_origin: tuple[float, float],
     ):
         """Adjust Glyph (highlight) using content anchoring (Phase 1).
 
@@ -554,19 +556,19 @@ class RemarkableGenerator:
             Modified glyph_block with adjusted rectangles
         """
         # Extract highlighted text
-        if not hasattr(glyph_block.item, 'value'):
+        if not hasattr(glyph_block.item, "value"):
             logger.warning("Glyph block has no value, keeping original position")
             return glyph_block
 
         glyph_value = glyph_block.item.value
-        if not hasattr(glyph_value, 'text') or not glyph_value.text:
+        if not hasattr(glyph_value, "text") or not glyph_value.text:
             logger.warning("Glyph has no text content, keeping original position")
             return glyph_block
 
         highlight_text = glyph_value.text
 
         # Get old position (average of rectangles)
-        if hasattr(glyph_value, 'rectangles') and glyph_value.rectangles:
+        if hasattr(glyph_value, "rectangles") and glyph_value.rectangles:
             old_x = sum(r.x for r in glyph_value.rectangles) / len(glyph_value.rectangles)
             old_y = sum(r.y for r in glyph_value.rectangles) / len(glyph_value.rectangles)
         else:
@@ -574,9 +576,7 @@ class RemarkableGenerator:
             return glyph_block
 
         # Find anchor in old document
-        anchor = self.text_anchor_strategy.find_anchor(
-            highlight_text, old_text, (old_x, old_y)
-        )
+        anchor = self.text_anchor_strategy.find_anchor(highlight_text, old_text, (old_x, old_y))
 
         logger.debug(
             f"Highlight '{highlight_text[:30]}...': old_pos=({old_x:.1f}, {old_y:.1f}), "
@@ -595,17 +595,23 @@ class RemarkableGenerator:
         new_offset = self.text_anchor_strategy.resolve_anchor(anchor, new_text)
 
         if new_offset is None:
-            logger.warning(f"Could not find '{highlight_text[:30]}...' in new document, keeping original position")
+            logger.warning(
+                f"Could not find '{highlight_text[:30]}...' in new document, keeping original position"
+            )
             return glyph_block
 
-        logger.debug(f"  Resolved to new_offset={new_offset} (delta={new_offset - (anchor.char_offset or 0)})")
+        logger.debug(
+            f"  Resolved to new_offset={new_offset} (delta={new_offset - (anchor.char_offset or 0)})"
+        )
 
         # Calculate new position using layout engine
         try:
             new_x, new_y = self.layout_engine.offset_to_position(
                 new_offset, new_text, new_origin, self.TEXT_WIDTH
             )
-            logger.debug(f"  Layout engine: new_pos=({new_x:.1f}, {new_y:.1f}), origin={new_origin}")
+            logger.debug(
+                f"  Layout engine: new_pos=({new_x:.1f}, {new_y:.1f}), origin={new_origin}"
+            )
         except Exception as e:
             logger.warning(f"Failed to calculate new position for highlight: {e}")
             return glyph_block
@@ -628,9 +634,7 @@ class RemarkableGenerator:
 
         return glyph_block
 
-    def paginate_content(
-        self, blocks: list[ContentBlock]
-    ) -> list[list[ContentBlock]]:
+    def paginate_content(self, blocks: list[ContentBlock]) -> list[list[ContentBlock]]:
         """Split content blocks into pages based on line count.
 
         This method estimates how many lines each block will take and breaks
@@ -681,7 +685,7 @@ class RemarkableGenerator:
                         # Split the text (try to split at word boundary)
                         split_point = chars_for_current
                         # Try to find a space near the split point
-                        space_before = block.text.rfind(' ', 0, split_point)
+                        space_before = block.text.rfind(" ", 0, split_point)
                         if space_before > chars_for_current * 0.8:  # Within 20% of target
                             split_point = space_before
 
@@ -812,9 +816,7 @@ class RemarkableGenerator:
                 continue
 
             x_position = float(self.layout.margin_left)
-            width = float(
-                self.page_width - self.layout.margin_left - self.layout.margin_right
-            )
+            width = float(self.page_width - self.layout.margin_left - self.layout.margin_right)
 
             # Prepare text with list bullet if needed
             text = block.text
@@ -875,8 +877,12 @@ class RemarkableGenerator:
             not visually rendered due to rmscene/reMarkable limitations.
         """
         # If we have annotations and original file, do round-trip modification
-        if (hasattr(page, 'annotation_blocks') and page.annotation_blocks and
-            hasattr(page, 'original_rm_path') and page.original_rm_path):
+        if (
+            hasattr(page, "annotation_blocks")
+            and page.annotation_blocks
+            and hasattr(page, "original_rm_path")
+            and page.original_rm_path
+        ):
             return self._generate_rm_file_roundtrip(page)
 
         # Otherwise create from scratch (no annotations to preserve)
@@ -896,7 +902,7 @@ class RemarkableGenerator:
             Binary .rm file content with preserved structure
         """
         # Read all blocks from original file
-        with open(page.original_rm_path, 'rb') as f:
+        with open(str(page.original_rm_path), "rb") as f:
             blocks = list(rmscene.read_blocks(f))
 
         # Prepare new text content
@@ -908,14 +914,14 @@ class RemarkableGenerator:
         original_annotation_ids = set()
         for block in blocks:
             block_type = type(block).__name__
-            if block_type in ['SceneLineItemBlock', 'SceneGlyphItemBlock']:
-                if hasattr(block, 'item') and hasattr(block.item, 'item_id'):
+            if block_type in ["SceneLineItemBlock", "SceneGlyphItemBlock"]:
+                if hasattr(block, "item") and hasattr(block.item, "item_id"):
                     original_annotation_ids.add(block.item.item_id)
 
         # Build index of adjusted annotations by item_id
         adjusted_by_id = {}
         for adj_block in page.annotation_blocks:
-            if hasattr(adj_block, 'item') and hasattr(adj_block.item, 'item_id'):
+            if hasattr(adj_block, "item") and hasattr(adj_block.item, "item_id"):
                 adjusted_by_id[adj_block.item.item_id] = adj_block
 
         # Modify blocks in place
@@ -926,35 +932,36 @@ class RemarkableGenerator:
             block_type = type(block).__name__
 
             # Replace text content in RootTextBlock
-            if block_type == 'RootTextBlock':
+            if block_type == "RootTextBlock":
                 # Build styles dictionary with newline markers (format code 10)
                 # See docs/RMSCENE_NEWLINE_WORKAROUND.md for details
                 styles = {
-                    CrdtId(0, 0): LwwValue(
-                        timestamp=CrdtId(1, 15), value=si.ParagraphStyle.PLAIN
-                    )
+                    CrdtId(0, 0): LwwValue(timestamp=CrdtId(1, 15), value=si.ParagraphStyle.PLAIN)
                 }
 
                 # Add format code 10 (newline marker) for each \n character
                 for i, char in enumerate(combined_text):
-                    if char == '\n':
+                    if char == "\n":
                         styles[CrdtId(0, i)] = LwwValue(
-                            timestamp=CrdtId(1, 15), value=10  # Format code 10 = newline
+                            timestamp=CrdtId(1, 15),
+                            value=10,  # Format code 10 = newline
                         )
 
                 # Create new RootTextBlock with updated text but same structure
                 modified_block = RootTextBlock(
                     block_id=block.block_id,
                     value=si.Text(
-                        items=CrdtSequence([
-                            CrdtSequenceItem(
-                                item_id=CrdtId(1, 16),
-                                left_id=CrdtId(0, 0),
-                                right_id=CrdtId(0, 0),
-                                deleted_length=0,
-                                value=combined_text,
-                            )
-                        ]),
+                        items=CrdtSequence(
+                            [
+                                CrdtSequenceItem(
+                                    item_id=CrdtId(1, 16),
+                                    left_id=CrdtId(0, 0),
+                                    right_id=CrdtId(0, 0),
+                                    deleted_length=0,
+                                    value=combined_text,
+                                )
+                            ]
+                        ),
                         styles=styles,  # Now includes newline markers
                         pos_x=block.value.pos_x,
                         pos_y=block.value.pos_y,
@@ -962,12 +969,14 @@ class RemarkableGenerator:
                     ),
                 )
                 modified_blocks.append(modified_block)
-                logger.debug(f"Replaced text content in RootTextBlock ({len(combined_text)} chars, {combined_text.count(chr(10))} newlines)")
+                logger.debug(
+                    f"Replaced text content in RootTextBlock ({len(combined_text)} chars, {combined_text.count(chr(10))} newlines)"
+                )
 
             # Replace annotation blocks with adjusted versions
-            elif block_type in ['SceneLineItemBlock', 'SceneGlyphItemBlock']:
+            elif block_type in ["SceneLineItemBlock", "SceneGlyphItemBlock"]:
                 # Try to find adjusted version by item_id
-                if hasattr(block, 'item') and hasattr(block.item, 'item_id'):
+                if hasattr(block, "item") and hasattr(block.item, "item_id"):
                     item_id = block.item.item_id
                     if item_id in adjusted_by_id:
                         modified_blocks.append(adjusted_by_id[item_id])
@@ -982,7 +991,7 @@ class RemarkableGenerator:
                     annotation_count += 1
 
             # Update PageInfoBlock with new text stats
-            elif block_type == 'PageInfoBlock':
+            elif block_type == "PageInfoBlock":
                 modified_block = PageInfoBlock(
                     loads_count=block.loads_count,
                     merges_count=block.merges_count,
@@ -1020,19 +1029,16 @@ class RemarkableGenerator:
 
         # Build styles dictionary with newline markers (format code 10)
         # See docs/RMSCENE_NEWLINE_WORKAROUND.md for details
-        styles = {
-            CrdtId(0, 0): LwwValue(
-                timestamp=CrdtId(1, 15), value=si.ParagraphStyle.PLAIN
-            )
-        }
+        styles = {CrdtId(0, 0): LwwValue(timestamp=CrdtId(1, 15), value=si.ParagraphStyle.PLAIN)}
 
         # Add format code 10 (newline marker) for each \n character
         # This is a workaround for rmscene not yet supporting ParagraphStyle.NEWLINE
         for i, char in enumerate(combined_text):
-            if char == '\n':
+            if char == "\n":
                 # Use raw int 10 since rmscene doesn't have NEWLINE enum value yet
                 styles[CrdtId(0, i)] = LwwValue(
-                    timestamp=CrdtId(1, 15), value=10  # Format code 10 = newline
+                    timestamp=CrdtId(1, 15),
+                    value=10,  # Format code 10 = newline
                 )
 
         # Generate blocks manually with custom text width
@@ -1097,9 +1103,11 @@ class RemarkableGenerator:
         ]
 
         # Add preserved annotations (strokes and highlights) as rmscene blocks
-        if hasattr(page, 'annotation_blocks') and page.annotation_blocks:
+        if hasattr(page, "annotation_blocks") and page.annotation_blocks:
             blocks.extend(page.annotation_blocks)
-            logger.debug(f"Added {len(page.annotation_blocks)} preserved annotation blocks to .rm file")
+            logger.debug(
+                f"Added {len(page.annotation_blocks)} preserved annotation blocks to .rm file"
+            )
 
         # Serialize to binary format
         buffer = io.BytesIO()
@@ -1113,4 +1121,3 @@ class RemarkableGenerator:
         )
 
         return rm_bytes
-

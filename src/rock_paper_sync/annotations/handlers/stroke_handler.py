@@ -29,13 +29,17 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from rock_paper_sync.annotations import Annotation, AnnotationType, read_annotations
-from rock_paper_sync.annotations.common.text_extraction import extract_text_blocks_from_rm
 from rock_paper_sync.annotations.common.anchors import AnnotationAnchor
-from rock_paper_sync.annotations.core.data_types import ExtractedAnnotation, OCRCorrection, RenderConfig
+from rock_paper_sync.annotations.common.text_extraction import extract_text_blocks_from_rm
+from rock_paper_sync.annotations.core.data_types import (
+    ExtractedAnnotation,
+    OCRCorrection,
+    RenderConfig,
+)
 from rock_paper_sync.coordinate_transformer import (
-    extract_text_origin,
-    build_parent_anchor_map,
     CoordinateTransformer,
+    build_parent_anchor_map,
+    extract_text_origin,
     is_text_relative,
 )
 
@@ -76,11 +80,7 @@ class StrokeHandler:
             List of Annotation objects with type=STROKE
         """
         all_annotations = read_annotations(rm_file_path)
-        strokes = [
-            anno
-            for anno in all_annotations
-            if anno.type == AnnotationType.STROKE
-        ]
+        strokes = [anno for anno in all_annotations if anno.type == AnnotationType.STROKE]
         logger.debug(f"Detected {len(strokes)} strokes in {rm_file_path.name}")
         return strokes
 
@@ -169,9 +169,7 @@ class StrokeHandler:
                     f"→ paragraph {paragraph_index} (distance={min_distance:.1f})"
                 )
             else:
-                logger.warning(
-                    f"Could not map stroke annotation {annotation.annotation_id[:8]}..."
-                )
+                logger.warning(f"Could not map stroke annotation {annotation.annotation_id[:8]}...")
 
         return mappings
 
@@ -353,37 +351,40 @@ class StrokeHandler:
         if config.stroke_style == "footnote":
             # Pattern: captures text before footnote marker
             # Example: "Handwritten text[^1]" -> "Handwritten text"
-            pattern = r'([^\[\n]+)\[\^\d+\]'
+            pattern = r"([^\[\n]+)\[\^\d+\]"
 
             for match in re.finditer(pattern, paragraph):
                 text = match.group(1).strip()
                 if text:  # Skip empty matches
-                    extracted.append(ExtractedAnnotation(
-                        text=text,
-                        annotation_type="stroke",
-                        start_offset=match.start(),
-                        end_offset=match.end()
-                    ))
+                    extracted.append(
+                        ExtractedAnnotation(
+                            text=text,
+                            annotation_type="stroke",
+                            start_offset=match.start(),
+                            end_offset=match.end(),
+                        )
+                    )
 
         elif config.stroke_style == "comment":
             # Pattern: <!-- OCR: text -->
-            pattern = r'<!-- OCR: (.+?) -->'
+            pattern = r"<!-- OCR: (.+?) -->"
 
             for match in re.finditer(pattern, paragraph):
-                extracted.append(ExtractedAnnotation(
-                    text=match.group(1),
-                    annotation_type="stroke",
-                    start_offset=match.start(),
-                    end_offset=match.end()
-                ))
+                extracted.append(
+                    ExtractedAnnotation(
+                        text=match.group(1),
+                        annotation_type="stroke",
+                        start_offset=match.start(),
+                        end_offset=match.end(),
+                    )
+                )
 
         else:
             logger.warning(f"Unknown stroke style: {config.stroke_style}")
             return []
 
         logger.debug(
-            f"Extracted {len(extracted)} strokes from paragraph "
-            f"(style={config.stroke_style})"
+            f"Extracted {len(extracted)} strokes from paragraph " f"(style={config.stroke_style})"
         )
 
         return extracted

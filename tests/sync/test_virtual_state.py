@@ -8,9 +8,14 @@ Tests verify that VirtualDeviceState correctly:
 """
 
 import hashlib
-import pytest
 
-from rock_paper_sync.virtual_state import VirtualDeviceState, BlobEntry, SCHEMA_VERSION, DOC_TYPE, DELIMITER
+from rock_paper_sync.virtual_state import (
+    DELIMITER,
+    DOC_TYPE,
+    SCHEMA_VERSION,
+    BlobEntry,
+    VirtualDeviceState,
+)
 
 
 class TestBlobEntry:
@@ -27,7 +32,9 @@ class TestBlobEntry:
         )
         line = entry.to_line()
 
-        expected = f"abc123def456{DELIMITER}{DOC_TYPE}{DELIMITER}doc-uuid-123{DELIMITER}5{DELIMITER}0"
+        expected = (
+            f"abc123def456{DELIMITER}{DOC_TYPE}{DELIMITER}doc-uuid-123{DELIMITER}5{DELIMITER}0"
+        )
         assert line == expected
 
     def test_to_line_file_entry(self) -> None:
@@ -184,7 +191,10 @@ class TestChangeDetection:
     def test_no_changes_when_same_entries(self) -> None:
         """Test has_changes returns False when entries unchanged."""
         # Compute the hash of a state with one entry
-        lines = [SCHEMA_VERSION, f"abc123{DELIMITER}{DOC_TYPE}{DELIMITER}uuid1{DELIMITER}3{DELIMITER}0"]
+        lines = [
+            SCHEMA_VERSION,
+            f"abc123{DELIMITER}{DOC_TYPE}{DELIMITER}uuid1{DELIMITER}3{DELIMITER}0",
+        ]
         original_hash = hashlib.sha256("\n".join(lines).encode()).hexdigest()
         entries = [BlobEntry("abc123", DOC_TYPE, "uuid1", 3, 0)]
 
@@ -206,9 +216,7 @@ class TestChangeDetection:
 
     def test_changes_detected_after_add(self) -> None:
         """Test has_changes returns True after addition."""
-        original_hash = hashlib.sha256(
-            f"{SCHEMA_VERSION}\n".encode()
-        ).hexdigest()
+        original_hash = hashlib.sha256(f"{SCHEMA_VERSION}\n".encode()).hexdigest()
 
         vds = VirtualDeviceState([], original_hash, 0)
         vds.add_or_update_document("new-uuid", "new-hash", 2)
@@ -219,7 +227,10 @@ class TestChangeDetection:
         """Test has_changes returns False after add and delete cancel out."""
         entries = [BlobEntry("hash1", DOC_TYPE, "uuid1", 3, 0)]
         # Original hash includes entry1
-        lines = [SCHEMA_VERSION, f"hash1{DELIMITER}{DOC_TYPE}{DELIMITER}uuid1{DELIMITER}3{DELIMITER}0"]
+        lines = [
+            SCHEMA_VERSION,
+            f"hash1{DELIMITER}{DOC_TYPE}{DELIMITER}uuid1{DELIMITER}3{DELIMITER}0",
+        ]
         original_hash = hashlib.sha256("\n".join(lines).encode()).hexdigest()
 
         vds = VirtualDeviceState(entries.copy(), original_hash, 0)

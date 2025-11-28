@@ -25,10 +25,14 @@ Directory Structure (Multi-Phase):
 
 import json
 import shutil
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .vault_manager import VaultOperation
 
 
 @dataclass
@@ -41,7 +45,7 @@ class PhaseData:
     phase_number: int
     phase_name: str  # e.g., "initial", "post_sync", "final"
     vault_snapshot_path: Path  # Path to vault_snapshot directory
-    device_state: Optional[dict] = None  # Device metadata (UUIDs, counts, etc.)
+    device_state: dict | None = None  # Device metadata (UUIDs, counts, etc.)
     rm_files: dict[str, bytes] = field(default_factory=dict)  # page_uuid -> .rm data
     phase_info: dict = field(default_factory=dict)  # Full phase metadata
 
@@ -56,7 +60,7 @@ class PhaseInfo:
     action: str  # e.g., "setup", "sync_upload", "sync_download", "teardown"
     description: str = ""
     vault_hash: str = ""  # SHA256 hash of vault state
-    device_state: Optional[dict] = None
+    device_state: dict | None = None
 
     def to_dict(self) -> dict:
         """Serialize to dictionary."""
@@ -328,8 +332,7 @@ class TestdataStore:
             return test_path
 
         raise FileNotFoundError(
-            f"Test artifacts not found: {test_id}\n"
-            f"Searched in: {self.base_dir}"
+            f"Test artifacts not found: {test_id}\n" f"Searched in: {self.base_dir}"
         )
 
     def list_available_tests(self, include_curated: bool = True) -> list[TestManifest]:
@@ -401,9 +404,7 @@ class TestdataStore:
             "created_at": datetime.now().isoformat(),
             "test_ids": test_ids,
         }
-        (set_dir / "set_manifest.json").write_text(
-            json.dumps(set_manifest, indent=2)
-        )
+        (set_dir / "set_manifest.json").write_text(json.dumps(set_manifest, indent=2))
 
         # Copy each test
         for test_id in test_ids:
@@ -492,15 +493,11 @@ class TestdataStore:
         snapshot_dir = test_dir / "vault_snapshots" / snapshot_name
 
         if not snapshot_dir.exists():
-            raise FileNotFoundError(
-                f"Snapshot '{snapshot_name}' not found for test '{test_id}'"
-            )
+            raise FileNotFoundError(f"Snapshot '{snapshot_name}' not found for test '{test_id}'")
 
         return snapshot_dir
 
-    def save_vault_operations(
-        self, test_id: str, operations: list["VaultOperation"]
-    ) -> None:
+    def save_vault_operations(self, test_id: str, operations: list["VaultOperation"]) -> None:
         """Save recorded vault operations for a test.
 
         Args:
@@ -545,9 +542,7 @@ class TestdataStore:
         """
         return self.base_dir / test_id / "vault_snapshots" / snapshot_name
 
-    def save_golden_vault(
-        self, test_id: str, vault_dir: Path, phase_name: str = "final"
-    ) -> Path:
+    def save_golden_vault(self, test_id: str, vault_dir: Path, phase_name: str = "final") -> Path:
         """Save vault state as golden reference during recording.
 
         Golden vault captures the expected state after a specific phase.
@@ -803,9 +798,7 @@ class TestdataStore:
             "rm_files_count": manifest_data.get("annotations_count", 0),
             "has_annotations": manifest_data.get("annotations_count", 0) > 0,
         }
-        (phase1_dir / "device_state.json").write_text(
-            json.dumps(device_state, indent=2)
-        )
+        (phase1_dir / "device_state.json").write_text(json.dumps(device_state, indent=2))
 
         # Save phase 1 info
         phase1_info = PhaseInfo(

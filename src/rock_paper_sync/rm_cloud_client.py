@@ -5,7 +5,6 @@ import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 import requests
 
@@ -27,7 +26,7 @@ class RmCloudClient:
     def __init__(
         self,
         base_url: str = "http://localhost:3000",
-        credentials_path: Optional[Path] = None,
+        credentials_path: Path | None = None,
     ):
         """
         Initialize rm_cloud client.
@@ -42,10 +41,14 @@ class RmCloudClient:
             self.credentials_path = credentials_path
         else:
             config_home = os.getenv("XDG_CONFIG_HOME", str(Path.home() / ".config"))
-            self.credentials_path = Path(config_home) / "rock-paper-sync" / "device-credentials.json"
-            logger.debug(f"Credentials path (from XDG_CONFIG_HOME={config_home}): {self.credentials_path}")
+            self.credentials_path = (
+                Path(config_home) / "rock-paper-sync" / "device-credentials.json"
+            )
+            logger.debug(
+                f"Credentials path (from XDG_CONFIG_HOME={config_home}): {self.credentials_path}"
+            )
             logger.debug(f"Credentials file exists: {self.credentials_path.exists()}")
-        self.credentials: Optional[DeviceCredentials] = None
+        self.credentials: DeviceCredentials | None = None
         self._load_credentials()
 
     def _load_credentials(self) -> None:
@@ -76,7 +79,9 @@ class RmCloudClient:
         self.credentials_path.write_text(json.dumps(data, indent=2))
         logger.info(f"Saved device credentials to {self.credentials_path}")
 
-    def register_device(self, one_time_code: str, device_id: str = "rock-paper-sync-001") -> DeviceCredentials:
+    def register_device(
+        self, one_time_code: str, device_id: str = "rock-paper-sync-001"
+    ) -> DeviceCredentials:
         """
         Register this client as a new device with rm_cloud.
 

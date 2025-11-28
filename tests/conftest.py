@@ -1,10 +1,11 @@
 """
 Shared pytest fixtures for rock-paper-sync tests.
 """
-import pytest
+
 from pathlib import Path
-import tempfile
 from unittest.mock import MagicMock
+
+import pytest
 
 
 def pytest_addoption(parser):
@@ -20,12 +21,11 @@ def pytest_addoption(parser):
 def pytest_configure(config):
     """Register custom pytest markers."""
     config.addinivalue_line(
-        "markers",
-        "offline: marks tests that run in offline mode with pre-recorded testdata"
+        "markers", "offline: marks tests that run in offline mode with pre-recorded testdata"
     )
     config.addinivalue_line(
         "markers",
-        "manual: marks tests as manual (require external services, credentials, or setup). Run with --run-manual"
+        "manual: marks tests as manual (require external services, credentials, or setup). Run with --run-manual",
     )
 
 
@@ -92,7 +92,14 @@ def temp_vault2(tmp_path: Path) -> Path:
 def sample_config(temp_vault: Path, temp_state_db: Path, tmp_path: Path):
     """Create sample AppConfig for testing with single vault"""
     # Import here to avoid circular imports during test collection
-    from rock_paper_sync.config import AppConfig, SyncConfig, LayoutConfig, CloudConfig, VaultConfig, OCRConfig
+    from rock_paper_sync.config import (
+        AppConfig,
+        CloudConfig,
+        LayoutConfig,
+        OCRConfig,
+        SyncConfig,
+        VaultConfig,
+    )
 
     cache_dir = tmp_path / "cache"
     cache_dir.mkdir(exist_ok=True)
@@ -109,17 +116,11 @@ def sample_config(temp_vault: Path, temp_state_db: Path, tmp_path: Path):
                 )
             ],
             state_database=temp_state_db,
-            debounce_seconds=1
+            debounce_seconds=1,
         ),
-        cloud=CloudConfig(
-            base_url="http://localhost:3000"
-        ),
+        cloud=CloudConfig(base_url="http://localhost:3000"),
         layout=LayoutConfig(
-            lines_per_page=45,
-            margin_top=50,
-            margin_bottom=50,
-            margin_left=50,
-            margin_right=50
+            lines_per_page=45, margin_top=50, margin_bottom=50, margin_left=50, margin_right=50
         ),
         log_level="debug",
         log_file=temp_state_db.parent / "test.log",
@@ -131,7 +132,14 @@ def sample_config(temp_vault: Path, temp_state_db: Path, tmp_path: Path):
 @pytest.fixture
 def multi_vault_config(temp_vault: Path, temp_vault2: Path, temp_state_db: Path, tmp_path: Path):
     """Create sample AppConfig with multiple vaults for testing"""
-    from rock_paper_sync.config import AppConfig, SyncConfig, LayoutConfig, CloudConfig, VaultConfig, OCRConfig
+    from rock_paper_sync.config import (
+        AppConfig,
+        CloudConfig,
+        LayoutConfig,
+        OCRConfig,
+        SyncConfig,
+        VaultConfig,
+    )
 
     cache_dir = tmp_path / "cache"
     cache_dir.mkdir(exist_ok=True)
@@ -152,20 +160,14 @@ def multi_vault_config(temp_vault: Path, temp_vault2: Path, temp_state_db: Path,
                     remarkable_folder="Work",
                     include_patterns=["**/*.md"],
                     exclude_patterns=["archive/**"],
-                )
+                ),
             ],
             state_database=temp_state_db,
-            debounce_seconds=1
+            debounce_seconds=1,
         ),
-        cloud=CloudConfig(
-            base_url="http://localhost:3000"
-        ),
+        cloud=CloudConfig(base_url="http://localhost:3000"),
         layout=LayoutConfig(
-            lines_per_page=45,
-            margin_top=50,
-            margin_bottom=50,
-            margin_left=50,
-            margin_right=50
+            lines_per_page=45, margin_top=50, margin_bottom=50, margin_left=50, margin_right=50
         ),
         log_level="debug",
         log_file=temp_state_db.parent / "test.log",
@@ -178,7 +180,7 @@ def multi_vault_config(temp_vault: Path, temp_vault2: Path, temp_state_db: Path,
 def state_manager(temp_state_db: Path):
     """Create StateManager instance for testing"""
     from rock_paper_sync.state import StateManager
-    
+
     manager = StateManager(temp_state_db)
     yield manager
     manager.close()
@@ -354,6 +356,7 @@ def mock_cloud_sync():
 
 # OCR Testing Fixtures
 
+
 @pytest.fixture
 def ocr_config(tmp_path: Path):
     """Create OCRConfig for testing."""
@@ -385,7 +388,12 @@ def ocr_config(tmp_path: Path):
 def sample_config_with_ocr(temp_vault: Path, temp_state_db: Path, tmp_path: Path):
     """Create sample AppConfig with OCR enabled for testing."""
     from rock_paper_sync.config import (
-        AppConfig, SyncConfig, LayoutConfig, CloudConfig, VaultConfig, OCRConfig
+        AppConfig,
+        CloudConfig,
+        LayoutConfig,
+        OCRConfig,
+        SyncConfig,
+        VaultConfig,
     )
 
     ocr_cache_dir = tmp_path / "ocr_cache"
@@ -405,17 +413,11 @@ def sample_config_with_ocr(temp_vault: Path, temp_state_db: Path, tmp_path: Path
                 )
             ],
             state_database=temp_state_db,
-            debounce_seconds=1
+            debounce_seconds=1,
         ),
-        cloud=CloudConfig(
-            base_url="http://localhost:3000"
-        ),
+        cloud=CloudConfig(base_url="http://localhost:3000"),
         layout=LayoutConfig(
-            lines_per_page=45,
-            margin_top=50,
-            margin_bottom=50,
-            margin_left=50,
-            margin_right=50
+            lines_per_page=45, margin_top=50, margin_bottom=50, margin_left=50, margin_right=50
         ),
         log_level="debug",
         log_file=temp_state_db.parent / "test.log",
@@ -470,8 +472,9 @@ corrected handwriting text
 @pytest.fixture
 def mock_ocr_service():
     """Create a mock OCR service for testing."""
-    from rock_paper_sync.ocr.protocol import OCRResult, ModelInfo, BoundingBox, ParagraphContext
     from datetime import datetime
+
+    from rock_paper_sync.ocr.protocol import ModelInfo, OCRResult
 
     mock_service = MagicMock()
 
@@ -493,14 +496,16 @@ def mock_ocr_service():
     mock_service.recognize = MagicMock(side_effect=mock_recognize)
     mock_service.recognize_batch = MagicMock(side_effect=mock_recognize_batch)
     mock_service.health_check = MagicMock(return_value=True)
-    mock_service.get_model_info = MagicMock(return_value=ModelInfo(
-        version="test-v1",
-        base_model="microsoft/trocr-base-handwritten",
-        is_fine_tuned=False,
-        dataset_version=None,
-        created_at=datetime.now(),
-        metrics={},
-    ))
+    mock_service.get_model_info = MagicMock(
+        return_value=ModelInfo(
+            version="test-v1",
+            base_model="microsoft/trocr-base-handwritten",
+            is_fine_tuned=False,
+            dataset_version=None,
+            created_at=datetime.now(),
+            metrics={},
+        )
+    )
 
     return mock_service
 
@@ -554,14 +559,16 @@ def annotation_image_factory():
 
     Returns simple PNG images for testing.
     """
-    from PIL import Image
     import io
+
+    from PIL import Image
 
     def _create(width: int = 100, height: int = 30, color: str = "black") -> bytes:
         img = Image.new("RGB", (width, height), color="white")
 
         # Draw a simple line to simulate handwriting
         from PIL import ImageDraw
+
         draw = ImageDraw.Draw(img)
         draw.line([(10, height // 2), (width - 10, height // 2)], fill=color, width=2)
 
@@ -612,9 +619,7 @@ def rmfakecloud(request, tmp_path: Path):
         pytest.skip(f"rmfakecloud seed data not found at {seed_data}")
 
     port, container_name = allocate_port(request)
-    url, success = start_rmfakecloud_container(
-        runtime, container_name, port, seed_data, tmp_path
-    )
+    url, success = start_rmfakecloud_container(runtime, container_name, port, seed_data, tmp_path)
 
     if not success:
         pytest.fail(f"Failed to start rmfakecloud at {url}")
@@ -657,7 +662,12 @@ def runpods_credentials():
 def integration_config(temp_vault: Path, temp_state_db: Path, tmp_path: Path):
     """Create a test config for integration/e2e tests."""
     from rock_paper_sync.config import (
-        AppConfig, SyncConfig, CloudConfig, LayoutConfig, OCRConfig, VaultConfig
+        AppConfig,
+        CloudConfig,
+        LayoutConfig,
+        OCRConfig,
+        SyncConfig,
+        VaultConfig,
     )
 
     cache_dir = tmp_path / "cache"
@@ -672,9 +682,7 @@ def integration_config(temp_vault: Path, temp_state_db: Path, tmp_path: Path):
     )
 
     sync_config = SyncConfig(
-        vaults=[vault_config],
-        state_database=temp_state_db,
-        debounce_seconds=1
+        vaults=[vault_config], state_database=temp_state_db, debounce_seconds=1
     )
 
     return AppConfig(

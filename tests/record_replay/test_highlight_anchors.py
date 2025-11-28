@@ -18,11 +18,11 @@ Replaying:
 """
 
 import io
+
 import pytest
 
-from rock_paper_sync.annotations import read_annotations, AnnotationType
+from rock_paper_sync.annotations import AnnotationType, read_annotations
 from rock_paper_sync.annotations.handlers.highlight_handler import HighlightHandler
-from rock_paper_sync.annotations.common.text_extraction import extract_text_blocks_from_rm
 
 
 @pytest.mark.device
@@ -44,7 +44,9 @@ def test_highlight_anchors_comprehensive(device, workspace, fixtures_dir):
     workspace.test_doc.write_text(fixture_doc.read_text())
 
     try:
-        device.start_test(test_id, description="Create highlight annotations for comprehensive anchor testing")
+        device.start_test(
+            test_id, description="Create highlight annotations for comprehensive anchor testing"
+        )
     except FileNotFoundError:
         pytest.skip(f"Testdata '{test_id}' not available. Run with --online -s to record.")
 
@@ -59,8 +61,9 @@ def test_highlight_anchors_comprehensive(device, workspace, fixtures_dir):
     source_text = workspace.test_doc.read_text()
     # Extract annotated paragraphs (lines between <!-- ANNOTATED --> markers)
     import re
+
     annotated_paragraphs = []
-    pattern = r'<!-- ANNOTATED:.*?-->\s*\n(.*?)\n<!-- /ANNOTATED -->'
+    pattern = r"<!-- ANNOTATED:.*?-->\s*\n(.*?)\n<!-- /ANNOTATED -->"
     for match in re.finditer(pattern, source_text, re.DOTALL):
         paragraph = match.group(1).strip()
         annotated_paragraphs.append(paragraph)
@@ -97,7 +100,7 @@ def test_highlight_anchors_comprehensive(device, workspace, fixtures_dir):
                 annotation=highlight,
                 paragraph_text=paragraph_text,
                 paragraph_index=paragraph_index,
-                page_num=0
+                page_num=0,
             )
             all_anchors.append((anchor, highlight, paragraph_text))
 
@@ -111,25 +114,33 @@ def test_highlight_anchors_comprehensive(device, workspace, fixtures_dir):
     exact_match_score = test_anchor.match_score(
         paragraph_text=original_paragraph,
         position=(test_anchor.page.x, test_anchor.page.y),
-        bbox=(test_anchor.bbox.x, test_anchor.bbox.y, test_anchor.bbox.width, test_anchor.bbox.height)
+        bbox=(
+            test_anchor.bbox.x,
+            test_anchor.bbox.y,
+            test_anchor.bbox.width,
+            test_anchor.bbox.height,
+        ),
     )
-    assert exact_match_score > 0.7, \
-        f"Exact match should score high, got {exact_match_score:.2f}"
+    assert exact_match_score > 0.7, f"Exact match should score high, got {exact_match_score:.2f}"
 
     # Test 2: Fuzzy Match - Case Change
     # User changes case in markdown, anchor should still match
     case_changed = original_paragraph.replace(
-        test_anchor.text.content,
-        test_anchor.text.content.upper(),
-        1
+        test_anchor.text.content, test_anchor.text.content.upper(), 1
     )
     case_change_score = test_anchor.match_score(
         paragraph_text=case_changed,
         position=(test_anchor.page.x, test_anchor.page.y),
-        bbox=(test_anchor.bbox.x, test_anchor.bbox.y, test_anchor.bbox.width, test_anchor.bbox.height)
+        bbox=(
+            test_anchor.bbox.x,
+            test_anchor.bbox.y,
+            test_anchor.bbox.width,
+            test_anchor.bbox.height,
+        ),
     )
-    assert case_change_score >= 0.5, \
-        f"Case change should still match (fuzzy), got {case_change_score:.2f}"
+    assert (
+        case_change_score >= 0.5
+    ), f"Case change should still match (fuzzy), got {case_change_score:.2f}"
 
     # Test 3: Fuzzy Match - Small Typo
     # User introduces small typo, anchor should still match
@@ -138,40 +149,41 @@ def test_highlight_anchors_comprehensive(device, workspace, fixtures_dir):
         typo_score = test_anchor.match_score(
             paragraph_text=typo_paragraph,
             position=(test_anchor.page.x, test_anchor.page.y),
-            bbox=(test_anchor.bbox.x, test_anchor.bbox.y, test_anchor.bbox.width, test_anchor.bbox.height)
+            bbox=(
+                test_anchor.bbox.x,
+                test_anchor.bbox.y,
+                test_anchor.bbox.width,
+                test_anchor.bbox.height,
+            ),
         )
-        assert typo_score > 0.4, \
-            f"Minor typo should still match somewhat, got {typo_score:.2f}"
+        assert typo_score > 0.4, f"Minor typo should still match somewhat, got {typo_score:.2f}"
 
     # Test 4: Text-Only Match - Wrong Position
     # Anchor should still match based on text content even if position is way off
     text_only_score = test_anchor.match_score(
         paragraph_text=original_paragraph,
         position=(9999, 9999),  # Wrong position
-        bbox=None
+        bbox=None,
     )
-    assert text_only_score > 0.3, \
-        f"Text-only match should still work, got {text_only_score:.2f}"
+    assert text_only_score > 0.3, f"Text-only match should still work, got {text_only_score:.2f}"
 
     # Test 5: No Match - Completely Different Text
     # Anchor should fail to match unrelated text
     no_match_score = test_anchor.match_score(
         paragraph_text="Completely unrelated text that has nothing to do with the original",
         position=(9999, 9999),
-        bbox=None
+        bbox=None,
     )
-    assert no_match_score < 0.3, \
-        f"Unrelated text should not match, got {no_match_score:.2f}"
+    assert no_match_score < 0.3, f"Unrelated text should not match, got {no_match_score:.2f}"
 
     # Test 6: Position Tolerance - Text Moved
     # If paragraph moves to different position, text matching should still work
     moved_score = test_anchor.match_score(
         paragraph_text=original_paragraph,
         position=(test_anchor.page.x + 500, test_anchor.page.y + 500),  # Moved position
-        bbox=None
+        bbox=None,
     )
-    assert moved_score > 0.3, \
-        f"Text should match even when moved, got {moved_score:.2f}"
+    assert moved_score > 0.3, f"Text should match even when moved, got {moved_score:.2f}"
 
     # Test 7: Best Match Selection
     # When searching across multiple paragraphs, should pick the best match
@@ -187,7 +199,8 @@ def test_highlight_anchors_comprehensive(device, workspace, fixtures_dir):
     ]
 
     best_index = scores.index(max(scores))
-    assert best_index == 1, \
-        f"Should identify original paragraph (index 1) as best match, got index {best_index} with scores {scores}"
+    assert (
+        best_index == 1
+    ), f"Should identify original paragraph (index 1) as best match, got index {best_index} with scores {scores}"
 
     device.end_test(test_id)

@@ -50,6 +50,7 @@ class AnnotationProcessor:
         # Initialize database connection if provided
         if db_path:
             import sqlite3
+
             self.db_connection = sqlite3.connect(db_path)
         else:
             self.db_connection = None
@@ -88,7 +89,7 @@ class AnnotationProcessor:
             Example: {0: AnnotationInfo(highlights=2), 3: AnnotationInfo(strokes=1)}
         """
         # Handle file-like objects vs paths
-        if isinstance(rm_file_path, (str, Path)):
+        if isinstance(rm_file_path, str | Path):
             rm_path = Path(rm_file_path)
             if not rm_path.exists():
                 logger.warning(f".rm file not found: {rm_path}")

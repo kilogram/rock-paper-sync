@@ -6,21 +6,22 @@ Tests ensure:
 3. File hash vs semantic hash behavior is as expected
 """
 
-import pytest
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
-from rock_paper_sync.hashing import (
-    compute_semantic_hash,
-    compute_file_hash,
-    compute_paragraph_hash,
-)
-from rock_paper_sync.parser import parse_markdown_file
-from rock_paper_sync.annotation_mapper import AnnotationInfo
+import pytest
+
 from rock_paper_sync.annotation_markers_v2 import (
     add_annotation_markers_aligned,
     strip_annotation_markers,
 )
+from rock_paper_sync.annotations.core.data_types import AnnotationInfo
+from rock_paper_sync.hashing import (
+    compute_file_hash,
+    compute_paragraph_hash,
+    compute_semantic_hash,
+)
+from rock_paper_sync.parser import parse_markdown_file
 
 
 class TestSemanticHash:
@@ -32,7 +33,7 @@ class TestSemanticHash:
         files = []
 
         def _create(content):
-            f = NamedTemporaryFile(mode='w', suffix='.md', delete=False)
+            f = NamedTemporaryFile(mode="w", suffix=".md", delete=False)
             f.write(content)
             f.close()
             path = Path(f.name)
@@ -112,7 +113,7 @@ class TestSemanticHash:
         hash_val = compute_semantic_hash(doc.content)
 
         assert len(hash_val) == 64
-        assert all(c in '0123456789abcdef' for c in hash_val)
+        assert all(c in "0123456789abcdef" for c in hash_val)
 
 
 class TestFileHash:
@@ -121,7 +122,7 @@ class TestFileHash:
     @pytest.fixture
     def temp_file(self):
         """Create a temporary markdown file for testing."""
-        f = NamedTemporaryFile(mode='w', suffix='.md', delete=False)
+        f = NamedTemporaryFile(mode="w", suffix=".md", delete=False)
         f.write("Content")
         f.close()
         path = Path(f.name)
@@ -141,11 +142,11 @@ class TestFileHash:
         """File hash should be same for identical files."""
         content = "# Header\n\nParagraph"
 
-        with NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f1:
+        with NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f1:
             f1.write(content)
             f1_path = Path(f1.name)
 
-        with NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f2:
+        with NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f2:
             f2.write(content)
             f2_path = Path(f2.name)
 
@@ -183,7 +184,7 @@ class TestMarkerHashStability:
     @pytest.fixture
     def markdown_file(self):
         """Create and cleanup a temporary markdown file."""
-        f = NamedTemporaryFile(mode='w', suffix='.md', delete=False)
+        f = NamedTemporaryFile(mode="w", suffix=".md", delete=False)
         f.close()
         path = Path(f.name)
         yield path
@@ -210,7 +211,7 @@ More content in a subsection.
         # Simulate: User annotates paragraphs on device
         annotation_map = {
             1: AnnotationInfo(highlights=2, strokes=1),
-            3: AnnotationInfo(highlights=1)
+            3: AnnotationInfo(highlights=1),
         }
 
         # Add markers
@@ -221,8 +222,9 @@ More content in a subsection.
         doc2 = parse_markdown_file(markdown_file)
         hash_after_markers = compute_semantic_hash(doc2.content)
 
-        assert hash_initial == hash_after_markers, \
-            "Semantic hash MUST be unchanged after adding markers (prevents loop!)"
+        assert (
+            hash_initial == hash_after_markers
+        ), "Semantic hash MUST be unchanged after adding markers (prevents loop!)"
 
     def test_file_hash_changes_but_semantic_hash_stable(self, markdown_file):
         """File hash changes but semantic hash doesn't."""
@@ -330,7 +332,7 @@ class TestSyncScenarios:
     @pytest.fixture
     def markdown_file(self):
         """Create and cleanup a temporary markdown file."""
-        f = NamedTemporaryFile(mode='w', suffix='.md', delete=False)
+        f = NamedTemporaryFile(mode="w", suffix=".md", delete=False)
         f.close()
         path = Path(f.name)
         yield path
@@ -353,14 +355,8 @@ Final thoughts on topic C.
         hash_sync1 = compute_semantic_hash(doc_sync1.content)
 
         # User annotates on device, sync 2 adds markers
-        annotations_from_device = {
-            1: AnnotationInfo(highlights=2),
-            2: AnnotationInfo(highlights=1)
-        }
-        marked_content = add_annotation_markers_aligned(
-            doc_sync1.content,
-            annotations_from_device
-        )
+        annotations_from_device = {1: AnnotationInfo(highlights=2), 2: AnnotationInfo(highlights=1)}
+        marked_content = add_annotation_markers_aligned(doc_sync1.content, annotations_from_device)
         markdown_file.write_text(marked_content)
 
         doc_sync2 = parse_markdown_file(markdown_file)

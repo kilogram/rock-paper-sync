@@ -70,12 +70,7 @@ class VirtualDeviceState:
         self.original_hash = current_hash
         self.original_gen = current_gen
 
-    def add_or_update_document(
-        self,
-        doc_uuid: str,
-        hash_of_hashes: str,
-        num_files: int
-    ) -> None:
+    def add_or_update_document(self, doc_uuid: str, hash_of_hashes: str, num_files: int) -> None:
         """Stage a document upload or update.
 
         Creates or updates a document entry in the virtual state. The entry

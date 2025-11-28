@@ -60,7 +60,7 @@ class TestRmCloudSyncInit:
     @patch("rock_paper_sync.rm_cloud_sync.SyncV3Client")
     def test_init_gets_user_token(self, mock_sync_class, mock_client):
         """Should get user token and create SyncV3Client."""
-        sync = RmCloudSync("http://localhost:3000", client=mock_client)
+        RmCloudSync("http://localhost:3000", client=mock_client)
 
         mock_client.get_user_token.assert_called_once()
         mock_sync_class.assert_called_once_with(
@@ -77,9 +77,7 @@ class TestCreateMetadataFile:
         """Metadata should have correct structure."""
         sync = RmCloudSync("http://localhost:3000", client=mock_client)
 
-        metadata_bytes = sync._create_metadata_file(
-            "doc-uuid-123", "Test Document", "parent-uuid"
-        )
+        metadata_bytes = sync._create_metadata_file("doc-uuid-123", "Test Document", "parent-uuid")
 
         metadata = json.loads(metadata_bytes)
         assert metadata["visibleName"] == "Test Document"
@@ -92,9 +90,7 @@ class TestCreateMetadataFile:
 
     @patch("rock_paper_sync.rm_cloud_sync.SyncV3Client")
     @patch("rock_paper_sync.rm_cloud_sync.time.time")
-    def test_create_metadata_file_timestamp(
-        self, mock_time, mock_sync_class, mock_client
-    ):
+    def test_create_metadata_file_timestamp(self, mock_time, mock_sync_class, mock_client):
         """Metadata should include current timestamp."""
         mock_time.return_value = 1234567890.123  # Fixed timestamp
 
@@ -171,9 +167,7 @@ class TestCreateContentFile:
         assert "template" in page
 
     @patch("rock_paper_sync.rm_cloud_sync.SyncV3Client")
-    def test_create_content_file_idx_values_sortable(
-        self, mock_sync_class, mock_client
-    ):
+    def test_create_content_file_idx_values_sortable(self, mock_sync_class, mock_client):
         """idx values should be lexicographically sortable."""
         sync = RmCloudSync("http://localhost:3000", client=mock_client)
 
@@ -202,9 +196,7 @@ class TestCreateContentFile:
 
     @patch("rock_paper_sync.rm_cloud_sync.SyncV3Client")
     @patch("rock_paper_sync.rm_cloud_sync.time.time")
-    def test_create_content_file_modifed_timestamp(
-        self, mock_time, mock_sync_class, mock_client
-    ):
+    def test_create_content_file_modifed_timestamp(self, mock_time, mock_sync_class, mock_client):
         """modifed field should contain current timestamp in ms."""
         mock_time.return_value = 1234567890.123
 
@@ -231,9 +223,7 @@ class TestUploadDocument:
         sync = RmCloudSync("http://localhost:3000", client=mock_client)
 
         pages = [("page-1", b"page1data"), ("page-2", b"page2data")]
-        sync.upload_document(
-            "doc-uuid", "Test Doc", pages, parent_uuid="parent-123"
-        )
+        sync.upload_document("doc-uuid", "Test Doc", pages, parent_uuid="parent-123")
 
         mock_sync_instance.upload_document.assert_called_once()
         call_args = mock_sync_instance.upload_document.call_args
@@ -262,9 +252,7 @@ class TestUploadDocument:
         assert "uuid/page-b.rm" in files
 
     @patch("rock_paper_sync.rm_cloud_sync.SyncV3Client")
-    def test_upload_document_local_file_empty_json(
-        self, mock_sync_class, mock_client
-    ):
+    def test_upload_document_local_file_empty_json(self, mock_sync_class, mock_client):
         """.local file should be empty JSON object."""
         mock_sync_instance = Mock()
         mock_sync_class.return_value = mock_sync_instance
@@ -280,9 +268,7 @@ class TestUploadDocument:
         assert files["uuid.local"] == b"{}"
 
     @patch("rock_paper_sync.rm_cloud_sync.SyncV3Client")
-    def test_upload_document_page_files_correct_path(
-        self, mock_sync_class, mock_client
-    ):
+    def test_upload_document_page_files_correct_path(self, mock_sync_class, mock_client):
         """Page files should be under doc_uuid/ directory."""
         mock_sync_instance = Mock()
         mock_sync_class.return_value = mock_sync_instance
@@ -360,9 +346,7 @@ class TestUploadFolder:
     """Tests for upload_folder method."""
 
     @patch("rock_paper_sync.rm_cloud_sync.SyncV3Client")
-    def test_upload_folder_creates_collection_type(
-        self, mock_sync_class, mock_client
-    ):
+    def test_upload_folder_creates_collection_type(self, mock_sync_class, mock_client):
         """Folder metadata should have type=CollectionType."""
         mock_sync_instance = Mock()
         mock_sync_class.return_value = mock_sync_instance
@@ -437,9 +421,7 @@ class TestDeleteDocument:
 
         sync.delete_document("doc-to-delete")
 
-        mock_sync_instance.delete_document.assert_called_once_with(
-            "doc-to-delete", broadcast=True
-        )
+        mock_sync_instance.delete_document.assert_called_once_with("doc-to-delete", broadcast=True)
 
     @patch("rock_paper_sync.rm_cloud_sync.SyncV3Client")
     def test_delete_document_with_broadcast(self, mock_sync_class, mock_client):

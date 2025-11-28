@@ -22,11 +22,12 @@ Note: Unit tests for correction detection logic are in tests/annotations/test_oc
 """
 
 import io
+
 import pytest
 
-from rock_paper_sync.annotations import read_annotations, AnnotationType
-from rock_paper_sync.annotations.handlers.stroke_handler import StrokeHandler
+from rock_paper_sync.annotations import AnnotationType, read_annotations
 from rock_paper_sync.annotations.core.data_types import RenderConfig
+from rock_paper_sync.annotations.handlers.stroke_handler import StrokeHandler
 from rock_paper_sync.state import StateManager
 
 
@@ -124,7 +125,7 @@ def test_ocr_correction_workflow(device, workspace, fixtures_dir, tmp_path):
             "name": "whitespace_change",
             "style": "comment",
             "old": "<!-- OCR: hello  world -->",  # Double space
-            "new": "<!-- OCR: hello world -->",    # Single space
+            "new": "<!-- OCR: hello world -->",  # Single space
             "expected_old": "hello  world",
             "expected_new": "hello world",
             "should_detect": True,
@@ -164,21 +165,23 @@ def test_ocr_correction_workflow(device, workspace, fixtures_dir, tmp_path):
             new_paragraph=test_case["new"],
             annotation_id=f"anno-{i}",
             image_hash=f"hash-{i}",
-            config=config
+            config=config,
         )
 
         if test_case["should_detect"]:
-            assert correction is not None, \
-                f"Correction should be detected for {test_case['name']}"
-            assert test_case["expected_old"] in correction.original_text, \
-                f"{test_case['name']}: Expected '{test_case['expected_old']}' in original_text, got '{correction.original_text}'"
-            assert test_case["expected_new"] in correction.corrected_text, \
-                f"{test_case['name']}: Expected '{test_case['expected_new']}' in corrected_text, got '{correction.corrected_text}'"
+            assert correction is not None, f"Correction should be detected for {test_case['name']}"
+            assert (
+                test_case["expected_old"] in correction.original_text
+            ), f"{test_case['name']}: Expected '{test_case['expected_old']}' in original_text, got '{correction.original_text}'"
+            assert (
+                test_case["expected_new"] in correction.corrected_text
+            ), f"{test_case['name']}: Expected '{test_case['expected_new']}' in corrected_text, got '{correction.corrected_text}'"
             assert correction.annotation_id == f"anno-{i}"
             assert correction.image_hash == f"hash-{i}"
 
             # Store correction in database
             import uuid
+
             state_manager.add_ocr_correction(
                 correction_id=str(uuid.uuid4()),
                 image_hash=correction.image_hash,
@@ -186,17 +189,19 @@ def test_ocr_correction_workflow(device, workspace, fixtures_dir, tmp_path):
                 original_text=correction.original_text,
                 corrected_text=correction.corrected_text,
                 paragraph_context=correction.paragraph_context,
-                document_id=correction.document_id
+                document_id=correction.document_id,
             )
             corrections_detected += 1
         else:
-            assert correction is None, \
-                f"No correction should be detected for {test_case['name']}, but got: {correction}"
+            assert (
+                correction is None
+            ), f"No correction should be detected for {test_case['name']}, but got: {correction}"
 
     # Verify corrections stored and retrievable
     pending = state_manager.get_pending_ocr_corrections()
-    assert len(pending) == corrections_detected, \
-        f"Expected {corrections_detected} stored corrections, got {len(pending)}"
+    assert (
+        len(pending) == corrections_detected
+    ), f"Expected {corrections_detected} stored corrections, got {len(pending)}"
 
     # Verify correction details for each stored correction
     for stored in pending:
@@ -204,8 +209,9 @@ def test_ocr_correction_workflow(device, workspace, fixtures_dir, tmp_path):
         assert "corrected_text" in stored
         assert "image_hash" in stored
         assert stored["image_hash"].startswith("hash-")
-        assert stored["original_text"] != stored["corrected_text"], \
-            "Stored corrections should have different original and corrected text"
+        assert (
+            stored["original_text"] != stored["corrected_text"]
+        ), "Stored corrections should have different original and corrected text"
 
     # Test integration with actual stroke anchors from testdata
     # Extract first stroke and create anchor
@@ -221,7 +227,7 @@ def test_ocr_correction_workflow(device, workspace, fixtures_dir, tmp_path):
                 annotation=first_stroke,
                 paragraph_text="Sample paragraph text",
                 paragraph_index=0,
-                page_num=0
+                page_num=0,
             )
 
             # Verify anchor has position and bbox (needed for correction detection)
@@ -239,6 +245,6 @@ def test_ocr_correction_workflow(device, workspace, fixtures_dir, tmp_path):
     # Test snapshot infrastructure exists
     # (In actual sync workflow, snapshots are created after OCR processing)
     # This verifies the state manager has snapshot capability
-    assert hasattr(state_manager, 'snapshots'), "StateManager should have snapshot store"
+    assert hasattr(state_manager, "snapshots"), "StateManager should have snapshot store"
 
     device.end_test(test_id)

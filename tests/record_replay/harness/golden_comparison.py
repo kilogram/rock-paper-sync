@@ -25,7 +25,7 @@ Usage:
 
 import difflib
 from pathlib import Path
-from typing import NamedTuple, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple, Optional
 
 if TYPE_CHECKING:
     from .testdata import TestdataStore
@@ -66,9 +66,7 @@ class GoldenComparison:
         self.golden_file = self.goldens_dir / f"{test_id}.md"
         self.actual_file = self.goldens_dir / f"{test_id}.actual"
 
-    def compare(
-        self, output_file: Path, phase_name: str = "final"
-    ) -> ComparisonResult:
+    def compare(self, output_file: Path, phase_name: str = "final") -> ComparisonResult:
         """Compare output file against golden (phase-aware).
 
         Checks testdata-colocated goldens first, falls back to legacy location.
@@ -87,9 +85,7 @@ class GoldenComparison:
         # Try testdata-colocated golden first
         if self.testdata_store:
             try:
-                golden_vault = self.testdata_store.load_golden_vault(
-                    self.test_id, phase_name
-                )
+                golden_vault = self.testdata_store.load_golden_vault(self.test_id, phase_name)
                 golden_file = golden_vault / output_file.name
                 actual_file = golden_vault / f"{output_file.name}.actual"
             except FileNotFoundError:
@@ -173,9 +169,7 @@ class GoldenComparison:
         golden_vault: Path | None = None
         if self.testdata_store:
             try:
-                golden_vault = self.testdata_store.load_golden_vault(
-                    self.test_id, phase_name
-                )
+                golden_vault = self.testdata_store.load_golden_vault(self.test_id, phase_name)
             except FileNotFoundError:
                 pass
 
@@ -218,9 +212,7 @@ class GoldenComparison:
                     results[str(rel_path)] = ComparisonResult(
                         matches=True,  # Don't fail on first run
                         is_first_run=True,
-                        golden_file=Path(
-                            str(md_file).replace(str(vault_dir), "golden")
-                        ),
+                        golden_file=Path(str(md_file).replace(str(vault_dir), "golden")),
                         actual_file=md_file,
                         golden_content=None,
                         actual_content=actual_content,
@@ -262,5 +254,5 @@ class GoldenComparison:
                 if len(result.diff_lines) > 50:
                     print(f"\n... and {len(result.diff_lines) - 50} more lines")
 
-            print(f"\nTo approve new output, run:")
+            print("\nTo approve new output, run:")
             print(f"  cp {self.actual_file} {self.golden_file}")

@@ -5,13 +5,12 @@ Provides the foundational infrastructure for interactive device tests.
 
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Callable, Generator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
-from functools import wraps
 from pathlib import Path
-from typing import Callable, Generator, TypeVar
-
-from contextlib import contextmanager
+from typing import TypeVar
 
 
 @dataclass
@@ -100,7 +99,7 @@ class DeviceTestCase(ABC):
             reason: Human-readable reason for skipping
         """
         if condition:
-            raise SkipTest(reason)
+            raise SkipTestError(reason)
 
     @contextmanager
     def managed_run(self) -> Generator[None, None, None]:
@@ -124,7 +123,7 @@ class DeviceTestCase(ABC):
         try:
             self.setup()
             yield
-        except SkipTest as e:
+        except SkipTestError as e:
             self._result.skipped = True
             self._result.skip_reason = str(e)
             self._result.success = True  # Skipped tests are not failures
@@ -224,8 +223,9 @@ class DeviceTestCase(ABC):
         return count
 
 
-class SkipTest(Exception):
+class SkipTestError(Exception):
     """Exception raised to skip a test."""
+
     pass
 
 
@@ -252,12 +252,14 @@ def device_test(
         def test_ocr_recognition(self):
             ...
     """
+
     def decorator(func: F) -> F:
         func._device_test = True  # type: ignore
         func._requires_ocr = requires_ocr  # type: ignore
         func._cleanup_on_success = cleanup_on_success  # type: ignore
         func._cleanup_on_failure = cleanup_on_failure  # type: ignore
         return func
+
     return decorator
 
 
@@ -269,5 +271,5 @@ def requires_ocr(func: F) -> F:
 
 
 # Import workspace at end to avoid circular import
-from .workspace import WorkspaceManager  # noqa: E402
 from .logging import Bench  # noqa: E402
+from .workspace import WorkspaceManager  # noqa: E402

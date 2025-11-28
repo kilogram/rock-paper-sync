@@ -4,7 +4,6 @@ Implements the OCR service protocol using Runpods serverless endpoints.
 """
 
 import base64
-import json
 import logging
 import os
 import time
@@ -18,7 +17,6 @@ from rock_paper_sync.ocr.protocol import (
     OCRRequest,
     OCRResult,
     OCRServiceError,
-    OCRServiceProtocol,
     TrainingJob,
 )
 
@@ -188,7 +186,9 @@ class RunpodsOCRService:
             return results
 
         except httpx.HTTPStatusError as e:
-            raise OCRServiceError(f"Runpods API error: {e.response.status_code} - {e.response.text}")
+            raise OCRServiceError(
+                f"Runpods API error: {e.response.status_code} - {e.response.text}"
+            )
         except httpx.RequestError as e:
             raise OCRServiceError(f"Runpods request failed: {e}")
 
@@ -214,7 +214,9 @@ class RunpodsOCRService:
                 base_model=data.get("base_model", "microsoft/trocr-base-handwritten"),
                 is_fine_tuned=data.get("is_fine_tuned", False),
                 dataset_version=data.get("dataset_version"),
-                created_at=datetime.fromisoformat(data["created_at"]) if data.get("created_at") else None,
+                created_at=datetime.fromisoformat(data["created_at"])
+                if data.get("created_at")
+                else None,
                 metrics=data.get("metrics", {}),
             )
 
@@ -291,8 +293,12 @@ class RunpodsOCRService:
                 status=status_map.get(data.get("status", ""), JobStatus.PENDING),
                 dataset_version=output.get("dataset_version", ""),
                 output_model_version=output.get("model_version", ""),
-                started_at=datetime.fromisoformat(output["started_at"]) if output.get("started_at") else None,
-                completed_at=datetime.fromisoformat(output["completed_at"]) if output.get("completed_at") else None,
+                started_at=datetime.fromisoformat(output["started_at"])
+                if output.get("started_at")
+                else None,
+                completed_at=datetime.fromisoformat(output["completed_at"])
+                if output.get("completed_at")
+                else None,
                 metrics=output.get("metrics", {}),
                 error_message=data.get("error"),
             )
@@ -315,9 +321,7 @@ class RunpodsOCRService:
             logger.warning(f"Health check failed: {e}")
             return False
 
-    def _poll_job(
-        self, job_id: str, poll_interval: float = 1.0, max_retries: int = 3
-    ) -> dict:
+    def _poll_job(self, job_id: str, poll_interval: float = 1.0, max_retries: int = 3) -> dict:
         """Poll for job completion with exponential backoff and retry logic.
 
         Args:

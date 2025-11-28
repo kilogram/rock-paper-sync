@@ -203,9 +203,7 @@ class OfflineVault(VaultInteractionManager):
         if not self._current_test_id:
             raise RuntimeError("No test loaded - call load_test first")
 
-        snapshot_dir = self.testdata_store.load_vault_snapshot(
-            self._current_test_id, name
-        )
+        snapshot_dir = self.testdata_store.load_vault_snapshot(self._current_test_id, name)
 
         # Clear vault directory (except special dirs)
         special_dirs = {".state", ".cache", "logs", "config.toml"}

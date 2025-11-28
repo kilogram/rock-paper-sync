@@ -7,7 +7,7 @@ from pathlib import Path
 
 import torch
 from datasets import load_dataset
-from peft import LoraConfig, get_peft_model, TaskType
+from peft import LoraConfig, TaskType, get_peft_model
 from PIL import Image
 from transformers import (
     Seq2SeqTrainer,
@@ -82,17 +82,14 @@ def run_training(
             image = Image.open(img_path).convert("RGB")
             images.append(image)
 
-        pixel_values = processor(
-            images=images,
-            return_tensors="pt"
-        ).pixel_values
+        pixel_values = processor(images=images, return_tensors="pt").pixel_values
 
         labels = processor.tokenizer(
             examples["corrected_text"],
             padding="max_length",
             max_length=128,
             truncation=True,
-            return_tensors="pt"
+            return_tensors="pt",
         ).input_ids
 
         # Replace padding token id with -100 so it's ignored in loss

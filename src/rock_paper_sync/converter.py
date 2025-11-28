@@ -45,29 +45,28 @@ Each vault is synced independently:
 - CLI --vault flag to sync specific vault
 """
 
-import json
 import logging
 import time
 import uuid as uuid_module
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
+from .annotation_markers_v2 import (
+    add_annotation_markers_aligned,
+    has_annotation_markers,
+    strip_annotation_markers,
+)
 from .annotations.core.data_types import AnnotationInfo
 from .annotations.core.processor import AnnotationProcessor
 from .annotations.handlers.highlight_handler import HighlightHandler
 from .annotations.handlers.stroke_handler import StrokeHandler
-from .annotation_markers_v2 import (
-    add_annotation_markers_aligned,
-    strip_annotation_markers,
-    has_annotation_markers,
-)
 from .audit import get_audit_logger
 from .config import AppConfig, VaultConfig
 from .generator import RemarkableGenerator
 from .hashing import compute_file_hash
 from .ocr.integration import OCRProcessor
-from .parser import parse_markdown_file, BlockType, MarkdownDocument
+from .ocr.markers import AnnotationInfo as OcrAnnotationInfo
+from .parser import parse_markdown_file
 from .rm_cloud_client import RmCloudClient
 from .rm_cloud_sync import RmCloudSync
 from .state import StateManager, SyncRecord
@@ -84,7 +83,7 @@ RETRY_BACKOFF_MULTIPLIER = 2
 MAX_BATCH_DELETION_SIZE = 100
 
 
-class ResyncRequired(Exception):
+class ResyncRequiredError(Exception):
     """Exception raised when generation conflict requires resync.
 
     Indicates that the local state is out of sync with cloud due to
@@ -106,9 +105,7 @@ class ResyncRequired(Exception):
         self.vault_name = vault_name
         self.reason = reason
         self.conflict_error = conflict_error
-        super().__init__(
-            f"Resync required for vault '{vault_name}': {reason}"
-        )
+        super().__init__(f"Resync required for vault '{vault_name}': {reason}")
 
 
 @dataclass
@@ -128,15 +125,14 @@ class SyncResult:
     vault_name: str
     path: Path
     success: bool
-    remarkable_uuid: Optional[str] = None
-    page_count: Optional[int] = None
-    error: Optional[str] = None
+    remarkable_uuid: str | None = None
+    page_count: int | None = None
+    error: str | None = None
     skipped: bool = False
 
 
 def merge_annotation_maps(
-    target: dict[int, AnnotationInfo],
-    source: dict[int, AnnotationInfo]
+    target: dict[int, AnnotationInfo], source: dict[int, AnnotationInfo]
 ) -> None:
     """Merge source annotation map into target, combining counts for matching indices.
 
@@ -196,8 +192,8 @@ class SyncEngine:
         self,
         config: AppConfig,
         state: StateManager,
-        cloud_sync: Optional[RmCloudSync] = None,
-        generator: Optional[RemarkableGenerator] = None,
+        cloud_sync: RmCloudSync | None = None,
+        generator: RemarkableGenerator | None = None,
     ) -> None:
         """Initialize sync engine.
 
@@ -215,7 +211,7 @@ class SyncEngine:
         self.generator = generator or RemarkableGenerator(config.layout)
 
         # Initialize OCR processor if enabled
-        self.ocr_processor: Optional[OCRProcessor] = None
+        self.ocr_processor: OCRProcessor | None = None
         if config.ocr and config.ocr.enabled:
             self.ocr_processor = OCRProcessor(config.ocr, state)
             logger.info(f"OCR processor initialized (provider: {config.ocr.provider})")
@@ -241,9 +237,7 @@ class SyncEngine:
                 logger.info("Cloud sync initialized (Sync v3 API)")
             except ValueError as e:
                 logger.error(f"Cloud sync initialization failed: {e}")
-                logger.error(
-                    "Device must be registered. Run: rock-paper-sync register <code>"
-                )
+                logger.error("Device must be registered. Run: rock-paper-sync register <code>")
                 raise
 
         logger.debug("Sync engine initialized")
@@ -293,7 +287,11 @@ class SyncEngine:
                 )
 
             # Parse markdown
-            logger.info(f"[{correlation_id}] Parsing {markdown_path}" if correlation_id else f"Parsing {markdown_path}")
+            logger.info(
+                f"[{correlation_id}] Parsing {markdown_path}"
+                if correlation_id
+                else f"Parsing {markdown_path}"
+            )
             md_doc = parse_markdown_file(markdown_path)
 
             # Get relative path for state tracking
@@ -332,20 +330,34 @@ class SyncEngine:
                         annotation_map = {}
                         for rm_file in existing_rm_files:
                             if rm_file and rm_file.exists():
-                                file_annotations = self.annotation_processor.map_annotations_to_paragraphs(
-                                    rm_file, md_doc.content
+                                file_annotations = (
+                                    self.annotation_processor.map_annotations_to_paragraphs(
+                                        rm_file, md_doc.content
+                                    )
                                 )
                                 merge_annotation_maps(annotation_map, file_annotations)
 
                 # Update markers if we have annotations
                 if annotation_map:
-                    logger.info(f"Updating annotation markers (content unchanged)")
+                    logger.info("Updating annotation markers (content unchanged)")
+                    # Filter out None values from downloaded files
+                    rm_files = (
+                        [f for f in existing_rm_files if f is not None]
+                        if "existing_rm_files" in locals()
+                        else []
+                    )
                     self._update_annotation_markers(
-                        markdown_path, md_doc.content, annotation_map, vault.name, relative_path,
-                        rm_files=existing_rm_files if 'existing_rm_files' in locals() else []
+                        markdown_path,
+                        md_doc.content,
+                        annotation_map,
+                        vault.name,
+                        relative_path,
+                        rm_files=rm_files,
                     )
                 else:
-                    logger.debug(f"No annotations to update, skipping: {vault.name}:{relative_path}")
+                    logger.debug(
+                        f"No annotations to update, skipping: {vault.name}:{relative_path}"
+                    )
 
                 return SyncResult(
                     vault_name=vault.name,
@@ -385,7 +397,7 @@ class SyncEngine:
 
             # Strip markers before generating device document (keep device view clean)
             content_for_device = md_doc.content
-            raw_content = markdown_path.read_text(encoding='utf-8')
+            raw_content = markdown_path.read_text(encoding="utf-8")
 
             # Default to original document (will be replaced if markers need stripping)
             clean_doc = md_doc
@@ -397,7 +409,10 @@ class SyncEngine:
 
                 # Write to temp file and parse
                 import tempfile
-                with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False, encoding='utf-8') as tmp_file:
+
+                with tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".md", delete=False, encoding="utf-8"
+                ) as tmp_file:
                     tmp_file.write(clean_content)
                     tmp_path = Path(tmp_file.name)
 
@@ -412,14 +427,12 @@ class SyncEngine:
             # Create document with clean content (no markers)
             # Use clean_doc directly - parser strips markers before computing hash
             rm_doc = self.generator.generate_document(
-                clean_doc,
-                parent_uuid, existing_uuid, existing_page_uuids, existing_rm_files
+                clean_doc, parent_uuid, existing_uuid, existing_page_uuids, existing_rm_files
             )
 
             # Generate binary .rm files for each page
             pages_with_data = [
-                (page.uuid, self.generator.generate_rm_file(page))
-                for page in rm_doc.pages
+                (page.uuid, self.generator.generate_rm_file(page)) for page in rm_doc.pages
             ]
 
             # Upload via cloud API (Sync v3 protocol)
@@ -444,12 +457,12 @@ class SyncEngine:
                         merge_annotation_maps(annotation_map, file_annotations)
 
                 if annotation_map:
-                    logger.info(f"Adding annotation markers after sync")
+                    logger.info("Adding annotation markers after sync")
                     # Add markers using ContentBlock alignment
                     marked_content = add_annotation_markers_aligned(md_doc.content, annotation_map)
 
                     # Write marked content back to file
-                    with open(markdown_path, 'w', encoding='utf-8') as f:
+                    with open(markdown_path, "w", encoding="utf-8") as f:
                         f.write(marked_content)
 
                     # Calculate file hash WITH markers
@@ -501,7 +514,11 @@ class SyncEngine:
             logger.error(f"Failed to sync {vault.name}:{markdown_path}: {e}", exc_info=True)
 
             # AUDIT: Log sync failure with error details
-            relative_path_str = str(markdown_path.relative_to(vault.path)) if markdown_path.is_relative_to(vault.path) else str(markdown_path)
+            relative_path_str = (
+                str(markdown_path.relative_to(vault.path))
+                if markdown_path.is_relative_to(vault.path)
+                else str(markdown_path)
+            )
             audit = get_audit_logger()
             audit.log_sync_failure(
                 vault_name=vault.name,
@@ -529,14 +546,12 @@ class SyncEngine:
             logger.info(f"Deleting {vault_name}:{relative_path} (UUID: {uuid})")
             self.cloud_sync.delete_document(uuid)
             self.state.delete_file_state(vault_name, relative_path)
-            self.state.log_sync_action(vault_name, relative_path, "deleted", f"Removed from cloud")
+            self.state.log_sync_action(vault_name, relative_path, "deleted", "Removed from cloud")
             logger.info(f"Successfully deleted {vault_name}:{relative_path}")
             return True
         except Exception as e:
             logger.error(f"Failed to delete {vault_name}:{relative_path}: {e}", exc_info=True)
-            self.state.log_sync_action(
-                vault_name, relative_path, "error", f"Delete failed: {e}"
-            )
+            self.state.log_sync_action(vault_name, relative_path, "error", f"Delete failed: {e}")
             return False
 
     def _retry_with_backoff(
@@ -563,7 +578,7 @@ class SyncEngine:
         """
         from .sync_v3 import GenerationConflictError
 
-        last_error = None
+        last_error: Exception | None = None
         for attempt in range(max_retries):
             try:
                 operation()
@@ -578,7 +593,7 @@ class SyncEngine:
             except Exception as e:
                 last_error = e
                 if attempt < max_retries - 1:
-                    delay = base_delay * (RETRY_BACKOFF_MULTIPLIER ** attempt)
+                    delay = base_delay * (RETRY_BACKOFF_MULTIPLIER**attempt)
                     logger.warning(
                         f"{operation_name} failed (attempt {attempt + 1}/{max_retries}): {e}. "
                         f"Retrying in {delay}s..."
@@ -586,11 +601,12 @@ class SyncEngine:
                     time.sleep(delay)
                 else:
                     logger.error(
-                        f"{operation_name} failed after {max_retries} attempts: {e}",
-                        exc_info=True
+                        f"{operation_name} failed after {max_retries} attempts: {e}", exc_info=True
                     )
 
-        raise last_error
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError(f"{operation_name} failed: No attempts made")
 
     def sync_vault(self, vault: VaultConfig) -> list[SyncResult]:
         """Sync all changed files in a specific vault.
@@ -606,7 +622,7 @@ class SyncEngine:
         ATOMICITY SEMANTICS:
         - File deletions are atomic: either all delete or none do (via root update)
         - File uploads are non-atomic (one per file), but deletions are batched atomically
-        - Generation conflicts (409) trigger ResyncRequired (no automatic retry)
+        - Generation conflicts (409) trigger ResyncRequiredError (no automatic retry)
         - State updates deferred until after atomic cloud operation succeeds
 
         Args:
@@ -637,19 +653,23 @@ class SyncEngine:
 
         # If only uploads and no deletions, handle simple case (no atomic update needed)
         if not deleted_files:
-            logger.info(f"[{correlation_id}] Syncing {len(changed_files)} new/changed files (no deletions)")
+            logger.info(
+                f"[{correlation_id}] Syncing {len(changed_files)} new/changed files (no deletions)"
+            )
             results = []
             for file_path in changed_files:
                 try:
                     # For uploads only, can broadcast per file
-                    result = self.sync_file(vault, file_path, broadcast=True, correlation_id=correlation_id)
+                    result = self.sync_file(
+                        vault, file_path, broadcast=True, correlation_id=correlation_id
+                    )
                     results.append(result)
 
                 except GenerationConflictError as e:
                     logger.warning(
                         f"[{correlation_id}] Generation conflict uploading {file_path.name}: {e}"
                     )
-                    raise ResyncRequired(
+                    raise ResyncRequiredError(
                         vault_name=vault.name,
                         reason=f"generation conflict uploading {file_path.name}",
                         conflict_error=e,
@@ -674,7 +694,8 @@ class SyncEngine:
             raise
 
         # Initialize virtual state with current cloud state
-        virtual_state = VirtualDeviceState(current_entries, current_hash, current_gen)
+        # Use empty string if no root hash exists (no root in cloud)
+        virtual_state = VirtualDeviceState(current_entries, current_hash or "", current_gen)
 
         # PHASE 2: Stage deletions in virtual state (no cloud calls yet)
         deleted_count = 0
@@ -694,12 +715,16 @@ class SyncEngine:
         for file_path in changed_files:
             try:
                 # Upload without broadcasting (will broadcast once in atomic update)
-                result = self.sync_file(vault, file_path, broadcast=False, correlation_id=correlation_id)
+                result = self.sync_file(
+                    vault, file_path, broadcast=False, correlation_id=correlation_id
+                )
                 results.append(result)
 
             except GenerationConflictError as e:
-                logger.warning(f"[{correlation_id}] Generation conflict uploading {file_path.name}: {e}")
-                raise ResyncRequired(
+                logger.warning(
+                    f"[{correlation_id}] Generation conflict uploading {file_path.name}: {e}"
+                )
+                raise ResyncRequiredError(
                     vault_name=vault.name,
                     reason=f"generation conflict uploading {file_path.name}",
                     conflict_error=e,
@@ -725,7 +750,7 @@ class SyncEngine:
                     f"[{correlation_id}] Generation conflict during atomic update: {e}. "
                     "Concurrent cloud modification detected. Triggering resync..."
                 )
-                raise ResyncRequired(
+                raise ResyncRequiredError(
                     vault_name=vault.name,
                     reason="generation conflict during sync",
                     conflict_error=e,
@@ -741,8 +766,10 @@ class SyncEngine:
         for relative_path, uuid in deleted_files:
             self.state.delete_file_state(vault.name, relative_path)
             self.state.log_sync_action(
-                vault.name, relative_path, "deleted",
-                f"Removed from cloud (batch of {len(deleted_files)})"
+                vault.name,
+                relative_path,
+                "deleted",
+                f"Removed from cloud (batch of {len(deleted_files)})",
             )
 
         success_count = sum(1 for r in results if r.success)
@@ -753,7 +780,7 @@ class SyncEngine:
 
         return results
 
-    def sync_all_changed(self, vault_name: Optional[str] = None) -> list[SyncResult]:
+    def sync_all_changed(self, vault_name: str | None = None) -> list[SyncResult]:
         """Sync all files that have changed since last sync.
 
         Uses state database to identify files with different content hashes.
@@ -825,9 +852,7 @@ class SyncEngine:
                 self._create_rm_folder(vault.remarkable_folder, new_uuid, "")
                 self.state.create_folder_mapping(vault.name, "", new_uuid)
                 parent_uuid = new_uuid
-                logger.info(
-                    f"Created vault root folder: '{vault.remarkable_folder}' -> {new_uuid}"
-                )
+                logger.info(f"Created vault root folder: '{vault.remarkable_folder}' -> {new_uuid}")
 
         # If file is directly in vault root, return parent (vault folder UUID or empty)
         if not relative_path.parent.parts:
@@ -886,12 +911,12 @@ class SyncEngine:
             markdown_path: Absolute path to markdown file
             annotation_map: Map of paragraph_index -> AnnotationInfo
         """
+        import uuid
+
+        from rock_paper_sync.annotations.core.data_types import RenderConfig
         from rock_paper_sync.annotations.ocr_corrections import (
             detect_ocr_corrections_for_file,
         )
-        from rock_paper_sync.annotations.core.data_types import RenderConfig
-        import uuid
-        import time
 
         try:
             # Read current markdown content
@@ -939,10 +964,7 @@ class SyncEngine:
                         # Reconstruct image path (stored in corrections cache)
                         cache_dir = self.config.cache_dir
                         image_path = str(
-                            cache_dir
-                            / "corrections"
-                            / "images"
-                            / f"{correction.image_hash}.png"
+                            cache_dir / "corrections" / "images" / f"{correction.image_hash}.png"
                         )
                         break
 
@@ -975,7 +997,7 @@ class SyncEngine:
         annotation_map: dict[int, AnnotationInfo],
         vault_name: str,
         relative_path: str,
-        rm_files: list[Path] = None,
+        rm_files: list[Path] | None = None,
     ) -> None:
         """Update annotation markers in markdown file (automatic bi-directional sync).
 
@@ -1022,12 +1044,22 @@ class SyncEngine:
             # Extract paragraph texts from content blocks
             paragraph_texts = [block.text for block in content_blocks]
 
+            # Convert annotation_map to OCR format (core.data_types -> ocr.markers)
+            ocr_annotation_map = {
+                para_idx: OcrAnnotationInfo(
+                    paragraph_index=para_idx,
+                    highlights=info.highlights,
+                    strokes=info.strokes,
+                )
+                for para_idx, info in annotation_map.items()
+            }
+
             # Process annotations with OCR
             marked_content = self.ocr_processor.process_annotations(
                 vault_name=vault_name,
                 obsidian_path=relative_path,
                 markdown_content=marked_content,
-                annotation_map=annotation_map,
+                annotation_map=ocr_annotation_map,
                 rm_files=rm_files,
                 paragraph_texts=paragraph_texts,
             )
@@ -1054,7 +1086,7 @@ class SyncEngine:
             )
 
         # Write marked content back to file
-        with open(markdown_path, 'w', encoding='utf-8') as f:
+        with open(markdown_path, "w", encoding="utf-8") as f:
             f.write(marked_content)
 
         # Calculate file hash WITH markers
@@ -1079,9 +1111,7 @@ class SyncEngine:
             f"Updated {len(annotation_map)} annotation markers in {vault_name}:{relative_path}"
         )
 
-    def unsync_vault(
-        self, vault_name: str, delete_from_cloud: bool = False
-    ) -> tuple[int, int]:
+    def unsync_vault(self, vault_name: str, delete_from_cloud: bool = False) -> tuple[int, int]:
         """Remove sync state for all files in a vault.
 
         Uses VirtualDeviceState pattern for atomic multi-step deletion:
@@ -1094,7 +1124,7 @@ class SyncEngine:
         - Cloud operations are truly atomic: either all deletions apply or none do
         - Single root update with optimistic concurrency control (generation number)
         - State updates deferred until after atomic cloud operation succeeds
-        - Generation conflicts (409) trigger ResyncRequired (no automatic retry)
+        - Generation conflicts (409) trigger ResyncRequiredError (no automatic retry)
         - Achieves 1 generation increment per unsync operation (not 1 per deletion)
 
         Args:
@@ -1106,7 +1136,7 @@ class SyncEngine:
 
         Raises:
             ValueError: If vault_name not found in configuration
-            ResyncRequired: If generation conflict during cloud operations
+            ResyncRequiredError: If generation conflict during cloud operations
         """
         from .sync_v3 import GenerationConflictError
 
@@ -1114,9 +1144,7 @@ class SyncEngine:
         correlation_id = str(uuid_module.uuid4())[:8]
 
         # Find the vault config
-        vault_config = next(
-            (v for v in self.config.sync.vaults if v.name == vault_name), None
-        )
+        vault_config = next((v for v in self.config.sync.vaults if v.name == vault_name), None)
         if not vault_config:
             raise ValueError(f"Vault '{vault_name}' not found in configuration")
 
@@ -1161,7 +1189,9 @@ class SyncEngine:
 
         # If no files or folders to delete, nothing to do
         if not synced_files and not folders:
-            logger.info(f"[{correlation_id}] No files or folders to delete for vault '{vault_name}'")
+            logger.info(
+                f"[{correlation_id}] No files or folders to delete for vault '{vault_name}'"
+            )
             return 0, 0
 
         # PHASE 1: Read current cloud state
@@ -1177,14 +1207,14 @@ class SyncEngine:
             raise
 
         # Initialize virtual state with current cloud state
-        virtual_state = VirtualDeviceState(current_entries, current_hash, current_gen)
+        # Use empty string if no root hash exists (no root in cloud)
+        virtual_state = VirtualDeviceState(current_entries, current_hash or "", current_gen)
 
         # PHASE 2: Stage all deletions in virtual state (no cloud calls yet)
         deleted_count = 0
-        all_uuids = (
-            [record.remarkable_uuid for record in synced_files] +
-            [folder_uuid for _, folder_uuid in folders]
-        )
+        all_uuids = [record.remarkable_uuid for record in synced_files] + [
+            folder_uuid for _, folder_uuid in folders
+        ]
 
         for uuid in all_uuids:
             if virtual_state.delete_document(uuid):
@@ -1225,7 +1255,7 @@ class SyncEngine:
                 f"[{correlation_id}] Generation conflict during atomic update: {e}. "
                 "Concurrent cloud modification detected. Triggering resync..."
             )
-            raise ResyncRequired(
+            raise ResyncRequiredError(
                 vault_name=vault_name,
                 reason="generation conflict during unsync",
                 conflict_error=e,
@@ -1238,8 +1268,10 @@ class SyncEngine:
         for record in synced_files:
             self.state.delete_file_state(vault_name, record.obsidian_path)
             self.state.log_sync_action(
-                vault_name, record.obsidian_path, "deleted",
-                f"Removed from cloud via unsync (atomic, {deleted_count} total)"
+                vault_name,
+                record.obsidian_path,
+                "deleted",
+                f"Removed from cloud via unsync (atomic, {deleted_count} total)",
             )
             files_removed += 1
 
@@ -1285,9 +1317,7 @@ class SyncEngine:
                 )
                 results[vault.name] = (removed, deleted)
             except Exception as e:
-                logger.error(
-                    f"Failed to unsync vault '{vault.name}': {e}", exc_info=True
-                )
+                logger.error(f"Failed to unsync vault '{vault.name}': {e}", exc_info=True)
                 results[vault.name] = (0, 0)
 
         total_removed = sum(r[0] for r in results.values())

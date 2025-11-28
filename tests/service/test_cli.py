@@ -1,6 +1,5 @@
 """Tests for command-line interface."""
 
-import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -29,8 +28,8 @@ def mock_cloud_sync():
     mock_sync.upload_index = MagicMock(return_value=("fakehash123", b"fake index content"))
     mock_sync.apply_virtual_state = MagicMock(return_value=1)
 
-    with patch('rock_paper_sync.converter.RmCloudSync', return_value=mock_sync):
-        with patch('rock_paper_sync.converter.RmCloudClient'):
+    with patch("rock_paper_sync.converter.RmCloudSync", return_value=mock_sync):
+        with patch("rock_paper_sync.converter.RmCloudClient"):
             yield mock_sync
 
 
@@ -100,33 +99,25 @@ class TestInitCommand:
         assert result.exit_code == 0
         assert "Create example config file" in result.output
 
-    def test_init_overwrite_prompt(
-        self, runner: CliRunner, tmp_path: Path
-    ) -> None:
+    def test_init_overwrite_prompt(self, runner: CliRunner, tmp_path: Path) -> None:
         """Test init prompts before overwriting existing file."""
         config_path = tmp_path / "config.toml"
         config_path.write_text("existing content")
 
         # Answer 'n' to overwrite prompt
-        result = runner.invoke(
-            cli.main, ["init", str(config_path)], input="n\n"
-        )
+        result = runner.invoke(cli.main, ["init", str(config_path)], input="n\n")
 
         assert result.exit_code == 0
         # File should not be overwritten
         assert config_path.read_text() == "existing content"
 
-    def test_init_overwrite_confirmed(
-        self, runner: CliRunner, tmp_path: Path
-    ) -> None:
+    def test_init_overwrite_confirmed(self, runner: CliRunner, tmp_path: Path) -> None:
         """Test init overwrites when confirmed."""
         config_path = tmp_path / "config.toml"
         config_path.write_text("existing content")
 
         # Answer 'y' to overwrite prompt
-        result = runner.invoke(
-            cli.main, ["init", str(config_path)], input="y\n"
-        )
+        result = runner.invoke(cli.main, ["init", str(config_path)], input="y\n")
 
         assert result.exit_code == 0
         # File should be overwritten
@@ -153,9 +144,7 @@ class TestSyncCommand:
         (temp_vault / "test1.md").write_text("# Test 1")
         (temp_vault / "test2.md").write_text("# Test 2")
 
-        result = runner.invoke(
-            cli.main, ["--config", str(config_file), "sync"]
-        )
+        result = runner.invoke(cli.main, ["--config", str(config_file), "sync"])
 
         assert result.exit_code == 0
         assert "Synced 2/2" in result.output or "Synced 2 / 2" in result.output.replace(" ", "")
@@ -166,9 +155,7 @@ class TestSyncCommand:
         """Test sync --dry-run doesn't write files."""
         (temp_vault / "test.md").write_text("# Test")
 
-        result = runner.invoke(
-            cli.main, ["--config", str(config_file), "sync", "--dry-run"]
-        )
+        result = runner.invoke(cli.main, ["--config", str(config_file), "sync", "--dry-run"])
 
         assert result.exit_code == 0
         assert "Dry run mode" in result.output
@@ -179,19 +166,13 @@ class TestSyncCommand:
         """Test sync with verbose flag."""
         (temp_vault / "test.md").write_text("# Test")
 
-        result = runner.invoke(
-            cli.main, ["--config", str(config_file), "-v", "sync"]
-        )
+        result = runner.invoke(cli.main, ["--config", str(config_file), "-v", "sync"])
 
         assert result.exit_code == 0
 
-    def test_sync_empty_vault(
-        self, runner: CliRunner, config_file: Path, mock_cloud_sync
-    ) -> None:
+    def test_sync_empty_vault(self, runner: CliRunner, config_file: Path, mock_cloud_sync) -> None:
         """Test sync with empty vault."""
-        result = runner.invoke(
-            cli.main, ["--config", str(config_file), "sync"]
-        )
+        result = runner.invoke(cli.main, ["--config", str(config_file), "sync"])
 
         assert result.exit_code == 0
         assert "0" in result.output  # Should report 0 files synced
@@ -200,13 +181,9 @@ class TestSyncCommand:
 class TestStatusCommand:
     """Test status command."""
 
-    def test_status_no_sync_yet(
-        self, runner: CliRunner, config_file: Path
-    ) -> None:
+    def test_status_no_sync_yet(self, runner: CliRunner, config_file: Path) -> None:
         """Test status with no sync history."""
-        result = runner.invoke(
-            cli.main, ["--config", str(config_file), "status"]
-        )
+        result = runner.invoke(cli.main, ["--config", str(config_file), "status"])
 
         assert result.exit_code == 0
         assert "Sync Status" in result.output
@@ -222,9 +199,7 @@ class TestStatusCommand:
         runner.invoke(cli.main, ["--config", str(config_file), "sync"])
 
         # Check status
-        result = runner.invoke(
-            cli.main, ["--config", str(config_file), "status"]
-        )
+        result = runner.invoke(cli.main, ["--config", str(config_file), "status"])
 
         assert result.exit_code == 0
         assert "Synced:" in result.output
@@ -247,9 +222,7 @@ class TestResetCommand:
         assert state_db.exists()
 
         # Reset with confirmation
-        result = runner.invoke(
-            cli.main, ["--config", str(config_file), "reset"], input="y\n"
-        )
+        result = runner.invoke(cli.main, ["--config", str(config_file), "reset"], input="y\n")
 
         assert result.exit_code == 0
         assert "Sync state cleared" in result.output
@@ -267,21 +240,15 @@ class TestResetCommand:
         assert state_db.exists()
 
         # Reset without confirmation
-        result = runner.invoke(
-            cli.main, ["--config", str(config_file), "reset"], input="n\n"
-        )
+        result = runner.invoke(cli.main, ["--config", str(config_file), "reset"], input="n\n")
 
         assert result.exit_code == 1  # Aborted
         # State should still exist
         assert state_db.exists()
 
-    def test_reset_no_state(
-        self, runner: CliRunner, config_file: Path
-    ) -> None:
+    def test_reset_no_state(self, runner: CliRunner, config_file: Path) -> None:
         """Test reset when no state exists."""
-        result = runner.invoke(
-            cli.main, ["--config", str(config_file), "reset"], input="y\n"
-        )
+        result = runner.invoke(cli.main, ["--config", str(config_file), "reset"], input="y\n")
 
         assert result.exit_code == 0
         assert "No sync state to clear" in result.output
@@ -333,17 +300,13 @@ class TestMainGroup:
 
     def test_config_option(self, runner: CliRunner, config_file: Path) -> None:
         """Test --config option works."""
-        result = runner.invoke(
-            cli.main, ["--config", str(config_file), "status"]
-        )
+        result = runner.invoke(cli.main, ["--config", str(config_file), "status"])
 
         assert result.exit_code == 0
 
     def test_verbose_option(self, runner: CliRunner, config_file: Path) -> None:
         """Test --verbose option."""
-        result = runner.invoke(
-            cli.main, ["--config", str(config_file), "-v", "status"]
-        )
+        result = runner.invoke(cli.main, ["--config", str(config_file), "-v", "status"])
 
         assert result.exit_code == 0
 
@@ -358,9 +321,7 @@ class TestMainGroup:
         assert result.exit_code == 1
         assert "Error loading config" in result.output
 
-    def test_config_validation_error(
-        self, runner: CliRunner, tmp_path: Path
-    ) -> None:
+    def test_config_validation_error(self, runner: CliRunner, tmp_path: Path) -> None:
         """Test error handling when config validation fails."""
         # Create config with missing required directories
         config_path = tmp_path / "config.toml"
@@ -400,8 +361,8 @@ class TestInitCommandEdgeCases:
     def test_init_with_default_path_keyword(self, runner: CliRunner, mocker) -> None:
         """Test that init handles None output correctly (line 231)."""
         # Mock expanduser to redirect to tmp location
-        from pathlib import Path
         import tempfile
+        from pathlib import Path
 
         with tempfile.TemporaryDirectory() as tmpdir:
             fake_home = Path(tmpdir)
@@ -410,11 +371,7 @@ class TestInitCommandEdgeCases:
             fake_config_path = fake_config_dir / "config.toml"
 
             # Mock Path.expanduser to return our tmp path
-            mocker.patch.object(
-                Path,
-                'expanduser',
-                return_value=fake_config_path
-            )
+            mocker.patch.object(Path, "expanduser", return_value=fake_config_path)
 
             # Invoke init without output argument - uses default path
             result = runner.invoke(cli.main, ["init"])
@@ -470,9 +427,7 @@ class TestUnsyncCommand:
 
         # Unsync the vault
         result = runner.invoke(
-            cli.main,
-            ["--config", str(config_file), "unsync", "--vault", "test-vault"],
-            input="y\n"
+            cli.main, ["--config", str(config_file), "unsync", "--vault", "test-vault"], input="y\n"
         )
 
         assert result.exit_code == 0
@@ -490,8 +445,15 @@ class TestUnsyncCommand:
         # Unsync with deletion
         result = runner.invoke(
             cli.main,
-            ["--config", str(config_file), "unsync", "--vault", "test-vault", "--delete-from-cloud"],
-            input="y\n"
+            [
+                "--config",
+                str(config_file),
+                "unsync",
+                "--vault",
+                "test-vault",
+                "--delete-from-cloud",
+            ],
+            input="y\n",
         )
 
         assert result.exit_code == 0
@@ -508,23 +470,17 @@ class TestUnsyncCommand:
         runner.invoke(cli.main, ["--config", str(config_file), "sync"])
 
         # Unsync all
-        result = runner.invoke(
-            cli.main,
-            ["--config", str(config_file), "unsync"],
-            input="y\n"
-        )
+        result = runner.invoke(cli.main, ["--config", str(config_file), "unsync"], input="y\n")
 
         assert result.exit_code == 0
         assert "Results by vault" in result.output or "Total:" in result.output
 
-    def test_unsync_invalid_vault(
-        self, runner: CliRunner, config_file: Path
-    ) -> None:
+    def test_unsync_invalid_vault(self, runner: CliRunner, config_file: Path) -> None:
         """Test unsync with invalid vault name."""
         result = runner.invoke(
             cli.main,
             ["--config", str(config_file), "unsync", "--vault", "nonexistent"],
-            input="y\n"
+            input="y\n",
         )
 
         assert result.exit_code == 0
@@ -540,9 +496,7 @@ class TestUnsyncCommand:
 
         # Try to unsync but decline confirmation
         result = runner.invoke(
-            cli.main,
-            ["--config", str(config_file), "unsync", "--vault", "test-vault"],
-            input="n\n"
+            cli.main, ["--config", str(config_file), "unsync", "--vault", "test-vault"], input="n\n"
         )
 
         assert result.exit_code == 1  # Aborted

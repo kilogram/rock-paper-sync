@@ -13,9 +13,10 @@ Replaying:
 """
 
 import io
+
 import pytest
 
-from rock_paper_sync.annotations import read_annotations, AnnotationType
+from rock_paper_sync.annotations import AnnotationType, read_annotations
 
 
 @pytest.mark.device
@@ -35,10 +36,7 @@ def test_highlights(device, workspace, fixtures_dir):
     try:
         device.start_test(test_id, description="Highlight annotations with multiple colors")
     except FileNotFoundError:
-        pytest.skip(
-            f"Testdata '{test_id}' not available. "
-            f"Run with --online -s to record."
-        )
+        pytest.skip(f"Testdata '{test_id}' not available. " f"Run with --online -s to record.")
 
     # Upload document
     doc_uuid = device.upload_document(workspace.test_doc)
@@ -61,10 +59,7 @@ def test_highlights(device, workspace, fixtures_dir):
     assert len(all_annotations) > 0, "No annotations extracted"
 
     # Count highlights
-    highlight_count = sum(
-        1 for a in all_annotations
-        if a.type == AnnotationType.HIGHLIGHT
-    )
+    highlight_count = sum(1 for a in all_annotations if a.type == AnnotationType.HIGHLIGHT)
 
     # Should have at least one highlight annotation
     assert highlight_count >= 1, f"Expected highlights, found {highlight_count}"

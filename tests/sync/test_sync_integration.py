@@ -12,14 +12,22 @@ Focus areas:
 - State consistency after errors
 """
 
-import pytest
 from pathlib import Path
 
-from rock_paper_sync.config import AppConfig, CloudConfig, LayoutConfig, OCRConfig, SyncConfig, VaultConfig
-from rock_paper_sync.converter import SyncEngine, ResyncRequired
-from rock_paper_sync.state import StateManager
+import pytest
+
+from rock_paper_sync.config import (
+    AppConfig,
+    CloudConfig,
+    LayoutConfig,
+    OCRConfig,
+    SyncConfig,
+    VaultConfig,
+)
+from rock_paper_sync.converter import SyncEngine
 from rock_paper_sync.rm_cloud_client import RmCloudClient
 from rock_paper_sync.rm_cloud_sync import RmCloudSync
+from rock_paper_sync.state import StateManager
 
 
 def get_test_credentials() -> str:
@@ -76,10 +84,14 @@ def rmfakecloud_config(tmp_path: Path, rmfakecloud: str):
     device_token = get_test_credentials()
 
     # Create temp credentials file for RmCloudClient
-    import tempfile
     import json
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-        json.dump({"device_token": device_token, "device_id": "rock-paper-sync-test-001", "user_id": ""}, f)
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        json.dump(
+            {"device_token": device_token, "device_id": "rock-paper-sync-test-001", "user_id": ""},
+            f,
+        )
         temp_creds_path = Path(f.name)
 
     rm_client = RmCloudClient(base_url=rmfakecloud, credentials_path=temp_creds_path)
@@ -179,7 +191,7 @@ class TestSyncDeletionOperations:
 
         # Delete file and sync
         test_file.unlink()
-        results = engine.sync_vault(vault_config)
+        engine.sync_vault(vault_config)
 
         # Verify cloud state changed
         entries_after, _, gen_after = cloud_sync.get_root_state()
@@ -214,7 +226,7 @@ class TestSyncDeletionOperations:
             f.unlink()
 
         # Sync should delete all atomically
-        results = engine.sync_vault(vault_config)
+        engine.sync_vault(vault_config)
 
         # Verify single generation increment (atomic deletion)
         gen_after = cloud_sync.get_root_state()[2]

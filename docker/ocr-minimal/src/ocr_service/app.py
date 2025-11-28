@@ -69,7 +69,7 @@ def _generate_dummy_text(uuid: str, image_bytes: bytes) -> str:
             "recognized text",
             "ocr result",
         ]
-        idx = (hash((width, height, uuid)) % len(text_variants))
+        idx = hash((width, height, uuid)) % len(text_variants)
         return text_variants[idx]
     except Exception:
         # Fallback if image parsing fails
@@ -122,23 +122,27 @@ async def run_async(request: dict):
                 text = _generate_dummy_text(img_data["uuid"], image_bytes)
                 inference_time = int((time.time() - start_time) * 1000)
 
-                results.append({
-                    "uuid": img_data["uuid"],
-                    "text": text,
-                    "confidence": 0.95,  # High confidence for dummy results
-                    "model_version": "minimal-0.1.0",
-                    "inference_time_ms": inference_time,
-                })
+                results.append(
+                    {
+                        "uuid": img_data["uuid"],
+                        "text": text,
+                        "confidence": 0.95,  # High confidence for dummy results
+                        "model_version": "minimal-0.1.0",
+                        "inference_time_ms": inference_time,
+                    }
+                )
 
             except Exception as e:
                 logger.error(f"Error processing image {img_data['uuid']}: {e}")
-                results.append({
-                    "uuid": img_data["uuid"],
-                    "text": "dummy text",
-                    "confidence": 0.95,
-                    "model_version": "minimal-0.1.0",
-                    "error": str(e),
-                })
+                results.append(
+                    {
+                        "uuid": img_data["uuid"],
+                        "text": "dummy text",
+                        "confidence": 0.95,
+                        "model_version": "minimal-0.1.0",
+                        "error": str(e),
+                    }
+                )
 
         return {
             "id": f"batch-{int(time.time())}",

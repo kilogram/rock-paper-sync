@@ -5,12 +5,9 @@ Implements the hash-based blob storage protocol used by reMarkable devices.
 """
 
 import hashlib
-import io
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Optional
 
 import requests
 
@@ -23,9 +20,8 @@ class GenerationConflictError(Exception):
     def __init__(self, expected: int, actual: int):
         self.expected = expected
         self.actual = actual
-        super().__init__(
-            f"Generation conflict: expected {expected}, server has {actual}"
-        )
+        super().__init__(f"Generation conflict: expected {expected}, server has {actual}")
+
 
 SCHEMA_VERSION = "3"
 DOC_TYPE = "80000000"
@@ -114,7 +110,7 @@ class SyncV3Client:
 
         return index_hash, index_content
 
-    def get_current_generation(self) -> tuple[Optional[str], int]:
+    def get_current_generation(self) -> tuple[str | None, int]:
         """
         Get current root hash and generation from server.
 
@@ -135,7 +131,7 @@ class SyncV3Client:
         data = response.json()
         return data.get("hash"), data.get("generation", 0)
 
-    def get_root_state(self) -> tuple[list[BlobEntry], str, int]:
+    def get_root_state(self) -> tuple[list[BlobEntry], str | None, int]:
         """
         Get complete current cloud state (entries, hash, generation).
 
@@ -273,7 +269,7 @@ class SyncV3Client:
         # Find .content file
         content_entry = None
         for entry in doc_files:
-            if entry.entry_name.endswith('.content'):
+            if entry.entry_name.endswith(".content"):
                 content_entry = entry
                 break
 
@@ -286,24 +282,22 @@ class SyncV3Client:
         content_json = json.loads(content_data)
 
         # Extract page UUIDs from cPages structure (formatVersion 2)
-        if 'cPages' in content_json and 'pages' in content_json['cPages']:
+        if "cPages" in content_json and "pages" in content_json["cPages"]:
             # Sort by idx value to maintain order
-            pages = content_json['cPages']['pages']
-            sorted_pages = sorted(pages, key=lambda p: p.get('idx', {}).get('value', ''))
-            return [page['id'] for page in sorted_pages]
+            pages = content_json["cPages"]["pages"]
+            sorted_pages = sorted(pages, key=lambda p: p.get("idx", {}).get("value", ""))
+            return [page["id"] for page in sorted_pages]
 
         # Fallback for formatVersion 1 (pages array)
-        elif 'pages' in content_json:
-            pages = content_json['pages']
+        elif "pages" in content_json:
+            pages = content_json["pages"]
             if isinstance(pages, list) and len(pages) > 0 and isinstance(pages[0], str):
                 return pages
 
         logger.warning(f"Could not extract page UUIDs from .content for {doc_uuid}")
         return []
 
-    def update_root(
-        self, root_hash: str, generation: int, broadcast: bool = True
-    ) -> int:
+    def update_root(self, root_hash: str, generation: int, broadcast: bool = True) -> int:
         """
         Update the root hash tree with optimistic concurrency control.
 
@@ -334,9 +328,7 @@ class SyncV3Client:
         if response.status_code == 409:
             # Conflict - someone else updated the root
             current_hash, current_gen = self.get_current_generation()
-            logger.warning(
-                f"Generation conflict: expected {generation}, server has {current_gen}"
-            )
+            logger.warning(f"Generation conflict: expected {generation}, server has {current_gen}")
             raise GenerationConflictError(expected=generation, actual=current_gen)
 
         response.raise_for_status()
@@ -400,13 +392,9 @@ class SyncV3Client:
                 root_index_hash, _ = self.upload_index(new_entries)
                 logger.debug(f"  New root index hash: {root_index_hash}")
 
-                new_generation = self.update_root(
-                    root_index_hash, current_generation, broadcast
-                )
+                new_generation = self.update_root(root_index_hash, current_generation, broadcast)
 
-                logger.info(
-                    f"Successfully completed {operation_name} (gen {new_generation})"
-                )
+                logger.info(f"Successfully completed {operation_name} (gen {new_generation})")
                 return new_generation
 
             except GenerationConflictError as e:
@@ -418,9 +406,7 @@ class SyncV3Client:
                     )
                     continue
                 else:
-                    logger.error(
-                        f"Max retries ({max_retries}) exceeded for {operation_name}"
-                    )
+                    logger.error(f"Max retries ({max_retries}) exceeded for {operation_name}")
                     raise
 
         # Should never reach here - loop always returns or raises
@@ -472,8 +458,7 @@ class SyncV3Client:
         # Step 3: Calculate hashOfHashesV3 for the document
         # The device expects the hash in the root to be SHA256 of concatenated binary file hashes
         file_hashes_binary = b"".join(
-            bytes.fromhex(entry.hash)
-            for entry in sorted(file_entries, key=lambda e: e.entry_name)
+            bytes.fromhex(entry.hash) for entry in sorted(file_entries, key=lambda e: e.entry_name)
         )
         hash_of_hashes = self._sha256(file_hashes_binary)
         logger.debug(f"  Hash-of-hashes (hashOfHashesV3): {hash_of_hashes}")
@@ -482,12 +467,17 @@ class SyncV3Client:
         # The device will try to download the index using this hash
         if hash_of_hashes != doc_index_hash:
             self.upload_blob(hash_of_hashes, doc_index_content)
-            logger.debug(f"  Uploaded document index under hashOfHashesV3")
+            logger.debug("  Uploaded document index under hashOfHashesV3")
 
         return hash_of_hashes, file_entries
 
     def merge_document_into_root(
-        self, doc_uuid: str, hash_of_hashes: str, num_files: int, broadcast: bool = True, max_retries: int | None = None
+        self,
+        doc_uuid: str,
+        hash_of_hashes: str,
+        num_files: int,
+        broadcast: bool = True,
+        max_retries: int | None = None,
     ) -> int:
         """
         Merge a document into the root index with retry logic.
@@ -559,9 +549,7 @@ class SyncV3Client:
         hash_of_hashes, file_entries = self.upload_document_files(doc_uuid, files)
 
         # Merge into root with retry logic
-        self.merge_document_into_root(
-            doc_uuid, hash_of_hashes, len(file_entries), broadcast
-        )
+        self.merge_document_into_root(doc_uuid, hash_of_hashes, len(file_entries), broadcast)
 
     def delete_document(
         self, doc_uuid: str, broadcast: bool = True, max_retries: int | None = None
@@ -636,9 +624,7 @@ class SyncV3Client:
                 )
                 return None
             elif deleted_count < len(doc_uuids):
-                logger.warning(
-                    f"Only {deleted_count}/{len(doc_uuids)} documents found in root"
-                )
+                logger.warning(f"Only {deleted_count}/{len(doc_uuids)} documents found in root")
             else:
                 logger.debug(
                     f"  Successfully removed {deleted_count} documents "
@@ -654,9 +640,7 @@ class SyncV3Client:
             max_retries=max_retries,
         )
 
-    def stage_document_deletion(
-        self, doc_uuid: str, max_retries: int | None = None
-    ) -> None:
+    def stage_document_deletion(self, doc_uuid: str, max_retries: int | None = None) -> None:
         """Stage a document deletion without broadcasting to device.
 
         Equivalent to delete_document() but with broadcast=False.

@@ -7,8 +7,8 @@ Uses watchdog library with debouncing to avoid duplicate processing.
 import logging
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
@@ -23,9 +23,7 @@ class ChangeHandler(FileSystemEventHandler):
     into a single callback after the debounce period.
     """
 
-    def __init__(
-        self, callback: Callable[[Path], None], debounce_seconds: int = 5
-    ) -> None:
+    def __init__(self, callback: Callable[[Path], None], debounce_seconds: int = 5) -> None:
         """Initialize change handler.
 
         Args:
@@ -44,9 +42,10 @@ class ChangeHandler(FileSystemEventHandler):
         Args:
             event: File system event from watchdog
         """
-        if not event.is_directory and event.src_path.endswith(".md"):
-            logger.debug(f"File modified: {event.src_path}")
-            self._queue_change(event.src_path)
+        src_path = str(event.src_path)
+        if not event.is_directory and src_path.endswith(".md"):
+            logger.debug(f"File modified: {src_path}")
+            self._queue_change(src_path)
 
     def on_created(self, event: FileSystemEvent) -> None:
         """Handle file creation events.
@@ -54,9 +53,10 @@ class ChangeHandler(FileSystemEventHandler):
         Args:
             event: File system event from watchdog
         """
-        if not event.is_directory and event.src_path.endswith(".md"):
-            logger.debug(f"File created: {event.src_path}")
-            self._queue_change(event.src_path)
+        src_path = str(event.src_path)
+        if not event.is_directory and src_path.endswith(".md"):
+            logger.debug(f"File created: {src_path}")
+            self._queue_change(src_path)
 
     def on_deleted(self, event: FileSystemEvent) -> None:
         """Handle file deletion events.
@@ -67,8 +67,9 @@ class ChangeHandler(FileSystemEventHandler):
         Note:
             Deletion handling is a Phase 2 feature. Currently just logged.
         """
-        if not event.is_directory and event.src_path.endswith(".md"):
-            logger.debug(f"File deleted: {event.src_path} (deletion not yet supported)")
+        src_path = str(event.src_path)
+        if not event.is_directory and src_path.endswith(".md"):
+            logger.debug(f"File deleted: {src_path} (deletion not yet supported)")
             # TODO: Implement deletion in Phase 2
 
     def _queue_change(self, path: str) -> None:
@@ -154,9 +155,7 @@ class VaultWatcher:
         self.running = True
 
         # Start pending change processor thread
-        self._process_thread = threading.Thread(
-            target=self._process_loop, daemon=True
-        )
+        self._process_thread = threading.Thread(target=self._process_loop, daemon=True)
         self._process_thread.start()
 
         logger.debug("File watcher threads started")

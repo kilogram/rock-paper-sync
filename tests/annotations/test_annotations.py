@@ -11,7 +11,6 @@ import pytest
 
 from rock_paper_sync.annotations import (
     Annotation,
-    AnnotationMapping,
     AnnotationType,
     Highlight,
     Point,
@@ -22,7 +21,6 @@ from rock_paper_sync.annotations import (
     calculate_position_mapping,
     read_annotations,
 )
-
 
 # Path to rmscene test data
 TESTDATA_DIR = Path(__file__).parent / "testdata" / "rmscene"
@@ -65,10 +63,12 @@ class TestReadAnnotations:
 
             # Bounding box should contain all points
             for point in stroke.points:
-                assert bbox.x <= point.x <= bbox.x + bbox.w, \
-                    f"Point x={point.x} outside bbox x=[{bbox.x}, {bbox.x + bbox.w}]"
-                assert bbox.y <= point.y <= bbox.y + bbox.h, \
-                    f"Point y={point.y} outside bbox y=[{bbox.y}, {bbox.y + bbox.h}]"
+                assert (
+                    bbox.x <= point.x <= bbox.x + bbox.w
+                ), f"Point x={point.x} outside bbox x=[{bbox.x}, {bbox.x + bbox.w}]"
+                assert (
+                    bbox.y <= point.y <= bbox.y + bbox.h
+                ), f"Point y={point.y} outside bbox y=[{bbox.y}, {bbox.y + bbox.h}]"
 
     def test_read_highlights_from_file(self):
         """Test reading text highlights from a real .rm file."""
@@ -100,13 +100,14 @@ class TestReadAnnotations:
             "The reMarkable uses electronic paper",
             "ReMarkable uses its own operating system, named Codex.",
             "Codex is based on Linux and optimized for electronic paper",
-            "display technology.[13]"
+            "display technology.[13]",
         ]
 
         actual_texts = [h.highlight.text for h in highlights]
 
-        assert actual_texts == expected_texts, \
-            f"Expected texts {expected_texts} but got {actual_texts}"
+        assert (
+            actual_texts == expected_texts
+        ), f"Expected texts {expected_texts} but got {actual_texts}"
 
     def test_highlight_rectangles(self):
         """Test that highlight rectangles are extracted correctly."""
@@ -142,7 +143,7 @@ class TestReadAnnotations:
         """Test reading from an open file object instead of path."""
         file_path = TESTDATA_DIR / "Normal_A_stroke_2_layers.rm"
 
-        with open(file_path, 'rb') as f:
+        with open(file_path, "rb") as f:
             annotations = read_annotations(f)
 
         strokes = [a for a in annotations if a.type == AnnotationType.STROKE]
@@ -154,11 +155,7 @@ class TestAnnotationDataStructures:
 
     def test_stroke_center_y(self):
         """Test that stroke center_y returns the bounding box center."""
-        points = [
-            Point(0, 0),
-            Point(10, 20),
-            Point(5, 10)
-        ]
+        points = [Point(0, 0), Point(10, 20), Point(5, 10)]
         stroke = Stroke(points=points, color=0, tool=1, thickness=1.0)
 
         # Bounding box: y=[0, 20], center should be 10
@@ -176,7 +173,7 @@ class TestAnnotationDataStructures:
         """Test highlight center_y with multiple rectangles (spanning lines)."""
         rects = [
             Rectangle(x=0, y=100, w=200, h=50),  # center: 125
-            Rectangle(x=0, y=150, w=100, h=50)   # center: 175
+            Rectangle(x=0, y=150, w=100, h=50),  # center: 175
         ]
         highlight = Highlight(text="test", color=3, rectangles=rects)
 
@@ -200,12 +197,7 @@ class TestAnnotationDataStructures:
 
     def test_text_block_contains_y(self):
         """Test text block Y coordinate containment."""
-        block = TextBlock(
-            content="Test paragraph",
-            y_start=100,
-            y_end=150,
-            block_type="paragraph"
-        )
+        block = TextBlock(content="Test paragraph", y_start=100, y_end=150, block_type="paragraph")
 
         assert block.contains_y(100) is True  # Start edge
         assert block.contains_y(125) is True  # Middle
@@ -297,16 +289,13 @@ class TestAnnotationAssociation:
         """Test associating multiple annotations with multiple blocks."""
         # Create 3 annotations at different positions
         ann1 = Annotation(
-            type=AnnotationType.STROKE,
-            stroke=Stroke([Point(0, 60), Point(10, 80)], 0, 1, 1.0)
+            type=AnnotationType.STROKE, stroke=Stroke([Point(0, 60), Point(10, 80)], 0, 1, 1.0)
         )
         ann2 = Annotation(
-            type=AnnotationType.STROKE,
-            stroke=Stroke([Point(0, 120), Point(10, 140)], 0, 1, 1.0)
+            type=AnnotationType.STROKE, stroke=Stroke([Point(0, 120), Point(10, 140)], 0, 1, 1.0)
         )
         ann3 = Annotation(
-            type=AnnotationType.STROKE,
-            stroke=Stroke([Point(0, 180), Point(10, 200)], 0, 1, 1.0)
+            type=AnnotationType.STROKE, stroke=Stroke([Point(0, 180), Point(10, 200)], 0, 1, 1.0)
         )
 
         # Create 3 text blocks
@@ -391,7 +380,7 @@ class TestPositionMapping:
         mapping = calculate_position_mapping(old_blocks, new_blocks)
 
         assert 0 not in mapping  # Deleted block not mapped
-        assert mapping[1] == 0   # Kept block mapped
+        assert mapping[1] == 0  # Kept block mapped
 
     def test_new_blocks_not_in_mapping(self):
         """Test that new blocks don't appear as targets in mapping."""
@@ -429,7 +418,9 @@ class TestPositionMapping:
     def test_completely_different_content(self):
         """Test that completely different content doesn't match."""
         old_blocks = [
-            TextBlock("Python programming language", y_start=100, y_end=150, block_type="paragraph"),
+            TextBlock(
+                "Python programming language", y_start=100, y_end=150, block_type="paragraph"
+            ),
         ]
 
         new_blocks = [
@@ -467,8 +458,9 @@ class TestIntegrationWithRealFiles:
 
         # Both strokes should be associated with the text block
         for stroke_idx in strokes:
-            assert stroke_idx in mapping.associations, \
-                f"Stroke {stroke_idx} at y={annotations[stroke_idx].center_y()} not associated"
+            assert (
+                stroke_idx in mapping.associations
+            ), f"Stroke {stroke_idx} at y={annotations[stroke_idx].center_y()} not associated"
 
     def test_full_workflow_highlights(self):
         """Test complete workflow with highlights."""
@@ -477,14 +469,25 @@ class TestIntegrationWithRealFiles:
 
         # Create mock text blocks matching the Wikipedia page
         blocks = [
-            TextBlock("The reMarkable uses electronic paper",
-                     y_start=660, y_end=720, block_type="paragraph"),
-            TextBlock("ReMarkable uses its own operating system, named Codex.",
-                     y_start=1630, y_end=1690, block_type="paragraph"),
-            TextBlock("Codex is based on Linux and optimized for electronic paper",
-                     y_start=1675, y_end=1735, block_type="paragraph"),
-            TextBlock("display technology.[13]",
-                     y_start=1720, y_end=1780, block_type="paragraph"),
+            TextBlock(
+                "The reMarkable uses electronic paper",
+                y_start=660,
+                y_end=720,
+                block_type="paragraph",
+            ),
+            TextBlock(
+                "ReMarkable uses its own operating system, named Codex.",
+                y_start=1630,
+                y_end=1690,
+                block_type="paragraph",
+            ),
+            TextBlock(
+                "Codex is based on Linux and optimized for electronic paper",
+                y_start=1675,
+                y_end=1735,
+                block_type="paragraph",
+            ),
+            TextBlock("display technology.[13]", y_start=1720, y_end=1780, block_type="paragraph"),
         ]
 
         mapping = associate_annotations_with_content(annotations, blocks)

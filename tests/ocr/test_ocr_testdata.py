@@ -9,16 +9,16 @@ device. They validate:
 """
 
 import json
-import pytest
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from rock_paper_sync.annotations import read_annotations, AnnotationType
-from rock_paper_sync.annotation_mapper import extract_text_blocks_from_rm
-from rock_paper_sync.parser import parse_content
-from rock_paper_sync.ocr.protocol import BoundingBox
-from rock_paper_sync.ocr.paragraph_mapper import SpatialOverlapMapper
+import pytest
 
+from rock_paper_sync.annotations import AnnotationType, read_annotations
+from rock_paper_sync.annotations.common.text_extraction import extract_text_blocks_from_rm
+from rock_paper_sync.ocr.paragraph_mapper import SpatialOverlapMapper
+from rock_paper_sync.ocr.protocol import BoundingBox
+from rock_paper_sync.parser import parse_content
 
 # Test data paths
 TESTDATA_DIR = Path(__file__).parent / "testdata" / "record_replay" / "ocr_handwriting"
@@ -100,8 +100,8 @@ class TestAnnotationExtraction:
                     assert len(ann.stroke.points) >= 2, "Stroke needs at least 2 points"
                     for point in ann.stroke.points:
                         # Points should have x, y coordinates
-                        assert hasattr(point, 'x')
-                        assert hasattr(point, 'y')
+                        assert hasattr(point, "x")
+                        assert hasattr(point, "y")
 
     def test_stroke_has_bounding_box(self, rm_files):
         """Verify strokes have computed bounding boxes."""
@@ -136,8 +136,8 @@ class TestTextBlockExtraction:
             text_blocks, _ = extract_text_blocks_from_rm(rm_file)
 
             for block in text_blocks:
-                assert hasattr(block, 'y_start'), "Text block missing y_start"
-                assert hasattr(block, 'y_end'), "Text block missing y_end"
+                assert hasattr(block, "y_start"), "Text block missing y_start"
+                assert hasattr(block, "y_end"), "Text block missing y_end"
                 assert block.y_start < block.y_end, "Invalid Y range"
 
 
@@ -225,19 +225,12 @@ class TestParagraphMapping:
                     )
 
                     if result is not None:
-                        assert 0 <= result < len(markdown_blocks), (
-                            f"Invalid paragraph index {result} (max {len(markdown_blocks) - 1})"
-                        )
+                        assert (
+                            0 <= result < len(markdown_blocks)
+                        ), f"Invalid paragraph index {result} (max {len(markdown_blocks) - 1})"
 
     def test_mappings_to_expected_sections(self, rm_files, markdown_blocks, testdata_manifest):
         """Verify mappings correlate with expected test sections."""
-        from rock_paper_sync.config import OCRConfig
-        from rock_paper_sync.ocr.integration import OCRProcessor
-
-        config = OCRConfig(enabled=True, cache_dir=Path("/tmp/test"))
-        processor = OCRProcessor(config, MagicMock())
-        mapper = SpatialOverlapMapper()
-
         test_cases = testdata_manifest.get("test_cases", [])
         if not test_cases:
             pytest.skip("No test cases in manifest")
@@ -245,7 +238,7 @@ class TestParagraphMapping:
         # Find section indices in markdown
         section_indices = {}
         for i, block in enumerate(markdown_blocks):
-            content = block.text.lower() if hasattr(block, 'text') else ""
+            content = block.text.lower() if hasattr(block, "text") else ""
             for tc in test_cases:
                 section_name = tc["section"].lower()
                 if section_name in content:
@@ -285,14 +278,14 @@ class TestCoordinateTransformation:
             # Map may be empty if no text-relative annotations
             # But if populated, should have valid data
             for parent_id, origin in anchor_map.items():
-                assert hasattr(origin, 'x')
-                assert hasattr(origin, 'y')
+                assert hasattr(origin, "x")
+                assert hasattr(origin, "y")
 
     def test_annotations_transform_without_error(self, rm_files):
         """Verify annotation transformation completes without error."""
         from rock_paper_sync.config import OCRConfig
-        from rock_paper_sync.ocr.integration import OCRProcessor
         from rock_paper_sync.coordinate_transformer import extract_text_origin
+        from rock_paper_sync.ocr.integration import OCRProcessor
 
         config = OCRConfig(enabled=True, cache_dir=Path("/tmp/test"))
         processor = OCRProcessor(config, MagicMock())
@@ -323,8 +316,8 @@ class TestImageRendering:
     def test_render_strokes_to_image(self, rm_files):
         """Verify strokes can be rendered to images."""
         from rock_paper_sync.config import OCRConfig
-        from rock_paper_sync.ocr.integration import OCRProcessor
         from rock_paper_sync.coordinate_transformer import extract_text_origin
+        from rock_paper_sync.ocr.integration import OCRProcessor
 
         config = OCRConfig(enabled=True, cache_dir=Path("/tmp/test"))
         processor = OCRProcessor(config, MagicMock())
@@ -352,7 +345,7 @@ class TestImageRendering:
 
             # Should produce valid PNG data
             assert len(image_data) > 0, "No image data produced"
-            assert image_data[:8] == b'\x89PNG\r\n\x1a\n', "Not a valid PNG"
+            assert image_data[:8] == b"\x89PNG\r\n\x1a\n", "Not a valid PNG"
 
             # Bounding box should be reasonable
             assert bbox.width > 0, "Invalid bounding box width"
@@ -365,8 +358,8 @@ class TestEndToEnd:
     def test_full_extraction_pipeline(self, rm_files, markdown_blocks):
         """Test full pipeline: extract → cluster → map → render."""
         from rock_paper_sync.config import OCRConfig
-        from rock_paper_sync.ocr.integration import OCRProcessor
         from rock_paper_sync.coordinate_transformer import extract_text_origin
+        from rock_paper_sync.ocr.integration import OCRProcessor
 
         config = OCRConfig(enabled=True, cache_dir=Path("/tmp/test"))
         processor = OCRProcessor(config, MagicMock())
@@ -407,18 +400,27 @@ class TestEndToEnd:
                     rm_text_blocks,
                 )
 
-                results.append({
-                    "rm_file": rm_file.name,
-                    "cluster_size": len(cluster),
-                    "image_size": len(image_data),
-                    "paragraph_idx": para_idx,
-                    "bbox": (cluster_bbox.x, cluster_bbox.y, cluster_bbox.width, cluster_bbox.height),
-                })
+                results.append(
+                    {
+                        "rm_file": rm_file.name,
+                        "cluster_size": len(cluster),
+                        "image_size": len(image_data),
+                        "paragraph_idx": para_idx,
+                        "bbox": (
+                            cluster_bbox.x,
+                            cluster_bbox.y,
+                            cluster_bbox.width,
+                            cluster_bbox.height,
+                        ),
+                    }
+                )
 
         # Should have produced some results
         assert len(results) > 0, "Pipeline produced no results"
 
         # Log results for debugging
         for r in results:
-            print(f"  {r['rm_file']}: cluster={r['cluster_size']} strokes, "
-                  f"para={r['paragraph_idx']}, bbox={r['bbox']}")
+            print(
+                f"  {r['rm_file']}: cluster={r['cluster_size']} strokes, "
+                f"para={r['paragraph_idx']}, bbox={r['bbox']}"
+            )

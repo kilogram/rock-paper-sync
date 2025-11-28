@@ -1,12 +1,11 @@
 """Tests for multi-vault configuration support."""
 
-import pytest
 from pathlib import Path
 
+import pytest
+
 from rock_paper_sync.config import (
-    AppConfig,
     ConfigError,
-    VaultConfig,
     load_config,
     validate_config,
 )
@@ -357,9 +356,7 @@ file = "{tmp_path / 'sync.log'}"
         with pytest.raises(ConfigError, match="Vault names must be unique"):
             validate_config(config)
 
-    def test_validate_vault_path_doesnt_exist(
-        self, tmp_path: Path, temp_vault: Path
-    ) -> None:
+    def test_validate_vault_path_doesnt_exist(self, tmp_path: Path, temp_vault: Path) -> None:
         """Test that nonexistent vault path fails validation."""
         config_path = tmp_path / "config.toml"
         nonexistent = tmp_path / "nonexistent_vault"
@@ -438,9 +435,7 @@ file = "{tmp_path / 'sync.log'}"
         with pytest.raises(ConfigError, match="not a directory"):
             validate_config(config)
 
-    def test_validate_vault_empty_include_patterns(
-        self, tmp_path: Path, temp_vault: Path
-    ) -> None:
+    def test_validate_vault_empty_include_patterns(self, tmp_path: Path, temp_vault: Path) -> None:
         """Test that vault with empty include_patterns fails validation."""
         config_path = tmp_path / "config.toml"
         config_path.write_text(f"""

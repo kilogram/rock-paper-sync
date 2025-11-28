@@ -9,28 +9,27 @@ types of annotations (highlights, strokes, sketches, etc.) with:
 """
 
 # Core annotation types and utilities
-from .core_types import (
-    AnnotationType,
-    Point,
-    Rectangle,
-    Stroke,
-    Highlight,
-    Annotation,
-    TextBlock,
-    AnnotationMapping,
-    TextAnchor,
-    HeuristicTextAnchor,
-    WordWrapLayoutEngine,
-    read_annotations,
-    associate_annotations_with_content,
-    preserve_strokes_in_scene,
-    calculate_position_mapping,
-)
-
 # Export new architecture components
 from .core.data_types import AnnotationInfo
 from .core.processor import AnnotationProcessor
 from .core.protocol import AnnotationHandler
+from .core_types import (
+    Annotation,
+    AnnotationMapping,
+    AnnotationType,
+    HeuristicTextAnchor,
+    Highlight,
+    Point,
+    Rectangle,
+    Stroke,
+    TextAnchor,
+    TextBlock,
+    WordWrapLayoutEngine,
+    associate_annotations_with_content,
+    calculate_position_mapping,
+    preserve_strokes_in_scene,
+    read_annotations,
+)
 from .handlers.highlight_handler import HighlightHandler
 from .handlers.stroke_handler import StrokeHandler
 

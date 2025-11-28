@@ -7,9 +7,9 @@ Uses typing.Protocol for structural subtyping to ensure all implementations
 (OnlineDevice, OfflineEmulator) adhere to the same interface contract.
 """
 
-from typing import Protocol, runtime_checkable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Protocol, runtime_checkable
 
 
 @dataclass
@@ -73,9 +73,7 @@ class DeviceInteractionProtocol(Protocol):
         """
         ...
 
-    def wait_for_annotations(
-        self, doc_uuid: str, timeout: float = 300.0
-    ) -> DocumentState:
+    def wait_for_annotations(self, doc_uuid: str, timeout: float = 300.0) -> DocumentState:
         """Wait for annotations to be synced from device.
 
         In online mode: prompts user to annotate on device, then syncs.

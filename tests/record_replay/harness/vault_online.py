@@ -93,7 +93,7 @@ class OnlineVault(VaultInteractionManager):
         """
         # Prompt user for confirmation
         if not user_prompt(
-            f"Create file in vault?",
+            "Create file in vault?",
             [f"Path: {rel_path}", f"Preview: {content[:100]}..."],
         ):
             raise RuntimeError(f"User cancelled file creation: {rel_path}")

@@ -9,7 +9,6 @@ import pytest
 
 from rock_paper_sync.annotations import (
     HeuristicTextAnchor,
-    TextAnchor,
     WordWrapLayoutEngine,
 )
 
@@ -68,7 +67,7 @@ class TestHeuristicTextAnchor:
 
         # Verify it found "brown fox" in new text
         assert new_offset == 13  # Position of "brown fox" in new text ("A very quick " = 13 chars)
-        assert new_doc[new_offset:new_offset+9] == "brown fox"
+        assert new_doc[new_offset : new_offset + 9] == "brown fox"
 
     def test_resolve_anchor_multiple_matches_uses_context(self):
         """Test resolving anchor with multiple matches using context."""
@@ -85,7 +84,7 @@ class TestHeuristicTextAnchor:
 
         # Should find some occurrence of "fox"
         assert new_offset is not None
-        assert new_doc[new_offset:new_offset+3] == "fox"
+        assert new_doc[new_offset : new_offset + 3] == "fox"
 
     def test_resolve_anchor_text_edited(self):
         """Test resolving anchor when text was slightly edited."""
@@ -97,7 +96,7 @@ class TestHeuristicTextAnchor:
         new_offset = strategy.resolve_anchor(anchor, new_doc)
 
         assert new_offset == 12  # Still at same position
-        assert new_doc[new_offset:new_offset+9] == "dolor sit"
+        assert new_doc[new_offset : new_offset + 9] == "dolor sit"
 
     def test_resolve_anchor_text_not_found(self):
         """Test resolving anchor when text was deleted."""
@@ -117,11 +116,7 @@ class TestWordWrapLayoutEngine:
 
     def test_calculate_line_breaks_single_line(self):
         """Test line breaks for text that fits on one line."""
-        engine = WordWrapLayoutEngine(
-            text_width=750.0,
-            avg_char_width=12.0,
-            line_height=50.0
-        )
+        engine = WordWrapLayoutEngine(text_width=750.0, avg_char_width=12.0, line_height=50.0)
 
         text = "Hello world"
         breaks = engine.calculate_line_breaks(text, 750.0)
@@ -135,7 +130,7 @@ class TestWordWrapLayoutEngine:
         engine = WordWrapLayoutEngine(
             text_width=750.0,
             avg_char_width=12.0,  # ~62 chars per line
-            line_height=50.0
+            line_height=50.0,
         )
 
         # Text with ~120 characters should wrap to 2 lines
@@ -157,11 +152,7 @@ class TestWordWrapLayoutEngine:
 
     def test_offset_to_position_first_line(self):
         """Test converting offset to position on first line."""
-        engine = WordWrapLayoutEngine(
-            text_width=750.0,
-            avg_char_width=12.0,
-            line_height=50.0
-        )
+        engine = WordWrapLayoutEngine(text_width=750.0, avg_char_width=12.0, line_height=50.0)
 
         text = "Hello world"
         origin = (-375.0, 94.0)
@@ -175,11 +166,7 @@ class TestWordWrapLayoutEngine:
 
     def test_offset_to_position_second_line(self):
         """Test converting offset to position on second line."""
-        engine = WordWrapLayoutEngine(
-            text_width=750.0,
-            avg_char_width=12.0,
-            line_height=50.0
-        )
+        engine = WordWrapLayoutEngine(text_width=750.0, avg_char_width=12.0, line_height=50.0)
 
         text = "Line 1\nLine 2"
         origin = (-375.0, 94.0)
@@ -195,7 +182,7 @@ class TestWordWrapLayoutEngine:
         engine = WordWrapLayoutEngine(
             text_width=750.0,
             avg_char_width=12.0,  # ~62 chars per line
-            line_height=50.0
+            line_height=50.0,
         )
 
         # Create text that will wrap
@@ -225,10 +212,7 @@ class TestIntegration:
     def test_highlight_adjustment_after_text_insert(self):
         """Test that highlight position is adjusted when text is inserted before it."""
         anchor_strategy = HeuristicTextAnchor()
-        layout_engine = WordWrapLayoutEngine(
-            avg_char_width=12.0,
-            line_height=50.0
-        )
+        layout_engine = WordWrapLayoutEngine(avg_char_width=12.0, line_height=50.0)
 
         old_text = "Hello world, this is a test."
         new_text = "INSERTED TEXT HERE. Hello world, this is a test."
@@ -248,9 +232,7 @@ class TestIntegration:
         assert new_offset == 26  # Shifted right by length of inserted text + space
 
         # Calculate new position
-        new_x, new_y = layout_engine.offset_to_position(
-            new_offset, new_text, new_origin, 750.0
-        )
+        new_x, new_y = layout_engine.offset_to_position(new_offset, new_text, new_origin, 750.0)
 
         # X should have moved right
         old_x, old_y = layout_engine.offset_to_position(
@@ -265,7 +247,7 @@ class TestIntegration:
         layout_engine = WordWrapLayoutEngine(
             text_width=750.0,
             avg_char_width=12.0,  # ~62 chars per line
-            line_height=50.0
+            line_height=50.0,
         )
 
         # Short text, highlight on first line
@@ -288,9 +270,7 @@ class TestIntegration:
         old_x, old_y = layout_engine.offset_to_position(
             anchor.char_offset, old_text, old_origin, 750.0
         )
-        new_x, new_y = layout_engine.offset_to_position(
-            new_offset, new_text, new_origin, 750.0
-        )
+        new_x, new_y = layout_engine.offset_to_position(new_offset, new_text, new_origin, 750.0)
 
         # Y should have increased (moved to different line potentially)
         # This depends on wrapping behavior
@@ -299,10 +279,11 @@ class TestIntegration:
     def test_highlight_stays_with_text_after_paragraph_addition(self):
         """Test that highlights stay anchored when paragraphs are added."""
         anchor_strategy = HeuristicTextAnchor()
-        layout_engine = WordWrapLayoutEngine()
 
         old_text = "First paragraph.\n\nSecond paragraph with important text."
-        new_text = "First paragraph.\n\nNEW PARAGRAPH ADDED.\n\nSecond paragraph with important text."
+        new_text = (
+            "First paragraph.\n\nNEW PARAGRAPH ADDED.\n\nSecond paragraph with important text."
+        )
 
         # Highlight "important" in second paragraph
         anchor = anchor_strategy.find_anchor("important", old_text, (200, 200))
@@ -312,7 +293,7 @@ class TestIntegration:
 
         # Should still find "important"
         assert new_offset is not None
-        assert new_text[new_offset:new_offset+9] == "important"
+        assert new_text[new_offset : new_offset + 9] == "important"
 
     def test_low_confidence_anchor_handling(self):
         """Test handling of low-confidence anchors."""

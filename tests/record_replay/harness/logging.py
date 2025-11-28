@@ -7,8 +7,8 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from .output import Colors, print_error as print_error_msg
-from .output import print_info, print_warn
+from .output import Colors, print_info, print_warn
+from .output import print_error as print_error_msg
 
 
 class TestHarnessLogger:
@@ -136,6 +136,7 @@ class Bench:
     def ok(self, msg: str) -> None:
         """Print success message."""
         from .output import print_ok
+
         print_ok(msg)
 
     def info(self, msg: str) -> None:
@@ -149,11 +150,13 @@ class Bench:
     def header(self, title: str) -> None:
         """Print section header."""
         from .output import print_header
+
         print_header(title)
 
     def subheader(self, title: str) -> None:
         """Print subsection header."""
         from .output import print_subheader
+
         print_subheader(title)
 
     def run_cmd(
@@ -165,6 +168,7 @@ class Bench:
     ) -> tuple[int, str, str]:
         """Execute a command and log the result."""
         from .command import run_cmd
+
         return run_cmd(cmd, self.repo_root, desc, timeout, capture)
 
     def run_sync(
@@ -175,6 +179,7 @@ class Bench:
     ) -> tuple[int, str, str]:
         """Run rock-paper-sync command."""
         from .command import run_sync
+
         return run_sync(config_file, self.repo_root, desc, extra_args)
 
     def run_unsync(
@@ -184,6 +189,7 @@ class Bench:
     ) -> tuple[int, str, str]:
         """Run unsync command to cleanup."""
         from .command import run_unsync
+
         return run_unsync(config_file, self.repo_root, delete_from_cloud)
 
     def prompt_user(self, *messages: str) -> None:

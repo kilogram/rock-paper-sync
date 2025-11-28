@@ -37,10 +37,9 @@ Example:
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import BinaryIO, Optional
+from typing import BinaryIO
 
 import rmscene as rm
-from rmscene import scene_items as si
 from rmscene.tagged_block_common import CrdtId
 
 
@@ -57,9 +56,9 @@ class Point:
 
     x: float
     y: float
-    pressure: Optional[float] = None
-    width: Optional[int] = None
-    speed: Optional[float] = None
+    pressure: float | None = None
+    width: int | None = None
+    speed: float | None = None
 
 
 @dataclass
@@ -77,8 +76,7 @@ class Rectangle:
 
     def contains_point(self, x: float, y: float) -> bool:
         """Check if a point is within this rectangle."""
-        return (self.x <= x <= self.x + self.w and
-                self.y <= y <= self.y + self.h)
+        return self.x <= x <= self.x + self.w and self.y <= y <= self.y + self.h
 
 
 @dataclass
@@ -148,13 +146,15 @@ class Annotation:
         parent_id: Optional parent CRDT ID for coordinate space detection
             - CrdtId(0, 11): Absolute coordinates (root layer)
             - Other values: Text-relative coordinates
+        annotation_id: Unique identifier for this annotation
     """
 
     type: AnnotationType
-    stroke: Optional[Stroke] = None
-    highlight: Optional[Highlight] = None
-    layer_id: Optional[str] = None
-    parent_id: Optional[CrdtId] = None
+    stroke: Stroke | None = None
+    highlight: Highlight | None = None
+    layer_id: str | None = None
+    parent_id: CrdtId | None = None
+    annotation_id: str = field(default_factory=lambda: str(id(None)))  # Unique ID per instance
 
     def center_y(self) -> float:
         """Get the vertical center position of this annotation."""
@@ -163,6 +163,24 @@ class Annotation:
         elif self.type == AnnotationType.HIGHLIGHT and self.highlight:
             return self.highlight.center_y()
         return 0.0
+
+    @property
+    def bounding_box(self) -> Rectangle | None:
+        """Get bounding box for this annotation."""
+        if self.stroke:
+            return self.stroke.bounding_box
+        elif self.highlight and self.highlight.rectangles:
+            # Return the combined bounding box of all highlight rectangles
+            if not self.highlight.rectangles:
+                return None
+            rects = self.highlight.rectangles
+            return Rectangle(
+                x=min(r.x for r in rects),
+                y=min(r.y for r in rects),
+                w=max(r.x + r.w for r in rects) - min(r.x for r in rects),
+                h=max(r.y + r.h for r in rects) - min(r.y for r in rects),
+            )
+        return None
 
 
 @dataclass
@@ -184,7 +202,7 @@ class TextBlock:
     y_start: float
     y_end: float
     block_type: str
-    markdown_line: Optional[int] = None
+    markdown_line: int | None = None
 
     def contains_y(self, y: float) -> bool:
         """Check if a Y coordinate falls within this text block."""
@@ -225,8 +243,8 @@ def read_annotations(file_path: Path | str | BinaryIO) -> list[Annotation]:
     annotations = []
 
     # Open file if path provided
-    if isinstance(file_path, (Path, str)):
-        with open(file_path, 'rb') as f:
+    if isinstance(file_path, Path | str):
+        with open(file_path, "rb") as f:
             return read_annotations(f)
 
     # Read blocks from file
@@ -234,11 +252,11 @@ def read_annotations(file_path: Path | str | BinaryIO) -> list[Annotation]:
 
     # Extract strokes (hand-drawn annotations)
     for block in blocks:
-        if 'Line' in type(block).__name__:
+        if "Line" in type(block).__name__:
             line = block.item.value
 
             # Skip if line is None or has no points
-            if line is None or not hasattr(line, 'points') or line.points is None:
+            if line is None or not hasattr(line, "points") or line.points is None:
                 continue
 
             # Convert rmscene points to our Point objects
@@ -246,9 +264,9 @@ def read_annotations(file_path: Path | str | BinaryIO) -> list[Annotation]:
                 Point(
                     x=p.x,
                     y=p.y,
-                    pressure=p.pressure if hasattr(p, 'pressure') else 100,
-                    width=p.width if hasattr(p, 'width') else 16,
-                    speed=p.speed if hasattr(p, 'speed') else 0
+                    pressure=p.pressure if hasattr(p, "pressure") else 100,
+                    width=p.width if hasattr(p, "width") else 16,
+                    speed=p.speed if hasattr(p, "speed") else 0,
                 )
                 for p in line.points
             ]
@@ -259,61 +277,52 @@ def read_annotations(file_path: Path | str | BinaryIO) -> list[Annotation]:
 
             stroke = Stroke(
                 points=points,
-                color=line.color.value if hasattr(line.color, 'value') else line.color,
-                tool=line.tool.value if hasattr(line.tool, 'value') else line.tool,
-                thickness=line.thickness_scale if hasattr(line, 'thickness_scale') else 2.0
+                color=line.color.value if hasattr(line.color, "value") else line.color,
+                tool=line.tool.value if hasattr(line.tool, "value") else line.tool,
+                thickness=line.thickness_scale if hasattr(line, "thickness_scale") else 2.0,
             )
 
             # Extract parent_id for coordinate space detection
-            parent_id = block.parent_id if hasattr(block, 'parent_id') else None
+            parent_id = block.parent_id if hasattr(block, "parent_id") else None
 
-            annotations.append(Annotation(
-                type=AnnotationType.STROKE,
-                stroke=stroke,
-                parent_id=parent_id
-            ))
+            annotations.append(
+                Annotation(type=AnnotationType.STROKE, stroke=stroke, parent_id=parent_id)
+            )
 
     # Extract highlights (text selections)
     for block in blocks:
-        if 'Glyph' in type(block).__name__:
+        if "Glyph" in type(block).__name__:
             glyph = block.item.value
 
             # Skip if glyph is None or has no rectangles
-            if glyph is None or not hasattr(glyph, 'rectangles') or glyph.rectangles is None:
+            if glyph is None or not hasattr(glyph, "rectangles") or glyph.rectangles is None:
                 continue
 
             # Convert rectangles
-            rectangles = [
-                Rectangle(x=r.x, y=r.y, w=r.w, h=r.h)
-                for r in glyph.rectangles
-            ]
+            rectangles = [Rectangle(x=r.x, y=r.y, w=r.w, h=r.h) for r in glyph.rectangles]
 
             # Skip if no valid rectangles
             if not rectangles:
                 continue
 
             highlight = Highlight(
-                text=glyph.text if hasattr(glyph, 'text') and glyph.text else "",
-                color=glyph.color.value if hasattr(glyph.color, 'value') else glyph.color,
-                rectangles=rectangles
+                text=glyph.text if hasattr(glyph, "text") and glyph.text else "",
+                color=glyph.color.value if hasattr(glyph.color, "value") else glyph.color,
+                rectangles=rectangles,
             )
 
             # Extract parent_id for coordinate space detection
-            parent_id = block.parent_id if hasattr(block, 'parent_id') else None
+            parent_id = block.parent_id if hasattr(block, "parent_id") else None
 
-            annotations.append(Annotation(
-                type=AnnotationType.HIGHLIGHT,
-                highlight=highlight,
-                parent_id=parent_id
-            ))
+            annotations.append(
+                Annotation(type=AnnotationType.HIGHLIGHT, highlight=highlight, parent_id=parent_id)
+            )
 
     return annotations
 
 
 def associate_annotations_with_content(
-    annotations: list[Annotation],
-    text_blocks: list[TextBlock],
-    max_distance: float = 100.0
+    annotations: list[Annotation], text_blocks: list[TextBlock], max_distance: float = 100.0
 ) -> AnnotationMapping:
     """Associate annotations with nearby text blocks based on position.
 
@@ -338,17 +347,14 @@ def associate_annotations_with_content(
         ...     block = mapping.text_blocks[block_idx]
         ...     print(f"Annotation at y={ann.center_y()} → '{block.content[:30]}'")
     """
-    mapping = AnnotationMapping(
-        annotations=annotations,
-        text_blocks=text_blocks
-    )
+    mapping = AnnotationMapping(annotations=annotations, text_blocks=text_blocks)
 
     # For each annotation, find the nearest text block
     for ann_idx, annotation in enumerate(annotations):
         ann_y = annotation.center_y()
 
         # Find closest text block
-        min_distance = float('inf')
+        min_distance = float("inf")
         closest_block_idx = None
 
         for block_idx, block in enumerate(text_blocks):
@@ -357,10 +363,7 @@ def associate_annotations_with_content(
                 distance = 0.0  # Inside the block
             else:
                 # Distance to nearest edge
-                distance = min(
-                    abs(ann_y - block.y_start),
-                    abs(ann_y - block.y_end)
-                )
+                distance = min(abs(ann_y - block.y_start), abs(ann_y - block.y_end))
 
             if distance < min_distance:
                 min_distance = distance
@@ -373,11 +376,7 @@ def associate_annotations_with_content(
     return mapping
 
 
-def preserve_strokes_in_scene(
-    strokes: list[Stroke],
-    scene_blocks: list,
-    parent_id=None
-) -> list:
+def preserve_strokes_in_scene(strokes: list[Stroke], scene_blocks: list, parent_id=None) -> list:
     """Convert Stroke objects back to rmscene SceneLineItemBlock objects.
 
     This allows us to preserve strokes when regenerating a document by converting
@@ -405,8 +404,7 @@ def preserve_strokes_in_scene(
 
 
 def calculate_position_mapping(
-    old_blocks: list[TextBlock],
-    new_blocks: list[TextBlock]
+    old_blocks: list[TextBlock], new_blocks: list[TextBlock]
 ) -> dict[int, int]:
     """Map old text blocks to new text blocks based on content similarity.
 
@@ -487,11 +485,7 @@ class TextAnchor:
 class HeuristicTextAnchor:
     """Text anchoring using substring and fuzzy matching."""
 
-    def __init__(
-        self,
-        context_window: int = 50,
-        fuzzy_threshold: float = 0.8
-    ):
+    def __init__(self, context_window: int = 50, fuzzy_threshold: float = 0.8):
         """Initialize heuristic text anchor.
 
         Args:
@@ -502,10 +496,7 @@ class HeuristicTextAnchor:
         self.fuzzy_threshold = fuzzy_threshold
 
     def find_anchor(
-        self,
-        annotation_text: str,
-        old_document: str,
-        old_position: tuple[float, float]
+        self, annotation_text: str, old_document: str, old_position: tuple[float, float]
     ) -> TextAnchor:
         """Find annotation in old document using substring matching."""
         import difflib
@@ -519,10 +510,7 @@ class HeuristicTextAnchor:
         else:
             # Fuzzy match using difflib
             matcher = difflib.SequenceMatcher(None, annotation_text, old_document)
-            match = matcher.find_longest_match(
-                0, len(annotation_text),
-                0, len(old_document)
-            )
+            match = matcher.find_longest_match(0, len(annotation_text), 0, len(old_document))
 
             if match.size >= len(annotation_text) * self.fuzzy_threshold:
                 offset = match.b
@@ -534,10 +522,9 @@ class HeuristicTextAnchor:
 
         # Extract context
         if offset is not None:
-            context_before = old_document[max(0, offset - self.context_window):offset]
+            context_before = old_document[max(0, offset - self.context_window) : offset]
             context_after = old_document[
-                offset + len(annotation_text):
-                offset + len(annotation_text) + self.context_window
+                offset + len(annotation_text) : offset + len(annotation_text) + self.context_window
             ]
         else:
             context_before = ""
@@ -550,14 +537,10 @@ class HeuristicTextAnchor:
             context_after=context_after,
             confidence=confidence,
             position=old_position,
-            annotation_type="highlight"
+            annotation_type="highlight",
         )
 
-    def resolve_anchor(
-        self,
-        anchor: TextAnchor,
-        new_document: str
-    ) -> int | None:
+    def resolve_anchor(self, anchor: TextAnchor, new_document: str) -> int | None:
         """Resolve anchor in new document using context-aware matching."""
         import difflib
 
@@ -585,20 +568,16 @@ class HeuristicTextAnchor:
             for candidate_offset in all_offsets:
                 # Check context match
                 before = new_document[
-                    max(0, candidate_offset - self.context_window):
-                    candidate_offset
+                    max(0, candidate_offset - self.context_window) : candidate_offset
                 ]
                 after = new_document[
-                    candidate_offset + len(anchor.text_content):
-                    candidate_offset + len(anchor.text_content) + self.context_window
+                    candidate_offset + len(anchor.text_content) : candidate_offset
+                    + len(anchor.text_content)
+                    + self.context_window
                 ]
 
-                before_score = difflib.SequenceMatcher(
-                    None, anchor.context_before, before
-                ).ratio()
-                after_score = difflib.SequenceMatcher(
-                    None, anchor.context_after, after
-                ).ratio()
+                before_score = difflib.SequenceMatcher(None, anchor.context_before, before).ratio()
+                after_score = difflib.SequenceMatcher(None, anchor.context_after, after).ratio()
 
                 score = (before_score + after_score) / 2
                 if score > best_score:
@@ -609,10 +588,7 @@ class HeuristicTextAnchor:
 
         # Fuzzy match as fallback
         matcher = difflib.SequenceMatcher(None, anchor.text_content, new_document)
-        match = matcher.find_longest_match(
-            0, len(anchor.text_content),
-            0, len(new_document)
-        )
+        match = matcher.find_longest_match(0, len(anchor.text_content), 0, len(new_document))
 
         if match.size >= len(anchor.text_content) * self.fuzzy_threshold:
             return match.b
@@ -628,7 +604,7 @@ class WordWrapLayoutEngine:
         self,
         text_width: float = 750.0,
         avg_char_width: float = 15.0,  # Calibrated from device (2025-11-17)
-        line_height: float = 50.0
+        line_height: float = 50.0,
     ):
         """Initialize word wrap layout engine.
 
@@ -661,24 +637,22 @@ class WordWrapLayoutEngine:
 
         # Track current position in text
         pos = 0
-        line_start = 0
         line_length = 0  # Length of current line in characters
 
         while pos < len(text):
             # Check for explicit newline
-            if text[pos] == '\n':
+            if text[pos] == "\n":
                 # Start new line after the newline
                 pos += 1
                 if pos < len(text):
                     line_breaks.append(pos)
-                line_start = pos
                 line_length = 0
                 continue
 
             # Find next word boundary (space or newline or end of text)
             word_start = pos
             word_end = pos
-            while word_end < len(text) and text[word_end] not in (' ', '\n'):
+            while word_end < len(text) and text[word_end] not in (" ", "\n"):
                 word_end += 1
 
             word_length = word_end - word_start
@@ -690,7 +664,6 @@ class WordWrapLayoutEngine:
             if line_length + space_needed + word_length > chars_per_line and line_length > 0:
                 # Word doesn't fit, start new line
                 line_breaks.append(pos)
-                line_start = pos
                 line_length = 0
                 space_needed = 0
 
@@ -699,18 +672,14 @@ class WordWrapLayoutEngine:
             pos = word_end
 
             # If we're at a space, consume it
-            if pos < len(text) and text[pos] == ' ':
+            if pos < len(text) and text[pos] == " ":
                 line_length += 1  # Count the space in line length
                 pos += 1
 
         return line_breaks
 
     def offset_to_position(
-        self,
-        offset: int,
-        text: str,
-        origin: tuple[float, float],
-        width: float
+        self, offset: int, text: str, origin: tuple[float, float], width: float
     ) -> tuple[float, float]:
         """Convert character offset to (x, y) coordinates.
 

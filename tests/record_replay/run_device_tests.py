@@ -173,9 +173,7 @@ def run(
         device = OnlineDevice(workspace, testdata_store, bench)
         click.echo("Running in ONLINE mode (real device)")
     else:
-        device = OfflineEmulator(
-            workspace, testdata_store, bench, cloud_url=rmfakecloud_url
-        )
+        device = OfflineEmulator(workspace, testdata_store, bench, cloud_url=rmfakecloud_url)
         click.echo(f"Running in OFFLINE mode (rmfakecloud: {rmfakecloud_url})")
 
         if test_artifact:
@@ -185,9 +183,7 @@ def run(
 
     if test_name:
         # Run single test
-        success = run_single_test(
-            test_name, bench, workspace, device, cleanup, test_artifact
-        )
+        success = run_single_test(test_name, bench, workspace, device, cleanup, test_artifact)
         sys.exit(0 if success else 1)
     else:
         # Run all tests
@@ -455,11 +451,15 @@ def collect(
 
         # Step 2: User annotates
         from .harness.prompts import user_prompt
-        if not user_prompt("Annotate document", [
-            f"Open '{workspace.device_folder}/document' on reMarkable",
-            "Add annotations according to the document instructions",
-            "Wait for cloud sync to complete",
-        ]):
+
+        if not user_prompt(
+            "Annotate document",
+            [
+                f"Open '{workspace.device_folder}/document' on reMarkable",
+                "Add annotations according to the document instructions",
+                "Wait for cloud sync to complete",
+            ],
+        ):
             bench.warn("Cancelled by user")
             sys.exit(1)
 
@@ -505,7 +505,7 @@ def collect(
 
     bench.header("COLLECTION COMPLETE")
     click.echo(f"\nTestdata saved to: {save_path}")
-    click.echo(f"\nTo replay this test:")
+    click.echo("\nTo replay this test:")
     click.echo(f"  run_device_tests run --mode=offline --test-artifact={test_id}")
 
 
@@ -575,7 +575,6 @@ def migrate_legacy() -> None:
     collected testdata format so it can be used with offline replay.
     """
     import json
-    import shutil
 
     store = get_testdata_store()
     legacy_dir = FIXTURES_DIR / "testdata" / "ocr_handwriting"
@@ -643,8 +642,8 @@ def migrate_legacy() -> None:
 
     click.echo(f"\nMigrated to: {save_path}")
     click.echo(f"Test ID: {test_id}")
-    click.echo(f"\nTo replay:")
-    click.echo(f"  uv run pytest tests/record_replay/test_offline_replay.py -v")
+    click.echo("\nTo replay:")
+    click.echo("  uv run pytest tests/record_replay/test_offline_replay.py -v")
 
 
 @cli.command()

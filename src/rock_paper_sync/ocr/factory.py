@@ -6,7 +6,7 @@ Creates appropriate OCR service instance based on configuration.
 import logging
 from typing import TYPE_CHECKING
 
-from rock_paper_sync.ocr.protocol import OCRServiceProtocol, OCRServiceError
+from rock_paper_sync.ocr.protocol import OCRServiceError, OCRServiceProtocol
 
 if TYPE_CHECKING:
     from rock_paper_sync.config import OCRConfig
@@ -49,6 +49,5 @@ def create_ocr_service(config: "OCRConfig") -> OCRServiceProtocol:
 
     else:
         raise OCRServiceError(
-            f"Unknown OCR provider: {provider}. "
-            f"Valid providers are: 'local', 'runpods'"
+            f"Unknown OCR provider: {provider}. " f"Valid providers are: 'local', 'runpods'"
         )
