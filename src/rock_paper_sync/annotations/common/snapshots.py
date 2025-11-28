@@ -515,3 +515,68 @@ class SnapshotStore:
             "block_snapshots": block_snapshot_count,
             "unique_content": unique_content_count,
         }
+
+    def cleanup_old_snapshots(
+        self, retention_days: int = 7, cleanup_orphaned_content: bool = True
+    ) -> tuple[int, int]:
+        """
+        Clean up old snapshots to prevent unbounded storage growth.
+
+        Strategy (Phase 4):
+        - Keep latest snapshot for each file (required for three-way merge)
+        - Delete snapshots older than retention_days
+        - Optionally cleanup orphaned content (not referenced by any snapshot)
+
+        Args:
+            retention_days: Keep snapshots newer than this many days (default: 7)
+            cleanup_orphaned_content: Whether to delete unreferenced content
+
+        Returns:
+            Tuple of (snapshots_deleted, content_blobs_deleted)
+        """
+        import time
+
+        cutoff_time = int(time.time()) - (retention_days * 24 * 60 * 60)
+        snapshots_deleted = 0
+        content_deleted = 0
+
+        # Delete old snapshots (keep latest per file)
+        # Strategy: Find snapshots older than cutoff that are not the latest for their file
+        cursor = self.db.execute(
+            """
+            DELETE FROM file_snapshots
+            WHERE sync_time < ?
+            AND rowid NOT IN (
+                SELECT MAX(rowid)
+                FROM file_snapshots
+                GROUP BY vault_name, file_path
+            )
+            """,
+            (cutoff_time,),
+        )
+        snapshots_deleted = cursor.rowcount
+
+        # Cleanup orphaned content if requested
+        if cleanup_orphaned_content:
+            # Find content hashes not referenced by any snapshot
+            cursor = self.db.execute(
+                """
+                DELETE FROM content_store
+                WHERE content_hash NOT IN (
+                    SELECT DISTINCT content_hash FROM file_snapshots
+                    UNION
+                    SELECT DISTINCT content_hash FROM annotation_blocks
+                )
+                """
+            )
+            content_deleted = cursor.rowcount
+
+        self.db.commit()
+
+        if snapshots_deleted > 0 or content_deleted > 0:
+            logger.info(
+                f"Cleanup: deleted {snapshots_deleted} old snapshots, "
+                f"{content_deleted} orphaned content blobs"
+            )
+
+        return (snapshots_deleted, content_deleted)

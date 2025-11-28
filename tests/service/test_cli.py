@@ -27,6 +27,9 @@ def mock_cloud_sync():
     mock_sync.update_root = MagicMock()
     mock_sync.upload_index = MagicMock(return_value=("fakehash123", b"fake index content"))
     mock_sync.apply_virtual_state = MagicMock(return_value=1)
+    # Phase 2 annotation detection methods
+    mock_sync.get_document_index_hash = MagicMock(return_value=None)
+    mock_sync.should_download_annotations = MagicMock(return_value=False)
 
     with patch("rock_paper_sync.converter.RmCloudSync", return_value=mock_sync):
         with patch("rock_paper_sync.converter.RmCloudClient"):

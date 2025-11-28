@@ -338,6 +338,33 @@ class RmCloudSync:
         """
         return self.sync_client.get_root_state()
 
+    def get_document_index_hash(self, doc_uuid: str) -> str | None:
+        """
+        Get the document index hash for a specific document.
+
+        The document index hash includes all files in the document (.rm files, metadata, etc.),
+        making it useful for detecting changes to annotations.
+
+        Args:
+            doc_uuid: UUID of the document
+
+        Returns:
+            Document index hash, or None if document not found
+
+        Example:
+            >>> hash = cloud_sync.get_document_index_hash("abc-123")
+            >>> if hash != state.last_doc_index_hash:
+            ...     # Document changed on cloud (possibly new annotations)
+        """
+        root_entries, _, _ = self.get_root_state()
+
+        # Find document entry by UUID
+        for entry in root_entries:
+            if entry.entry_name == doc_uuid:
+                return entry.hash  # This is the document index hash
+
+        return None
+
     def update_root(self, root_hash: str, generation: int, broadcast: bool = True) -> int:
         """
         Update the root hash tree with optimistic concurrency control.

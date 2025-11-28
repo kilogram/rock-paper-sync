@@ -63,7 +63,6 @@ from .annotations.handlers.stroke_handler import StrokeHandler
 from .audit import get_audit_logger
 from .config import AppConfig, VaultConfig
 from .generator import RemarkableGenerator
-from .hashing import compute_file_hash
 from .ocr.integration import OCRProcessor
 from .ocr.markers import AnnotationInfo as OcrAnnotationInfo
 from .parser import parse_markdown_file
@@ -242,6 +241,69 @@ class SyncEngine:
 
         logger.debug("Sync engine initialized")
 
+    def should_download_annotations(
+        self,
+        vault_name: str,
+        relative_path: str,
+        doc_uuid: str,
+    ) -> bool:
+        """
+        Check if annotations should be downloaded from the device.
+
+        Uses cloud versioning primitives (root_generation + doc_index_hash) to
+        efficiently detect annotation changes without downloading files.
+
+        Args:
+            vault_name: Name of the vault
+            relative_path: Relative path within vault
+            doc_uuid: Document UUID
+
+        Returns:
+            True if annotations should be downloaded, False otherwise
+
+        Detection Logic:
+            1. Get current cloud state (generation + doc_index_hash)
+            2. Compare to stored state
+            3. If generation unchanged → no cloud changes
+            4. If doc_index_hash unchanged → document unchanged
+            5. Otherwise → download annotations
+        """
+        # Get current state
+        state = self.state.get_file_state(vault_name, relative_path)
+        if not state:
+            # No previous sync - will be handled by normal upload flow
+            return False
+
+        # Get current cloud state
+        _, _, current_generation = self.cloud_sync.get_root_state()
+        current_doc_hash = self.cloud_sync.get_document_index_hash(doc_uuid)
+
+        # Check if cloud has changed since last sync
+        if state.last_root_generation is not None:
+            if current_generation <= state.last_root_generation:
+                # No cloud changes since last sync
+                logger.debug(
+                    f"Cloud unchanged (gen {current_generation} <= {state.last_root_generation})"
+                )
+                return False
+
+        # Check if document has changed
+        if state.last_doc_index_hash is not None and current_doc_hash is not None:
+            if current_doc_hash == state.last_doc_index_hash:
+                # Document unchanged (no new annotations)
+                logger.debug(
+                    f"Document unchanged (hash {current_doc_hash[:8]}... == {state.last_doc_index_hash[:8]}...)"
+                )
+                return False
+
+        # Cloud changed and document changed - download annotations
+        logger.info(
+            f"Annotation changes detected for {vault_name}:{relative_path} "
+            f"(gen {state.last_root_generation} -> {current_generation}, "
+            f"hash {state.last_doc_index_hash[:8] if state.last_doc_index_hash else 'None'}... -> {current_doc_hash[:8] if current_doc_hash else 'None'}...)"
+        )
+        return True
+
     def sync_file(
         self,
         vault: VaultConfig,
@@ -311,14 +373,20 @@ class SyncEngine:
             current_state = self.state.get_file_state(vault.name, relative_path)
 
             if current_state and current_state.content_hash == md_doc.content_hash:
-                # Semantic content unchanged - but check if markers need updating
+                # Semantic content unchanged - check if annotations changed on device
                 logger.debug(f"Semantic content unchanged: {vault.name}:{relative_path}")
 
-                # Download .rm files to check for new annotations
+                # CASE 2: Only annotations changed → download (Phase 2: efficient detection)
                 existing_uuid = current_state.remarkable_uuid
                 annotation_map = None
 
-                if existing_uuid:
+                # Check if annotations changed using cloud versioning
+                if existing_uuid and self.should_download_annotations(
+                    vault.name, relative_path, existing_uuid
+                ):
+                    logger.info(f"Downloading new annotations for {vault.name}:{relative_path}")
+
+                    # Download .rm files with new annotations
                     existing_page_uuids = self.cloud_sync.get_existing_page_uuids(existing_uuid)
                     if existing_page_uuids:
                         temp_dir = self.config.cache_dir / "annotations" / existing_uuid
@@ -336,6 +404,23 @@ class SyncEngine:
                                     )
                                 )
                                 merge_annotation_maps(annotation_map, file_annotations)
+
+                        # Update state with new cloud versioning info
+                        _, _, current_gen = self.cloud_sync.get_root_state()
+                        current_doc_hash = self.cloud_sync.get_document_index_hash(existing_uuid)
+
+                        updated_state = SyncRecord(
+                            vault_name=vault.name,
+                            obsidian_path=relative_path,
+                            remarkable_uuid=existing_uuid,
+                            content_hash=current_state.content_hash,
+                            last_sync_time=int(time.time()),
+                            page_count=current_state.page_count,
+                            status="synced",
+                            last_root_generation=current_gen,
+                            last_doc_index_hash=current_doc_hash,
+                        )
+                        self.state.update_file_state(updated_state)
 
                 # Update markers if we have annotations
                 if annotation_map:
@@ -372,25 +457,38 @@ class SyncEngine:
             parent_uuid = self.ensure_folder_hierarchy(vault, markdown_path)
 
             # Generate reMarkable document (reuse UUID if updating existing file)
+            # CASE 3: Check if annotations ALSO changed (three-way merge)
             existing_uuid = current_state.remarkable_uuid if current_state else None
             existing_page_uuids = []
             existing_rm_files = []
+            annotations_also_changed = False
 
             if existing_uuid:
                 logger.info(f"Updating existing document {existing_uuid} for {markdown_path}")
+
+                # CASE 3 detection: Check if annotations changed on device
+                annotations_also_changed = self.should_download_annotations(
+                    vault.name, relative_path, existing_uuid
+                )
+                if annotations_also_changed:
+                    logger.info(
+                        f"✓ CASE 3: Both content and annotations changed - "
+                        f"three-way merge for {vault.name}:{relative_path}"
+                    )
+
                 # Fetch existing page UUIDs to avoid CRDT conflicts
                 existing_page_uuids = self.cloud_sync.get_existing_page_uuids(existing_uuid)
                 if existing_page_uuids:
                     logger.debug(f"Found {len(existing_page_uuids)} existing pages to reuse")
 
-                    # Download existing .rm files to preserve annotations
+                    # Download .rm files (fresh from cloud if annotations changed)
                     temp_dir = self.config.cache_dir / "annotations" / existing_uuid
                     existing_rm_files = self.cloud_sync.download_page_rm_files(
                         existing_uuid, existing_page_uuids, temp_dir
                     )
+                    status = "fresh from device" if annotations_also_changed else "cached"
                     logger.info(
-                        f"Downloaded {len([f for f in existing_rm_files if f])} .rm files "
-                        f"for annotation preservation"
+                        f"Downloaded {len([f for f in existing_rm_files if f])} .rm files ({status})"
                     )
             else:
                 logger.info(f"Generating new reMarkable document for {markdown_path}")
@@ -444,8 +542,19 @@ class SyncEngine:
                 broadcast=broadcast,
             )
 
+            # Create snapshot of clean content (markers stripped) as OLD for next merge
+            # This snapshot will be the BASE in future three-way merges
+            clean_markdown_content = strip_annotation_markers(markdown_path.read_text())
+            self.state.snapshots.snapshot_file(
+                vault_name=vault.name,
+                file_path=relative_path,
+                content=clean_markdown_content.encode("utf-8"),
+                file_type="markdown",
+                sync_time=int(time.time()),
+            )
+            logger.debug(f"Created snapshot for {vault.name}:{relative_path}")
+
             # Add annotation markers to file if we have annotations
-            file_hash_with_markers = None
             if existing_rm_files and any(existing_rm_files):
                 # Map annotations from .rm files (iterate over each page)
                 annotation_map = {}
@@ -465,14 +574,14 @@ class SyncEngine:
                     with open(markdown_path, "w", encoding="utf-8") as f:
                         f.write(marked_content)
 
-                    # Calculate file hash WITH markers
-                    file_hash_with_markers = compute_file_hash(markdown_path)
-
                     logger.info(
                         f"Added {len(annotation_map)} annotation markers to {vault.name}:{relative_path}"
                     )
 
-            # Update state database
+            # Update state database with cloud versioning info (Phase 2)
+            _, _, current_gen = self.cloud_sync.get_root_state()
+            current_doc_hash = self.cloud_sync.get_document_index_hash(rm_doc.uuid)
+
             new_state = SyncRecord(
                 vault_name=vault.name,
                 obsidian_path=relative_path,
@@ -481,7 +590,8 @@ class SyncEngine:
                 last_sync_time=int(time.time()),
                 page_count=len(rm_doc.pages),
                 status="synced",
-                file_hash_with_markers=file_hash_with_markers,
+                last_root_generation=current_gen,
+                last_doc_index_hash=current_doc_hash,
             )
             self.state.update_file_state(new_state)
             self.state.log_sync_action(
@@ -608,6 +718,59 @@ class SyncEngine:
             raise last_error
         raise RuntimeError(f"{operation_name} failed: No attempts made")
 
+    def _find_annotation_only_changes(
+        self, vault: VaultConfig, content_changed_files: list[Path], correlation_id: str
+    ) -> list[Path]:
+        """Find files where annotations changed but content didn't.
+
+        Checks all previously-synced files (not in content_changed_files) for
+        annotation changes using cloud versioning primitives.
+
+        Args:
+            vault: Vault configuration
+            content_changed_files: Files already identified as content-changed
+            correlation_id: Correlation ID for logging
+
+        Returns:
+            List of file paths with annotation-only changes
+        """
+        annotation_changed_files: list[Path] = []
+
+        # Get all previously-synced files for this vault
+        cursor = self.state.conn.execute(
+            "SELECT obsidian_path, remarkable_uuid FROM sync_state WHERE vault_name = ?",
+            (vault.name,),
+        )
+        synced_files = [(row[0], row[1]) for row in cursor.fetchall()]
+
+        # Convert content-changed files to relative paths for exclusion
+        content_changed_paths = {str(f.relative_to(vault.path)) for f in content_changed_files}
+
+        # Check each synced file for annotation changes
+        for relative_path, doc_uuid in synced_files:
+            # Skip if content already changed
+            if relative_path in content_changed_paths:
+                continue
+
+            # Check if file still exists
+            file_path = vault.path / relative_path
+            if not file_path.exists():
+                continue  # Will be handled as deletion
+
+            # Check for annotation changes
+            if self.should_download_annotations(vault.name, relative_path, doc_uuid):
+                logger.debug(
+                    f"[{correlation_id}] Annotation-only change detected: {vault.name}:{relative_path}"
+                )
+                annotation_changed_files.append(file_path)
+
+        if annotation_changed_files:
+            logger.info(
+                f"[{correlation_id}] Found {len(annotation_changed_files)} file(s) with annotation-only changes"
+            )
+
+        return annotation_changed_files
+
     def sync_vault(self, vault: VaultConfig) -> list[SyncResult]:
         """Sync all changed files in a specific vault.
 
@@ -647,17 +810,26 @@ class SyncEngine:
             vault.exclude_patterns,
         )
 
-        if not deleted_files and not changed_files:
+        # Also check for annotation-only changes (Phase 2: annotation detection)
+        # Files where content unchanged but annotations may have changed on device
+        annotation_only_files = self._find_annotation_only_changes(
+            vault, changed_files, correlation_id
+        )
+
+        # Combine content changes and annotation-only changes
+        all_files_to_process = changed_files + annotation_only_files
+
+        if not deleted_files and not all_files_to_process:
             logger.info(f"[{correlation_id}] No changes to sync for vault '{vault.name}'")
             return []
 
         # If only uploads and no deletions, handle simple case (no atomic update needed)
         if not deleted_files:
             logger.info(
-                f"[{correlation_id}] Syncing {len(changed_files)} new/changed files (no deletions)"
+                f"[{correlation_id}] Syncing {len(all_files_to_process)} new/changed files (no deletions)"
             )
             results = []
-            for file_path in changed_files:
+            for file_path in all_files_to_process:
                 try:
                     # For uploads only, can broadcast per file
                     result = self.sync_file(
@@ -709,10 +881,10 @@ class SyncEngine:
 
         # Upload changed files (individual operations)
         results = []
-        if changed_files:
-            logger.info(f"[{correlation_id}] Uploading {len(changed_files)} changed file(s)")
+        if all_files_to_process:
+            logger.info(f"[{correlation_id}] Uploading {len(all_files_to_process)} changed file(s)")
 
-        for file_path in changed_files:
+        for file_path in all_files_to_process:
             try:
                 # Upload without broadcasting (will broadcast once in atomic update)
                 result = self.sync_file(
@@ -1089,23 +1261,8 @@ class SyncEngine:
         with open(markdown_path, "w", encoding="utf-8") as f:
             f.write(marked_content)
 
-        # Calculate file hash WITH markers
-        file_hash_with_markers = compute_file_hash(markdown_path)
-
-        # Update state with file_hash_with_markers (but keep same content_hash)
-        current_state = self.state.get_file_state(vault_name, relative_path)
-        if current_state:
-            updated_state = SyncRecord(
-                vault_name=vault_name,
-                obsidian_path=relative_path,
-                remarkable_uuid=current_state.remarkable_uuid,
-                content_hash=current_state.content_hash,  # Unchanged
-                last_sync_time=current_state.last_sync_time,
-                page_count=current_state.page_count,
-                status=current_state.status,
-                file_hash_with_markers=file_hash_with_markers,  # Updated
-            )
-            self.state.update_file_state(updated_state)
+        # Note: State doesn't need updating here since content_hash is semantic (markers stripped)
+        # The annotation markers are local presentation only and don't affect sync state
 
         logger.info(
             f"Updated {len(annotation_map)} annotation markers in {vault_name}:{relative_path}"

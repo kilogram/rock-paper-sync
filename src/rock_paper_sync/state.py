@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from rock_paper_sync.annotations.common.snapshots import ContentStore, SnapshotStore
+from rock_paper_sync.parser import parse_markdown_file
 
 logger = logging.getLogger("rock_paper_sync.state")
 
@@ -23,22 +24,29 @@ class StateError(Exception):
 
 @dataclass
 class SyncRecord:
-    """Record of a synced file's state."""
+    """Record of a synced file's state.
+
+    Schema v6 changes:
+    - Removed: file_hash_with_markers (unused, parser provides semantic hash)
+    - Added: last_root_generation (cloud versioning for annotation detection)
+    - Added: last_doc_index_hash (per-document change detection including .rm files)
+    """
 
     vault_name: str
     obsidian_path: str
     remarkable_uuid: str
-    content_hash: str
+    content_hash: str  # Semantic hash (markers stripped by parser)
     last_sync_time: int
     page_count: int
     status: str  # 'synced', 'pending', 'error'
-    file_hash_with_markers: str | None = None  # Hash of file including markers (schema v4)
+    last_root_generation: int | None = None  # Cloud root generation number (schema v6)
+    last_doc_index_hash: str | None = None  # Document index hash (schema v6)
 
 
 class StateManager:
     """Manages sync state using SQLite database."""
 
-    SCHEMA_VERSION = 5
+    SCHEMA_VERSION = 6  # Schema v6: Remove file_hash_with_markers, add generation tracking
 
     def __init__(self, db_path: Path) -> None:
         """Initialize state manager with database at given path.
@@ -67,16 +75,17 @@ class StateManager:
         with self.conn:
             self.conn.executescript(
                 """
-                -- File sync state (vault-aware)
+                -- File sync state (vault-aware, schema v6)
                 CREATE TABLE IF NOT EXISTS sync_state (
                     vault_name TEXT NOT NULL,
                     obsidian_path TEXT NOT NULL,
                     remarkable_uuid TEXT NOT NULL,
-                    content_hash TEXT NOT NULL,
-                    file_hash_with_markers TEXT,
+                    content_hash TEXT NOT NULL,  -- Semantic hash (markers stripped)
                     last_sync_time INTEGER NOT NULL,
                     page_count INTEGER NOT NULL,
                     status TEXT NOT NULL DEFAULT 'synced',
+                    last_root_generation INTEGER,  -- Cloud generation number (v6)
+                    last_doc_index_hash TEXT,       -- Document index hash (v6)
                     PRIMARY KEY (vault_name, obsidian_path)
                 );
 
@@ -189,18 +198,19 @@ class StateManager:
             self.conn.execute(
                 """
                 INSERT OR REPLACE INTO sync_state
-                (vault_name, obsidian_path, remarkable_uuid, content_hash, file_hash_with_markers, last_sync_time, page_count, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (vault_name, obsidian_path, remarkable_uuid, content_hash, last_sync_time, page_count, status, last_root_generation, last_doc_index_hash)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.vault_name,
                     record.obsidian_path,
                     record.remarkable_uuid,
                     record.content_hash,
-                    record.file_hash_with_markers,
                     record.last_sync_time,
                     record.page_count,
                     record.status,
+                    record.last_root_generation,
+                    record.last_doc_index_hash,
                 ),
             )
         logger.debug(f"Updated sync state for {record.vault_name}:{record.obsidian_path}")
@@ -361,7 +371,15 @@ class StateManager:
                     continue
 
                 relative_path = str(file_path.relative_to(vault_path))
-                current_hash = self.compute_file_hash(file_path)
+
+                # Parse file to get semantic hash (markers stripped by parser)
+                # This ensures consistent comparison with state.content_hash
+                try:
+                    md_doc = parse_markdown_file(file_path)
+                    current_hash = md_doc.content_hash  # Semantic hash
+                except Exception as e:
+                    logger.warning(f"Failed to parse {file_path}: {e}")
+                    continue
 
                 # Get existing state
                 state = self.get_file_state(vault_name, relative_path)

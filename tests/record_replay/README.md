@@ -12,10 +12,16 @@ Tests are organized by feature, each with:
 | Feature | Test | Fixture | Testdata |
 |---------|------|---------|----------|
 | Highlights | `test_highlights.py` | `test_highlights.md` | `testdata/highlights/` |
+| Highlight Anchors | `test_highlight_anchors.py` | `test_highlights.md` | `testdata/highlights/` |
+| Stroke Anchors | `test_stroke_anchors.py` | `test_ocr_handwriting.md` | `testdata/ocr_handwriting/` |
 | OCR Handwriting | `test_ocr_handwriting.py` | `test_ocr_handwriting.md` | `testdata/ocr_handwriting/` |
+| OCR Corrections | `test_ocr_correction_workflow.py` | `test_ocr_handwriting.md` | `testdata/ocr_handwriting/` |
+| OCR Local Service | `test_ocr_local_service.py` | `test_ocr_handwriting.md` | `testdata/ocr_handwriting/` |
 | Pen Colors | `test_pen_colors.py` | `test_pen_colors.md` | `testdata/pen_colors/` |
 | Pen Widths | `test_pen_widths.py` | `test_pen_widths.md` | `testdata/pen_widths/` |
 | Pen Tools | `test_pen_tools.py` | `test_pen_tools.md` | `testdata/pen_tools/` |
+| **Markdown Modifications** | `test_markdown_modifications.py` | `test_modifications.md` | `testdata/modifications/` |
+| **Full Integration** | `test_full_integration.py` | `test_full_integration.md` | `testdata/full_integration/` |
 
 ## Quick Start
 
@@ -204,6 +210,46 @@ uv run pytest tests/record_replay/ --device-mode=offline
 # Dev: Online mode (real device)
 uv run pytest tests/record_replay/ --device-mode=online --online -s
 ```
+
+## Test Organization
+
+### Individual Feature Tests
+Tests that validate a single feature in isolation:
+- `test_highlights.py` - Basic highlight functionality
+- `test_highlight_anchors.py` - Highlight anchor creation and matching
+- `test_stroke_anchors.py` - Stroke anchor creation and matching
+- `test_ocr_handwriting.py` - OCR from handwriting
+- `test_ocr_correction_workflow.py` - OCR correction detection
+- `test_ocr_local_service.py` - Local OCR service integration
+- `test_pen_colors.py`, `test_pen_widths.py`, `test_pen_tools.py` - Pen properties
+
+### Integration Tests
+Tests that combine multiple features to expose integration issues:
+
+#### `test_markdown_modifications.py`
+Tests annotation re-anchoring after markdown modifications:
+- Upload document and add annotations
+- Modify markdown structure (insert/delete/reformat)
+- Verify annotations re-anchor correctly
+- Critical for testing anchor robustness
+
+**Recording**: `uv run pytest tests/record_replay/test_markdown_modifications.py --online -s`
+
+#### `test_full_integration.py`
+Comprehensive test combining ALL features:
+- Mixed annotations (highlights + strokes + OCR)
+- Markdown modifications
+- OCR corrections after modifications
+- Anchor disambiguation (dense annotation areas)
+- Stress test with extreme structural changes
+
+**Contains 2 test functions**:
+1. `test_full_integration` - Standard integration workflow
+2. `test_integration_conflict_stress` - Extreme modification stress test
+
+**Recording**: `uv run pytest tests/record_replay/test_full_integration.py --online -s`
+
+**Note**: Full integration recording takes 5-10 minutes due to comprehensive annotation requirements.
 
 ## Adding New Tests
 

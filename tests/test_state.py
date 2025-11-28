@@ -380,17 +380,22 @@ class TestFindChangedFiles:
 
     def test_find_changed_no_changes(self, temp_vault: Path, temp_db: Path) -> None:
         """Test that unchanged files are not returned."""
+        from rock_paper_sync.parser import parse_markdown_file
+
         manager = StateManager(temp_db)
 
         # Create and sync file
         test_file = temp_vault / "test.md"
         test_file.write_text("Content")
 
+        # Use semantic hash from parser (schema v6: semantic hash only)
+        md_doc = parse_markdown_file(test_file)
+
         record = SyncRecord(
             vault_name="test-vault",
             obsidian_path="test.md",
             remarkable_uuid="uuid-1",
-            content_hash=manager.compute_file_hash(test_file),
+            content_hash=md_doc.content_hash,  # Semantic hash from parser
             last_sync_time=int(time.time()),
             page_count=1,
             status="synced",

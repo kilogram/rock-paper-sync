@@ -153,9 +153,16 @@ See `docs/MULTI_VAULT.md` for vault configuration details and examples.
 - Per-vault CLI filtering
 - 195 core tests passing
 
+### ✅ Milestone 4: Annotation System
+- Generation-based annotation detection
+- Three-way merge (content + annotations)
+- Snapshot-based restoration
+- Content-addressable storage
+- Automatic cleanup (7-day retention)
+- 668 tests passing
+
 ### 🔮 Future Considerations
-- Bidirectional sync
-- Annotation preservation
+- Full bidirectional sync
 - Image embedding
 - Custom templates
 - Batch operations
