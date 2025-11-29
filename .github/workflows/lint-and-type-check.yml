@@ -19,15 +19,23 @@ jobs:
 
       - name: Install uv
         run: curl -LsSf https://astral.sh/uv/install.sh | sh
+        env:
+          PATH: ${{ env.PATH }}:/home/runner/.local/bin
 
       - name: Sync dependencies
-        run: ~/.cargo/bin/uv sync
+        run: uv sync
+        env:
+          PATH: ${{ env.PATH }}:/home/runner/.local/bin
 
       - name: Run ruff lint
-        run: ~/.cargo/bin/uv run ruff check .
+        run: uv run ruff check .
+        env:
+          PATH: ${{ env.PATH }}:/home/runner/.local/bin
 
       - name: Run ruff format check
-        run: ~/.cargo/bin/uv run ruff format --check .
+        run: uv run ruff format --check .
+        env:
+          PATH: ${{ env.PATH }}:/home/runner/.local/bin
 
   type-check:
     runs-on: ubuntu-latest
@@ -41,9 +49,15 @@ jobs:
 
       - name: Install uv
         run: curl -LsSf https://astral.sh/uv/install.sh | sh
+        env:
+          PATH: ${{ env.PATH }}:/home/runner/.local/bin
 
       - name: Sync dependencies
-        run: ~/.cargo/bin/uv sync
+        run: uv sync
+        env:
+          PATH: ${{ env.PATH }}:/home/runner/.local/bin
 
       - name: Run ty type check
-        run: ~/.cargo/bin/uv run ty check
+        run: uv run ty check
+        env:
+          PATH: ${{ env.PATH }}:/home/runner/.local/bin
