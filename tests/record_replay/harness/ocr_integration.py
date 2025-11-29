@@ -1,21 +1,33 @@
 """OCR integration for record/replay device tests.
 
-Provides OCR service mocking and result recording for device tests.
+Provides OCR service recording (online) and replay (offline) for device tests.
 Allows tests to:
-1. Mock OCRService to return predictable results
-2. Record all OCR requests and responses during test
-3. Compare recorded OCR output to expected values at teardown
+1. Record real OCR service calls during online test execution
+2. Replay recorded responses during offline emulation
+3. Validate OCR results against inline expectations in fixtures
+4. Use fuzzy image matching (pHash) for robust replay
+
+Mode Detection:
+- Online mode (OnlineDevice): Wraps real OCR service to record calls
+- Offline mode (OfflineEmulator): Replays from recorded testdata
+- Mock mode (no device): Falls back to simple mocking for unit tests
 """
 
 import json
+import logging
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 
+from .ocr_recorder import OCRRecorder
+from .ocr_replayer import OCRReplayer, parse_ocr_expectations
+
 if TYPE_CHECKING:
-    pass
+    from .protocol import DeviceInteractionProtocol
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -107,13 +119,114 @@ class OCRIntegrationMixin:
 
         # Skip if OCR not required
         if not getattr(self, "requires_ocr", False):
+            logger.debug("OCR not required for this test - skipping OCR setup")
             return
 
         # Create and inject mocked OCR service
         self._setup_ocr_service()
 
     def _setup_ocr_service(self) -> None:
-        """Create and patch the mocked OCR service."""
+        """Create and configure OCR service based on test mode.
+
+        Mode detection:
+        - Online mode: Wrap real OCR service with OCRRecorder
+        - Offline mode: Use OCRReplayer with recorded testdata
+        - Mock mode: Fall back to simple mocking for unit tests
+        """
+        # Detect mode from device type
+        device = getattr(self, "device", None)
+        mode = self._detect_mode(device)
+
+        logger.info(f"Setting up OCR in {mode} mode")
+
+        if mode == "online":
+            self._setup_online_recording()
+        elif mode == "offline":
+            self._setup_offline_replay()
+        else:
+            self._setup_mock_service()
+
+    def _detect_mode(self, device: "DeviceInteractionProtocol | None") -> str:
+        """Detect test mode from device type.
+
+        Args:
+            device: Device interaction object
+
+        Returns:
+            "online", "offline", or "mock"
+        """
+        if device is None:
+            return "mock"
+
+        # Import here to avoid circular dependencies
+        from .offline import OfflineEmulator
+        from .online import OnlineDevice
+
+        if isinstance(device, OnlineDevice):
+            return "online"
+        elif isinstance(device, OfflineEmulator):
+            return "offline"
+        else:
+            return "mock"
+
+    def _setup_online_recording(self) -> None:
+        """Setup OCR recording for online mode with real service."""
+        from unittest.mock import patch
+
+        from rock_paper_sync.ocr.factory import create_ocr_service
+
+        # Create real OCR service
+        real_service = create_ocr_service(self.config)
+
+        # Wrap with recorder
+        testdata_dir = getattr(self, "testdata_dir", Path("testdata"))
+        self.ocr_recorder = OCRRecorder(real_service, testdata_dir)
+
+        # Patch factory to return recorder
+        self._ocr_patch = patch(
+            "rock_paper_sync.ocr.factory.create_ocr_service",
+            return_value=self.ocr_recorder,
+        )
+        self._ocr_patch.start()
+
+        logger.info("OCR service wrapped with recorder for online mode")
+        self.bench.observe("OCR recording enabled (online mode)")
+
+    def _setup_offline_replay(self) -> None:
+        """Setup OCR replay for offline mode from recordings."""
+        from unittest.mock import patch
+
+        # Parse expectations from fixture if available
+        expectations = []
+        if hasattr(self, "fixture_path") and self.fixture_path.exists():
+            fixture_content = self.fixture_path.read_text()
+            expectations = parse_ocr_expectations(fixture_content)
+            logger.debug(f"Parsed {len(expectations)} OCR expectations from fixture")
+
+        # Create replayer
+        testdata_dir = getattr(self, "testdata_dir", Path("testdata"))
+        self.ocr_replayer = OCRReplayer(testdata_dir, expectations)
+
+        # Load recordings for this test
+        if hasattr(self, "name"):
+            try:
+                self.ocr_replayer.load_recordings(self.name)
+                logger.info(f"Loaded OCR recordings for test '{self.name}'")
+            except FileNotFoundError:
+                logger.warning(f"No OCR recordings found for test '{self.name}'")
+
+        # Patch factory to return replayer
+        self._ocr_patch = patch(
+            "rock_paper_sync.ocr.factory.create_ocr_service",
+            return_value=self.ocr_replayer,
+        )
+        self._ocr_patch.start()
+
+        logger.info("OCR service using replayer for offline mode")
+        self.bench.observe("OCR replay enabled (offline mode)")
+
+    def _setup_mock_service(self) -> None:
+        """Create and patch the mocked OCR service for unit tests."""
         from unittest.mock import patch
 
         from rock_paper_sync.ocr.protocol import OCRResult as OCRResultProto
@@ -181,17 +294,19 @@ class OCRIntegrationMixin:
         )
         self._ocr_patch.start()
 
+        logger.info("OCR service mocked for unit test mode")
         self.bench.observe("OCR service mocked and configured")
 
     def teardown(self) -> None:
         """Verify OCR results and save recordings after test execution."""
+        # Stop OCR patching first (if it was started)
+        if hasattr(self, "_ocr_patch") and self._ocr_patch is not None:
+            self._ocr_patch.stop()
+            self._ocr_patch = None
+
         # Call parent teardown if it exists
         if hasattr(super(), "teardown"):
             super().teardown()
-
-        # Stop OCR patching
-        if hasattr(self, "_ocr_patch"):
-            self._ocr_patch.stop()
 
         # Skip verification if OCR not required
         if not getattr(self, "requires_ocr", False):
@@ -200,8 +315,8 @@ class OCRIntegrationMixin:
         # Verify OCR results
         self._verify_ocr_results()
 
-        # Save recordings if enabled
-        if self.ocr_record_results:
+        # Save recordings if enabled (only in mock mode)
+        if self.ocr_record_results and hasattr(self, "_ocr_recording"):
             self._save_ocr_recording()
 
     def _verify_ocr_results(self) -> None:

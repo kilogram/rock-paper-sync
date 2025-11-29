@@ -102,7 +102,8 @@ uv run pytest --cov=src/rock_paper_sync --cov-report=term-missing
 **IMPORTANT: Never amend commits**
 - Create new commits instead of amending
 - Let the user handle fixups and rebasing
-- Pre-commit hooks may modify files - commit the changes separately if needed
+- Pre-commit hooks may modify files - they will block commit, so they should be
+  included in the intended commit.
 - Run lint and type checks before committing:
   ```bash
   uv run ruff check <files>
