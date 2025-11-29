@@ -21,7 +21,11 @@ class DeviceCredentials:
 
 
 class RmCloudClient:
-    """Client that authenticates as a device and triggers sync notifications."""
+    """Client that authenticates as a device and triggers sync notifications.
+
+    Uses a persistent HTTP session to enable connection pooling and reuse,
+    significantly reducing latency for multiple API calls.
+    """
 
     def __init__(
         self,
@@ -49,6 +53,10 @@ class RmCloudClient:
             )
             logger.debug(f"Credentials file exists: {self.credentials_path.exists()}")
         self.credentials: DeviceCredentials | None = None
+
+        # Use a session for connection pooling and reuse
+        self._session = requests.Session()
+
         self._load_credentials()
 
     def _load_credentials(self) -> None:
@@ -103,7 +111,7 @@ class RmCloudClient:
         }
 
         logger.info(f"Registering device: {device_id}")
-        response = requests.post(url, json=payload)
+        response = self._session.post(url, json=payload)
         response.raise_for_status()
 
         # Response format: just the JWT token as a string
@@ -141,7 +149,7 @@ class RmCloudClient:
         headers = {"Authorization": f"Bearer {self.credentials.device_token}"}
 
         logger.debug("Renewing user token")
-        response = requests.post(url, headers=headers)
+        response = self._session.post(url, headers=headers)
         response.raise_for_status()
 
         user_token = response.text.strip('"')
@@ -168,7 +176,7 @@ class RmCloudClient:
         headers = {"Authorization": f"Bearer {self.credentials.device_token}"}
 
         logger.info("Triggering sync notification")
-        response = requests.post(url, headers=headers)
+        response = self._session.post(url, headers=headers)
         response.raise_for_status()
 
         result = response.json()

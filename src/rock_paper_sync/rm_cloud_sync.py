@@ -325,9 +325,13 @@ class RmCloudSync:
         """Check if sync is enabled (device registered)."""
         return self.client.is_registered()
 
-    def get_root_state(self) -> tuple[list, str | None, int]:
+    def get_root_state(self, use_cache: bool = True) -> tuple[list, str | None, int]:
         """
         Get complete current cloud state for virtual device state initialization.
+
+        Args:
+            use_cache: Whether to use cached state if available (default True).
+                      Set to False to force a fresh fetch from the server.
 
         Returns:
             Tuple of (root_entries, root_hash, generation)
@@ -336,7 +340,14 @@ class RmCloudSync:
             - generation: Current generation number
             If no root exists, returns ([], None, 0)
         """
-        return self.sync_client.get_root_state()
+        return self.sync_client.get_root_state(use_cache=use_cache)
+
+    def invalidate_root_cache(self) -> None:
+        """Invalidate the cached root state.
+
+        Call this after operations that modify the root (uploads, deletes).
+        """
+        self.sync_client.invalidate_root_cache()
 
     def get_document_index_hash(self, doc_uuid: str) -> str | None:
         """
@@ -364,6 +375,27 @@ class RmCloudSync:
                 return entry.hash  # This is the document index hash
 
         return None
+
+    def get_document_index_hashes_batch(self, doc_uuids: list[str]) -> dict[str, str | None]:
+        """
+        Get document index hashes for multiple documents in a single operation.
+
+        More efficient than calling get_document_index_hash() multiple times
+        because it fetches the root state only once.
+
+        Args:
+            doc_uuids: List of document UUIDs to look up
+
+        Returns:
+            Dict mapping doc_uuid to its index hash (or None if not found)
+        """
+        root_entries, _, _ = self.get_root_state()
+
+        # Build lookup map from root entries
+        entry_map = {entry.entry_name: entry.hash for entry in root_entries}
+
+        # Return hashes for requested UUIDs
+        return {uuid: entry_map.get(uuid) for uuid in doc_uuids}
 
     def update_root(self, root_hash: str, generation: int, broadcast: bool = True) -> int:
         """

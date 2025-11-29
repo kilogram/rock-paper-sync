@@ -20,6 +20,24 @@ from rock_paper_sync.sync_v3 import (
 )
 
 
+@pytest.fixture
+def mock_session():
+    """Create a mock requests session for testing."""
+    session = Mock(spec=requests.Session)
+    # Use a Mock for headers that supports update
+    session.headers = Mock()
+    session.headers.update = Mock()
+    return session
+
+
+@pytest.fixture
+def client_with_mock_session(mock_session):
+    """Create a SyncV3Client with a mocked session."""
+    with patch("rock_paper_sync.sync_v3.requests.Session", return_value=mock_session):
+        client = SyncV3Client("http://localhost:3000", "token")
+    return client, mock_session
+
+
 class TestBlobEntry:
     """Tests for BlobEntry dataclass."""
 
@@ -71,34 +89,30 @@ class TestSyncV3ClientInit:
 class TestUploadBlob:
     """Tests for blob upload."""
 
-    @patch("rock_paper_sync.sync_v3.requests.put")
-    def test_upload_blob_success(self, mock_put):
+    def test_upload_blob_success(self, client_with_mock_session):
         """Successful blob upload should call PUT with correct params."""
+        client, mock_session = client_with_mock_session
         mock_response = Mock()
         mock_response.raise_for_status = Mock()
-        mock_put.return_value = mock_response
+        mock_session.put.return_value = mock_response
 
-        client = SyncV3Client("http://localhost:3000", "token")
         content = b"test content"
         blob_hash = "abc123"
 
         client.upload_blob(blob_hash, content)
 
-        mock_put.assert_called_once_with(
+        mock_session.put.assert_called_once_with(
             "http://localhost:3000/sync/v3/files/abc123",
-            headers={"Authorization": "Bearer token"},
             data=content,
         )
         mock_response.raise_for_status.assert_called_once()
 
-    @patch("rock_paper_sync.sync_v3.requests.put")
-    def test_upload_blob_http_error(self, mock_put):
+    def test_upload_blob_http_error(self, client_with_mock_session):
         """HTTP error should be raised."""
+        client, mock_session = client_with_mock_session
         mock_response = Mock()
         mock_response.raise_for_status.side_effect = requests.HTTPError("Upload failed")
-        mock_put.return_value = mock_response
-
-        client = SyncV3Client("http://localhost:3000", "token")
+        mock_session.put.return_value = mock_response
 
         with pytest.raises(requests.HTTPError):
             client.upload_blob("hash", b"content")
@@ -107,14 +121,13 @@ class TestUploadBlob:
 class TestUploadIndex:
     """Tests for index file creation and upload."""
 
-    @patch("rock_paper_sync.sync_v3.requests.put")
-    def test_upload_index_creates_correct_format(self, mock_put):
+    def test_upload_index_creates_correct_format(self, client_with_mock_session):
         """Index should have schema version and sorted entries."""
+        client, mock_session = client_with_mock_session
         mock_response = Mock()
         mock_response.raise_for_status = Mock()
-        mock_put.return_value = mock_response
+        mock_session.put.return_value = mock_response
 
-        client = SyncV3Client("http://localhost:3000", "token")
         entries = [
             BlobEntry("hash2", FILE_TYPE, "b_file.md", 0, 200),
             BlobEntry("hash1", FILE_TYPE, "a_file.md", 0, 100),
@@ -129,16 +142,14 @@ class TestUploadIndex:
         assert lines[2] == "hash2:0:b_file.md:0:200"
 
         # Check upload was called
-        assert mock_put.call_count == 1
+        assert mock_session.put.call_count == 1
 
-    @patch("rock_paper_sync.sync_v3.requests.put")
-    def test_upload_index_empty_entries(self, mock_put):
+    def test_upload_index_empty_entries(self, client_with_mock_session):
         """Empty index should still have schema version."""
+        client, mock_session = client_with_mock_session
         mock_response = Mock()
         mock_response.raise_for_status = Mock()
-        mock_put.return_value = mock_response
-
-        client = SyncV3Client("http://localhost:3000", "token")
+        mock_session.put.return_value = mock_response
 
         index_hash, index_content = client.upload_index([])
 
@@ -150,9 +161,9 @@ class TestUploadIndex:
 class TestGetCurrentGeneration:
     """Tests for getting root generation."""
 
-    @patch("rock_paper_sync.sync_v3.requests.get")
-    def test_get_current_generation_exists(self, mock_get):
+    def test_get_current_generation_exists(self, client_with_mock_session):
         """Existing root should return hash and generation."""
+        client, mock_session = client_with_mock_session
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
@@ -160,43 +171,36 @@ class TestGetCurrentGeneration:
             "generation": 42,
         }
         mock_response.raise_for_status = Mock()
-        mock_get.return_value = mock_response
-
-        client = SyncV3Client("http://localhost:3000", "token")
+        mock_session.get.return_value = mock_response
 
         root_hash, generation = client.get_current_generation()
 
         assert root_hash == "root-hash-123"
         assert generation == 42
-        mock_get.assert_called_once_with(
+        mock_session.get.assert_called_once_with(
             "http://localhost:3000/sync/v3/root",
-            headers={"Authorization": "Bearer token"},
         )
 
-    @patch("rock_paper_sync.sync_v3.requests.get")
-    def test_get_current_generation_not_found(self, mock_get):
+    def test_get_current_generation_not_found(self, client_with_mock_session):
         """404 should return None, 0 (new account)."""
+        client, mock_session = client_with_mock_session
         mock_response = Mock()
         mock_response.status_code = 404
-        mock_get.return_value = mock_response
-
-        client = SyncV3Client("http://localhost:3000", "token")
+        mock_session.get.return_value = mock_response
 
         root_hash, generation = client.get_current_generation()
 
         assert root_hash is None
         assert generation == 0
 
-    @patch("rock_paper_sync.sync_v3.requests.get")
-    def test_get_current_generation_missing_generation_field(self, mock_get):
+    def test_get_current_generation_missing_generation_field(self, client_with_mock_session):
         """Missing generation field should default to 0."""
+        client, mock_session = client_with_mock_session
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = {"hash": "root-hash"}
         mock_response.raise_for_status = Mock()
-        mock_get.return_value = mock_response
-
-        client = SyncV3Client("http://localhost:3000", "token")
+        mock_session.get.return_value = mock_response
 
         root_hash, generation = client.get_current_generation()
 
@@ -207,32 +211,27 @@ class TestGetCurrentGeneration:
 class TestDownloadBlob:
     """Tests for blob download."""
 
-    @patch("rock_paper_sync.sync_v3.requests.get")
-    def test_download_blob_success(self, mock_get):
+    def test_download_blob_success(self, client_with_mock_session):
         """Successful download should return content."""
+        client, mock_session = client_with_mock_session
         mock_response = Mock()
         mock_response.content = b"blob content here"
         mock_response.raise_for_status = Mock()
-        mock_get.return_value = mock_response
-
-        client = SyncV3Client("http://localhost:3000", "token")
+        mock_session.get.return_value = mock_response
 
         content = client.download_blob("blob-hash-123")
 
         assert content == b"blob content here"
-        mock_get.assert_called_once_with(
+        mock_session.get.assert_called_once_with(
             "http://localhost:3000/sync/v3/files/blob-hash-123",
-            headers={"Authorization": "Bearer token"},
         )
 
-    @patch("rock_paper_sync.sync_v3.requests.get")
-    def test_download_blob_http_error(self, mock_get):
+    def test_download_blob_http_error(self, client_with_mock_session):
         """HTTP error should be raised."""
+        client, mock_session = client_with_mock_session
         mock_response = Mock()
         mock_response.raise_for_status.side_effect = requests.HTTPError("Not found")
-        mock_get.return_value = mock_response
-
-        client = SyncV3Client("http://localhost:3000", "token")
+        mock_session.get.return_value = mock_response
 
         with pytest.raises(requests.HTTPError):
             client.download_blob("missing-hash")
@@ -324,23 +323,20 @@ class TestGetRootDocuments:
 class TestUpdateRoot:
     """Tests for updating root hash tree."""
 
-    @patch("rock_paper_sync.sync_v3.requests.put")
-    def test_update_root_success(self, mock_put):
+    def test_update_root_success(self, client_with_mock_session):
         """Successful update should return new generation."""
+        client, mock_session = client_with_mock_session
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = {"generation": 6}
         mock_response.raise_for_status = Mock()
-        mock_put.return_value = mock_response
-
-        client = SyncV3Client("http://localhost:3000", "token")
+        mock_session.put.return_value = mock_response
 
         new_gen = client.update_root("new-root-hash", 5, broadcast=True)
 
         assert new_gen == 6
-        mock_put.assert_called_once_with(
+        mock_session.put.assert_called_once_with(
             "http://localhost:3000/sync/v3/root",
-            headers={"Authorization": "Bearer token"},
             json={
                 "generation": 5,
                 "hash": "new-root-hash",
@@ -348,17 +344,20 @@ class TestUpdateRoot:
             },
         )
 
-    @patch.object(SyncV3Client, "get_current_generation")
-    @patch("rock_paper_sync.sync_v3.requests.put")
-    def test_update_root_conflict(self, mock_put, mock_get_gen):
+    def test_update_root_conflict(self, client_with_mock_session):
         """409 conflict should raise GenerationConflictError."""
-        mock_response = Mock()
-        mock_response.status_code = 409
-        mock_put.return_value = mock_response
+        client, mock_session = client_with_mock_session
+        # First call for update_root - returns 409
+        mock_conflict_response = Mock()
+        mock_conflict_response.status_code = 409
+        # Second call for get_current_generation
+        mock_gen_response = Mock()
+        mock_gen_response.status_code = 200
+        mock_gen_response.json.return_value = {"hash": "current-hash", "generation": 10}
+        mock_gen_response.raise_for_status = Mock()
 
-        mock_get_gen.return_value = ("current-hash", 10)
-
-        client = SyncV3Client("http://localhost:3000", "token")
+        mock_session.put.return_value = mock_conflict_response
+        mock_session.get.return_value = mock_gen_response
 
         with pytest.raises(GenerationConflictError) as exc_info:
             client.update_root("new-root-hash", 5, broadcast=True)
@@ -366,20 +365,18 @@ class TestUpdateRoot:
         assert exc_info.value.expected == 5
         assert exc_info.value.actual == 10
 
-    @patch("rock_paper_sync.sync_v3.requests.put")
-    def test_update_root_no_broadcast(self, mock_put):
+    def test_update_root_no_broadcast(self, client_with_mock_session):
         """broadcast=False should be passed in payload."""
+        client, mock_session = client_with_mock_session
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = {"generation": 2}
         mock_response.raise_for_status = Mock()
-        mock_put.return_value = mock_response
-
-        client = SyncV3Client("http://localhost:3000", "token")
+        mock_session.put.return_value = mock_response
 
         client.update_root("hash", 1, broadcast=False)
 
-        call_args = mock_put.call_args
+        call_args = mock_session.put.call_args
         assert call_args[1]["json"]["broadcast"] is False
 
 

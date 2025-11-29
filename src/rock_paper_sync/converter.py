@@ -266,6 +266,8 @@ class SyncEngine:
         vault_name: str,
         relative_path: str,
         doc_uuid: str,
+        current_generation: int | None = None,
+        doc_hash_map: dict[str, str | None] | None = None,
     ) -> bool:
         """
         Check if annotations should be downloaded from the device.
@@ -277,6 +279,8 @@ class SyncEngine:
             vault_name: Name of the vault
             relative_path: Relative path within vault
             doc_uuid: Document UUID
+            current_generation: Pre-fetched cloud generation (avoids redundant API call)
+            doc_hash_map: Pre-fetched map of doc_uuid -> hash (avoids redundant API calls)
 
         Returns:
             True if annotations should be downloaded, False otherwise
@@ -297,9 +301,14 @@ class SyncEngine:
             )
             return False
 
-        # Get current cloud state
-        _, _, current_generation = self.cloud_sync.get_root_state()
-        current_doc_hash = self.cloud_sync.get_document_index_hash(doc_uuid)
+        # Use pre-fetched cloud state if provided, otherwise fetch
+        if current_generation is None:
+            _, _, current_generation = self.cloud_sync.get_root_state()
+
+        if doc_hash_map is not None:
+            current_doc_hash = doc_hash_map.get(doc_uuid)
+        else:
+            current_doc_hash = self.cloud_sync.get_document_index_hash(doc_uuid)
 
         logger.debug(
             f"Annotation check for {vault_name}:{relative_path}: "
@@ -752,6 +761,11 @@ class SyncEngine:
         Checks all previously-synced files (not in content_changed_files) for
         annotation changes using cloud versioning primitives.
 
+        Uses batched cloud state fetching to avoid redundant API calls:
+        - Fetches root state once (not per-file)
+        - Extracts all document hashes in one pass
+        - Compares against stored state without additional network requests
+
         Args:
             vault: Vault configuration
             content_changed_files: Files already identified as content-changed
@@ -776,26 +790,50 @@ class SyncEngine:
         # Convert content-changed files to relative paths for exclusion
         content_changed_paths = {str(f.relative_to(vault.path)) for f in content_changed_files}
 
-        # Check each synced file for annotation changes
+        # Batch fetch: Get cloud state once for all files
+        # This avoids redundant get_root_state() calls for each file
+        _, _, current_generation = self.cloud_sync.get_root_state()
+
+        # Collect all doc UUIDs to check (excluding content-changed files)
+        files_to_check: list[tuple[str, str, Path]] = []
         for relative_path, doc_uuid in synced_files:
-            # Skip if content already changed
             if relative_path in content_changed_paths:
                 logger.debug(
                     f"[{correlation_id}] Skipping {relative_path} (content already changed)"
                 )
                 continue
 
-            # Check if file still exists
             file_path = vault.path / relative_path
             if not file_path.exists():
                 logger.debug(f"[{correlation_id}] Skipping {relative_path} (file deleted)")
-                continue  # Will be handled as deletion
+                continue
 
-            # Check for annotation changes
+            files_to_check.append((relative_path, doc_uuid, file_path))
+
+        if not files_to_check:
+            logger.debug(f"[{correlation_id}] No files to check for annotation changes")
+            return []
+
+        # Batch fetch all document hashes in one call
+        doc_uuids = [doc_uuid for _, doc_uuid, _ in files_to_check]
+        doc_hash_map = self.cloud_sync.get_document_index_hashes_batch(doc_uuids)
+
+        logger.debug(
+            f"[{correlation_id}] Fetched {len(doc_hash_map)} document hashes in single batch"
+        )
+
+        # Check each file for annotation changes using pre-fetched data
+        for relative_path, doc_uuid, file_path in files_to_check:
             logger.debug(
                 f"[{correlation_id}] Checking annotations for {vault.name}:{relative_path} (uuid={doc_uuid})"
             )
-            if self.should_download_annotations(vault.name, relative_path, doc_uuid):
+            if self.should_download_annotations(
+                vault.name,
+                relative_path,
+                doc_uuid,
+                current_generation=current_generation,
+                doc_hash_map=doc_hash_map,
+            ):
                 logger.info(
                     f"[{correlation_id}] Annotation-only change detected: {vault.name}:{relative_path}"
                 )

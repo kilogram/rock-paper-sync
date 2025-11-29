@@ -49,6 +49,9 @@ class SyncV3Client:
     Client for rm_cloud Sync v3 protocol.
 
     Uploads documents using hash-based blob storage.
+
+    Uses a persistent HTTP session to enable connection pooling and reuse,
+    significantly reducing latency for multiple API calls.
     """
 
     # Default number of retry attempts for optimistic concurrency control
@@ -66,9 +69,43 @@ class SyncV3Client:
         self.device_token = device_token
         self.headers = {"Authorization": f"Bearer {device_token}"}
 
+        # Use a session for connection pooling and reuse
+        self._session = requests.Session()
+        self._session.headers.update(self.headers)
+
+        # Cache for root state to avoid redundant fetches during a sync operation
+        self._root_cache: tuple[list[BlobEntry], str | None, int] | None = None
+
     def _sha256(self, data: bytes) -> str:
         """Calculate SHA256 hash of data."""
         return hashlib.sha256(data).hexdigest()
+
+    def invalidate_root_cache(self) -> None:
+        """Invalidate the cached root state.
+
+        Call this after operations that modify the root (uploads, deletes).
+        """
+        self._root_cache = None
+
+    def get_cached_root_state(self) -> tuple[list[BlobEntry], str | None, int] | None:
+        """Get the cached root state if available.
+
+        Returns:
+            Cached (root_entries, root_hash, generation) or None if not cached.
+        """
+        return self._root_cache
+
+    def set_root_cache(
+        self, entries: list[BlobEntry], root_hash: str | None, generation: int
+    ) -> None:
+        """Set the root cache.
+
+        Args:
+            entries: Root entries to cache
+            root_hash: Root hash
+            generation: Generation number
+        """
+        self._root_cache = (entries, root_hash, generation)
 
     def upload_blob(self, blob_hash: str, content: bytes) -> None:
         """
@@ -84,7 +121,7 @@ class SyncV3Client:
         url = f"{self.base_url}/sync/v3/files/{blob_hash}"
 
         logger.debug(f"Uploading blob {blob_hash} ({len(content)} bytes)")
-        response = requests.put(url, headers=self.headers, data=content)
+        response = self._session.put(url, data=content)
         response.raise_for_status()
 
     def upload_index(self, entries: list[BlobEntry]) -> tuple[str, bytes]:
@@ -122,7 +159,7 @@ class SyncV3Client:
         """
         url = f"{self.base_url}/sync/v3/root"
 
-        response = requests.get(url, headers=self.headers)
+        response = self._session.get(url)
         if response.status_code == 404:
             logger.info("No root exists yet (new account)")
             return None, 0
@@ -131,12 +168,17 @@ class SyncV3Client:
         data = response.json()
         return data.get("hash"), data.get("generation", 0)
 
-    def get_root_state(self) -> tuple[list[BlobEntry], str | None, int]:
+    def get_root_state(self, use_cache: bool = True) -> tuple[list[BlobEntry], str | None, int]:
         """
         Get complete current cloud state (entries, hash, generation).
 
         Reads the current cloud root state needed to initialize VirtualDeviceState
-        for atomic multi-step operations.
+        for atomic multi-step operations. Uses caching to avoid redundant fetches
+        during a sync operation.
+
+        Args:
+            use_cache: Whether to use cached state if available (default True).
+                      Set to False to force a fresh fetch from the server.
 
         Returns:
             Tuple of (root_entries, root_hash, generation)
@@ -148,16 +190,27 @@ class SyncV3Client:
         Raises:
             requests.HTTPError: If request fails
         """
+        # Return cached state if available
+        if use_cache and self._root_cache is not None:
+            logger.debug("Using cached root state")
+            return self._root_cache
+
         root_hash, current_gen = self.get_current_generation()
 
         if not root_hash:
             logger.info("No root exists yet")
-            return [], None, 0
+            result = ([], None, 0)
+            self._root_cache = result
+            return result
 
         # Get entries from root
         root_entries = self.get_root_documents()
 
-        return root_entries, root_hash, current_gen
+        # Cache the result
+        result = (root_entries, root_hash, current_gen)
+        self._root_cache = result
+
+        return result
 
     def download_blob(self, blob_hash: str) -> bytes:
         """
@@ -174,7 +227,7 @@ class SyncV3Client:
         """
         url = f"{self.base_url}/sync/v3/files/{blob_hash}"
 
-        response = requests.get(url, headers=self.headers)
+        response = self._session.get(url)
         response.raise_for_status()
         return response.content
 
@@ -322,16 +375,21 @@ class SyncV3Client:
         }
 
         logger.info(f"Updating root to {root_hash} (gen {generation}, broadcast={broadcast})")
-        response = requests.put(url, headers=self.headers, json=payload)
+        response = self._session.put(url, json=payload)
 
         # Check for generation conflict (optimistic concurrency control)
         if response.status_code == 409:
             # Conflict - someone else updated the root
+            # Invalidate cache since we know our state is stale
+            self.invalidate_root_cache()
             current_hash, current_gen = self.get_current_generation()
             logger.warning(f"Generation conflict: expected {generation}, server has {current_gen}")
             raise GenerationConflictError(expected=generation, actual=current_gen)
 
         response.raise_for_status()
+
+        # Invalidate cache since root has changed
+        self.invalidate_root_cache()
 
         result = response.json()
         new_generation = result.get("generation", generation + 1)
