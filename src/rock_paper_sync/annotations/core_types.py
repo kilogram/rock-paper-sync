@@ -498,17 +498,86 @@ class HeuristicTextAnchor:
     def find_anchor(
         self, annotation_text: str, old_document: str, old_position: tuple[float, float]
     ) -> TextAnchor:
-        """Find annotation in old document using substring matching."""
+        """Find annotation in old document using text + position matching.
+
+        When multiple occurrences exist, uses BOTH X and Y position hints
+        to select the correct one based on estimated position from character
+        offset and word-wrapping calculation.
+
+        Uses layout parameters from rock_paper_sync.layout.constants.
+        """
         import difflib
 
-        # Try exact match first
-        offset = old_document.find(annotation_text)
+        # Import layout constants from single source of truth
+        from rock_paper_sync.layout.constants import (
+            CHAR_WIDTH,
+            CHARS_PER_LINE,
+            LINE_HEIGHT,
+            TEXT_POS_X,
+            TEXT_POS_Y,
+        )
 
-        if offset != -1:
-            # Exact match found
+        def estimate_position(offset: int) -> tuple[float, float]:
+            """Estimate (x, y) position for a character offset."""
+            # Count lines before this offset (explicit newlines)
+            lines_before = old_document[:offset].count("\n")
+
+            # Find start of current line
+            line_start = old_document.rfind("\n", 0, offset) + 1
+
+            # Characters from line start to offset
+            chars_in_line = offset - line_start
+
+            # Word-wrap: additional lines from characters in current paragraph
+            # Find paragraph start
+            para_start = old_document.rfind("\n\n", 0, offset)
+            para_start = para_start + 2 if para_start != -1 else 0
+            chars_in_para = offset - para_start
+            wrap_lines = chars_in_para // CHARS_PER_LINE
+
+            total_lines = lines_before + wrap_lines
+            x_in_line = chars_in_line % CHARS_PER_LINE
+
+            est_x = TEXT_POS_X + x_in_line * CHAR_WIDTH
+            est_y = TEXT_POS_Y + total_lines * LINE_HEIGHT
+
+            return (est_x, est_y)
+
+        # Find ALL occurrences of the annotation text
+        all_offsets: list[int] = []
+        start = 0
+        while True:
+            pos = old_document.find(annotation_text, start)
+            if pos == -1:
+                break
+            all_offsets.append(pos)
+            start = pos + 1
+
+        if all_offsets:
+            # Use position hint to select best match when multiple exist
+            if len(all_offsets) == 1:
+                offset = all_offsets[0]
+            else:
+                # Calculate distance using BOTH X and Y positions
+                old_x_hint, old_y_hint = old_position
+                best_offset = all_offsets[0]
+                best_distance = float("inf")
+
+                for off in all_offsets:
+                    est_x, est_y = estimate_position(off)
+                    # Euclidean distance weighted more heavily on Y (different lines)
+                    # Y is more reliable for line disambiguation
+                    distance = ((est_x - old_x_hint) ** 2 + (est_y - old_y_hint) ** 2 * 4) ** 0.5
+
+                    if distance < best_distance:
+                        best_distance = distance
+                        best_offset = off
+
+                offset = best_offset
+
             confidence = 1.0
         else:
-            # Fuzzy match using difflib
+            # Try fuzzy match
             matcher = difflib.SequenceMatcher(None, annotation_text, old_document)
             match = matcher.find_longest_match(0, len(annotation_text), 0, len(old_document))
 
@@ -541,14 +610,19 @@ class HeuristicTextAnchor:
         )
 
     def resolve_anchor(self, anchor: TextAnchor, new_document: str) -> int | None:
-        """Resolve anchor in new document using context-aware matching."""
+        """Resolve anchor in new document using context and position matching.
+
+        When text is inserted/deleted, context around the anchor changes.
+        We use both context matching AND position-based estimation to find
+        the correct occurrence.
+        """
         import difflib
 
         # Try exact match first
         offset = new_document.find(anchor.text_content)
 
         if offset != -1:
-            # If multiple matches, use context to disambiguate
+            # If multiple matches, use context AND position to disambiguate
             all_offsets = []
             start = 0
             while True:
@@ -561,12 +635,16 @@ class HeuristicTextAnchor:
             if len(all_offsets) == 1:
                 return all_offsets[0]
 
-            # Multiple matches - use context
+            # Multiple matches - combine context and position scoring
             best_offset = all_offsets[0]
-            best_score = 0.0
+            best_score = -float("inf")
+
+            # Estimate expected position in new doc based on old offset
+            # This helps when context changes due to text insertion
+            old_offset = anchor.char_offset
 
             for candidate_offset in all_offsets:
-                # Check context match
+                # Context score (0.0 to 1.0)
                 before = new_document[
                     max(0, candidate_offset - self.context_window) : candidate_offset
                 ]
@@ -578,8 +656,36 @@ class HeuristicTextAnchor:
 
                 before_score = difflib.SequenceMatcher(None, anchor.context_before, before).ratio()
                 after_score = difflib.SequenceMatcher(None, anchor.context_after, after).ratio()
+                context_score = (before_score + after_score) / 2
 
-                score = (before_score + after_score) / 2
+                # Position score: prefer offsets close to or after old offset
+                # When text is inserted before, new offset > old offset
+                # When text is deleted before, new offset < old offset
+                # We expect the offset to move, so we compare relative positions
+                if old_offset is not None:
+                    # Calculate position-based score
+                    # Offsets >= old_offset are likely correct (text inserted before)
+                    # Offsets near old_offset are good
+                    offset_diff = candidate_offset - old_offset
+                    # Normalize: 1.0 for same position, decreasing for distance
+                    # But give bonus for offsets that moved forward (text insertion)
+                    if offset_diff >= 0:
+                        # Offset moved forward or stayed same - likely correct
+                        position_score = 1.0 / (1.0 + offset_diff / 100.0)
+                    else:
+                        # Offset moved backward - less likely (unless text deleted)
+                        position_score = 0.5 / (1.0 + abs(offset_diff) / 100.0)
+                else:
+                    position_score = 0.5
+
+                # Combine scores: weight context more if it's confident
+                if context_score > 0.7:
+                    # Strong context match - trust it
+                    score = context_score * 0.8 + position_score * 0.2
+                else:
+                    # Weak context - rely more on position
+                    score = context_score * 0.4 + position_score * 0.6
+
                 if score > best_score:
                     best_score = score
                     best_offset = candidate_offset
@@ -597,129 +703,7 @@ class HeuristicTextAnchor:
         return None
 
 
-class WordWrapLayoutEngine:
-    """Word-wrapping layout engine using character width estimation."""
+# Re-export WordWrapLayoutEngine from the layout module for backwards compatibility
+# The canonical implementation is now in rock_paper_sync.layout.engine
 
-    def __init__(
-        self,
-        text_width: float = 750.0,
-        avg_char_width: float = 15.0,  # Calibrated from device (2025-11-17)
-        line_height: float = 50.0,
-    ):
-        """Initialize word wrap layout engine.
-
-        Args:
-            text_width: Text width in pixels (from RootTextBlock.width)
-            avg_char_width: Average character width (calibrated: 15.0px from device measurements)
-            line_height: Line height in pixels (calibrated: 50.0px verified from device)
-        """
-        self.text_width = text_width
-        self.avg_char_width = avg_char_width
-        self.line_height = line_height
-
-    def calculate_line_breaks(self, text: str, width: float) -> list[int]:
-        """Calculate line breaks using word-wrapping algorithm.
-
-        Algorithm:
-        1. Split text into words
-        2. Fill each line greedily until next word would overflow
-        3. Break at word boundaries (like Qt's QTextLayout)
-        4. Handle explicit newlines
-
-        Returns:
-            List of character offsets where lines start
-        """
-        if not text:
-            return [0]
-
-        line_breaks = [0]  # First line starts at 0
-        chars_per_line = int(width / self.avg_char_width)
-
-        # Track current position in text
-        pos = 0
-        line_length = 0  # Length of current line in characters
-
-        while pos < len(text):
-            # Check for explicit newline
-            if text[pos] == "\n":
-                # Start new line after the newline
-                pos += 1
-                if pos < len(text):
-                    line_breaks.append(pos)
-                line_length = 0
-                continue
-
-            # Find next word boundary (space or newline or end of text)
-            word_start = pos
-            word_end = pos
-            while word_end < len(text) and text[word_end] not in (" ", "\n"):
-                word_end += 1
-
-            word_length = word_end - word_start
-
-            # Check if we need a space before this word
-            space_needed = 1 if line_length > 0 else 0
-
-            # Check if word fits on current line
-            if line_length + space_needed + word_length > chars_per_line and line_length > 0:
-                # Word doesn't fit, start new line
-                line_breaks.append(pos)
-                line_length = 0
-                space_needed = 0
-
-            # Add word to current line
-            line_length += space_needed + word_length
-            pos = word_end
-
-            # If we're at a space, consume it
-            if pos < len(text) and text[pos] == " ":
-                line_length += 1  # Count the space in line length
-                pos += 1
-
-        return line_breaks
-
-    def offset_to_position(
-        self, offset: int, text: str, origin: tuple[float, float], width: float
-    ) -> tuple[float, float]:
-        """Convert character offset to (x, y) coordinates.
-
-        Args:
-            offset: Character offset in the text (0-based)
-            text: Full text content
-            origin: (x, y) origin point for text rendering
-            width: Available width for text
-
-        Returns:
-            (x, y) coordinates for the character at the given offset
-        """
-        # Clamp offset to valid range
-        offset = max(0, min(offset, len(text)))
-
-        line_breaks = self.calculate_line_breaks(text, width)
-
-        # Find which line this offset is on
-        # We want the LAST line break that is <= offset
-        line_num = 0
-        line_start = 0
-        for i in range(len(line_breaks) - 1, -1, -1):
-            if offset >= line_breaks[i]:
-                line_num = i
-                line_start = line_breaks[i]
-                break
-
-        # Calculate offset within the line
-        offset_in_line = offset - line_start
-
-        # Calculate position
-        x = origin[0] + (offset_in_line * self.avg_char_width)
-        y = origin[1] + (line_num * self.line_height)
-
-        return (x, y)
-
-    def get_line_height(self) -> float:
-        """Return line height in pixels."""
-        return self.line_height
-
-    def get_avg_char_width(self) -> float:
-        """Return average character width in pixels."""
-        return self.avg_char_width
+__all_layout__ = ["WordWrapLayoutEngine"]

@@ -27,7 +27,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .protocol import DeviceInteractionManager, DocumentState
+from .protocol import DeviceInteractionManager, DocumentState, derive_test_id
 from .testdata import PhaseData, TestdataStore
 
 if TYPE_CHECKING:
@@ -63,20 +63,17 @@ class OnlineDevice(DeviceInteractionManager):
         workspace: "WorkspaceManager",
         testdata_store: TestdataStore,
         bench: "Bench",
-        cloud_url: str = "http://localhost:3000",
     ) -> None:
         """Initialize online device recorder.
 
         Args:
-            workspace: Workspace manager for sync operations
+            workspace: Workspace manager for sync operations (provides cloud_url)
             testdata_store: Store for saving testdata artifacts
             bench: Bench utilities for logging
-            cloud_url: Cloud URL (rmfakecloud or real cloud)
         """
         self.workspace = workspace
         self.testdata_store = testdata_store
         self.bench = bench
-        self.cloud_url = cloud_url
 
         # Recording state
         self._current_test_id: str | None = None
@@ -88,6 +85,8 @@ class OnlineDevice(DeviceInteractionManager):
         """Begin recording a test.
 
         Creates directory structure and prepares to capture artifacts.
+        Automatically cleans up any existing testdata for this test_id
+        (git can restore if needed).
 
         Args:
             test_id: Unique test identifier
@@ -98,16 +97,42 @@ class OnlineDevice(DeviceInteractionManager):
         self._current_phase = 0
         self._phases = []
 
-        # Create testdata directory
+        # Auto-cleanup existing testdata (git can restore if needed)
         test_dir = self.testdata_store.base_dir / test_id
+        if test_dir.exists():
+            shutil.rmtree(test_dir)
+            self.bench.info(f"Cleaned up existing testdata: {test_id}")
+
+        # Create fresh testdata directory
         test_dir.mkdir(parents=True, exist_ok=True)
 
         self.bench.ok(f"Started recording: {test_id}")
         if description:
             self.bench.info(f"Description: {description}")
 
+    def start_test_for_fixture(self, fixture_path: Path, description: str = "") -> str:
+        """Begin recording a test, deriving test_id from fixture path.
+
+        This is the preferred way to start tests as it ensures test_id
+        matches the fixture, avoiding redundant recordings.
+
+        Args:
+            fixture_path: Path to the fixture markdown file
+            description: Human-readable test description
+
+        Returns:
+            The derived test_id
+        """
+        test_id = derive_test_id(fixture_path)
+        self.start_test(test_id, description)
+        return test_id
+
     def upload_document(self, markdown_path: Path) -> str:
         """Upload document and capture initial phase.
+
+        Captures two phases:
+        - phase_0 "initial": Vault state before sync (no rm files)
+        - phase_1 "post_upload": State after sync (rm files we uploaded)
 
         Args:
             markdown_path: Path to markdown file
@@ -121,7 +146,7 @@ class OnlineDevice(DeviceInteractionManager):
         if not self._current_test_id:
             raise RuntimeError("No test started - call start_test() first")
 
-        # Save initial vault state (phase 0)
+        # Save initial vault state (phase 0) - before any sync
         self._capture_phase(
             phase_num=0, phase_name="initial", action="setup", prompt="Initial vault state saved"
         )
@@ -145,6 +170,17 @@ class OnlineDevice(DeviceInteractionManager):
 
         self.bench.ok(f"Uploaded document: {doc_uuid}")
 
+        # Download fresh rm files from cloud to capture what we uploaded
+        self._download_rm_files_to_cache(doc_uuid)
+
+        # Capture phase 1 - the rm files we just uploaded
+        self._capture_phase(
+            phase_num=1,
+            phase_name="post_upload",
+            action="upload",
+            prompt="Captured post-upload state (rm files we synced up)",
+        )
+
         # Prompt user to wait for document to appear on device
         self.bench.prompt_user(
             "Document uploaded and syncing to your device...",
@@ -152,7 +188,7 @@ class OnlineDevice(DeviceInteractionManager):
             "Then press Enter to continue...",
         )
 
-        self._current_phase = 1
+        self._current_phase = 2
 
         return doc_uuid
 
@@ -249,23 +285,75 @@ class OnlineDevice(DeviceInteractionManager):
         if ret != 0:
             raise RuntimeError(f"Sync failed: {err}")
 
+    def capture_phase(self, phase_name: str, action: str = "capture") -> None:
+        """Manually capture a phase at the current state.
+
+        Use this after trigger_sync() or any operation to capture the current
+        vault and device state as a named phase.
+
+        Downloads fresh rm files from cloud to ensure we capture what was synced.
+
+        Args:
+            phase_name: Name for this phase (e.g., "post_modification")
+            action: Action description for the phase metadata
+        """
+        if not self._current_test_id:
+            raise RuntimeError("No test started - call start_test() first")
+
+        # Download fresh rm files from cloud to capture current state
+        doc_uuid = self.workspace.get_document_uuid()
+        if doc_uuid:
+            self._download_rm_files_to_cache(doc_uuid)
+
+        self._capture_phase(
+            phase_num=self._current_phase,
+            phase_name=phase_name,
+            action=action,
+            prompt=f"Captured phase: {phase_name}",
+        )
+        self._current_phase += 1
+
     def get_document_state(self, doc_uuid: str) -> DocumentState:
-        """Get current document state from local cache.
+        """Get current document state by downloading fresh from cloud.
+
+        Downloads .rm files directly from reMarkable cloud to ensure we get
+        the latest version after any sync operations that may have
+        adjusted annotation positions.
 
         Args:
             doc_uuid: Document UUID
 
         Returns:
-            Document state
+            Document state with fresh .rm files from cloud
         """
+        import tempfile
+
+        from rock_paper_sync.rm_cloud_client import RmCloudClient
+        from rock_paper_sync.rm_cloud_sync import RmCloudSync
+
         rm_files: dict[str, bytes] = {}
         page_uuids: list[str] = []
 
-        cached_files = self.workspace.get_cached_rm_files()
-        for rm_path in sorted(cached_files):
-            page_uuid = rm_path.stem
-            page_uuids.append(page_uuid)
-            rm_files[page_uuid] = rm_path.read_bytes()
+        # Create cloud client and sync instance (cloud_url from workspace config)
+        client = RmCloudClient(base_url=self.workspace.cloud_url)
+        sync = RmCloudSync(base_url=self.workspace.cloud_url, client=client)
+
+        # Get page UUIDs from cloud
+        try:
+            page_uuids = sync.get_existing_page_uuids(doc_uuid)
+        except Exception as e:
+            self.bench.warn(f"Failed to get page UUIDs: {e}")
+            page_uuids = []
+
+        if page_uuids:
+            # Download fresh .rm files from cloud to temp directory
+            with tempfile.TemporaryDirectory() as temp_dir:
+                temp_path = Path(temp_dir)
+                downloaded_files = sync.download_page_rm_files(doc_uuid, page_uuids, temp_path)
+                for i, rm_path in enumerate(downloaded_files):
+                    if rm_path and rm_path.exists():
+                        page_uuid = page_uuids[i]
+                        rm_files[page_uuid] = rm_path.read_bytes()
 
         has_annotations = len(rm_files) > 0
 
@@ -323,6 +411,25 @@ class OnlineDevice(DeviceInteractionManager):
         self._current_phase = 0
         self._phases = []
 
+    def observe_result(self, message: str = "") -> None:
+        """Pause for user to observe result on device.
+
+        Prompts user to view the synced content on their device and approve
+        that it looks correct before proceeding to cleanup/unsync.
+
+        Args:
+            message: Optional message describing what to observe
+        """
+        default_msg = "Please observe the result on your device."
+        observe_msg = message if message else default_msg
+
+        self.bench.prompt_user(
+            "📱 OBSERVE RESULT",
+            observe_msg,
+            "Verify the synced content looks correct on your device.",
+            "Press Enter when you're ready to continue...",
+        )
+
     def cleanup(self) -> None:
         """Cleanup after test with user confirmation.
 
@@ -335,6 +442,35 @@ class OnlineDevice(DeviceInteractionManager):
             "Please wait for the document to be removed from your device.",
             "Then press Enter to complete cleanup...",
         )
+
+    def _download_rm_files_to_cache(self, doc_uuid: str) -> None:
+        """Download rm files from cloud and save to cache directory.
+
+        This ensures we can capture the rm files that were uploaded,
+        even though the sync process doesn't save uploaded files to cache.
+
+        Args:
+            doc_uuid: Document UUID
+        """
+        from rock_paper_sync.rm_cloud_client import RmCloudClient
+        from rock_paper_sync.rm_cloud_sync import RmCloudSync
+
+        client = RmCloudClient(base_url=self.workspace.cloud_url)
+        sync = RmCloudSync(base_url=self.workspace.cloud_url, client=client)
+
+        try:
+            page_uuids = sync.get_existing_page_uuids(doc_uuid)
+            if page_uuids:
+                # Create cache directory matching get_cached_rm_files() expectations
+                cache_dir = self.workspace.cache_dir / "annotations" / doc_uuid
+                cache_dir.mkdir(parents=True, exist_ok=True)
+
+                # Download rm files directly to cache
+                downloaded = sync.download_page_rm_files(doc_uuid, page_uuids, cache_dir)
+                count = sum(1 for p in downloaded if p and p.exists())
+                self.bench.observe(f"Downloaded {count} rm file(s) to cache")
+        except Exception as e:
+            self.bench.warn(f"Failed to download rm files to cache: {e}")
 
     def _capture_phase(
         self, phase_num: int, phase_name: str, action: str, prompt: str = ""

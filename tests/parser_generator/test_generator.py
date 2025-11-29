@@ -16,6 +16,7 @@ from rock_paper_sync.generator import (
     RemarkablePage,
     TextItem,
 )
+from rock_paper_sync.layout.constants import TEXT_POS_Y
 from rock_paper_sync.parser import (
     BlockType,
     ContentBlock,
@@ -321,7 +322,7 @@ class TestBlocksToTextItems:
         assert item.text == "Test paragraph"
         assert item.x == generator.layout.margin_left
         # Y position uses TEXT_POS_Y constant (94.0) for rmscene compatibility
-        assert item.y == generator.TEXT_POS_Y
+        assert item.y == TEXT_POS_Y
         assert item.width > 0
 
     def test_multiple_blocks(self, generator: RemarkableGenerator) -> None:

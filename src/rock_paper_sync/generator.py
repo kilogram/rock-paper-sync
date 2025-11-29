@@ -31,16 +31,195 @@ from .annotations import (
     Annotation,
     HeuristicTextAnchor,
     TextBlock,
-    WordWrapLayoutEngine,
 )
-from .config import LayoutConfig
+from .config import LayoutConfig as AppLayoutConfig
 from .coordinate_transformer import (
     apply_y_offset_to_block,
     get_annotation_center_y,
 )
+from .layout import WordWrapLayoutEngine
+from .layout.constants import (
+    CHAR_WIDTH,
+    LINE_HEIGHT,
+    PAGE_HEIGHT,
+    PAGE_WIDTH,
+    TEXT_POS_X,
+    TEXT_POS_Y,
+    TEXT_WIDTH,
+)
 from .parser import BlockType, ContentBlock, MarkdownDocument, TextFormat
 
 logger = logging.getLogger("rock_paper_sync.generator")
+
+
+# =============================================================================
+# CRDT Anchor Encoding/Decoding for extra_value_data
+# =============================================================================
+# In reMarkable firmware 3.6+, highlights store their text anchor position
+# in extra_value_data as a CrdtId. The format is:
+#   Field 7: CrdtId(author_id, base_id + char_offset)
+# Where base_id comes from the RootTextBlock's CrdtSequenceItem.item_id.part2
+#
+# This allows us to update highlight positions when text shifts.
+# =============================================================================
+
+
+def _decode_varint(data: bytes, pos: int) -> tuple[int, int]:
+    """Decode a varint starting at pos, return (value, new_pos)."""
+    result = 0
+    shift = 0
+    while pos < len(data):
+        b = data[pos]
+        result |= (b & 0x7F) << shift
+        pos += 1
+        if not (b & 0x80):
+            break
+        shift += 7
+    return result, pos
+
+
+def _encode_varint(value: int) -> bytes:
+    """Encode an integer as a varint."""
+    result = []
+    while value > 0x7F:
+        result.append((value & 0x7F) | 0x80)
+        value >>= 7
+    result.append(value)
+    return bytes(result)
+
+
+def _decode_crdt_id(data: bytes, pos: int) -> tuple[tuple[int, int], int]:
+    """Decode a CrdtId (two varints) starting at pos."""
+    part1, pos = _decode_varint(data, pos)
+    part2, pos = _decode_varint(data, pos)
+    return (part1, part2), pos
+
+
+def _encode_crdt_id(part1: int, part2: int) -> bytes:
+    """Encode a CrdtId as two varints."""
+    return _encode_varint(part1) + _encode_varint(part2)
+
+
+def update_glyph_extra_value_data(
+    extra_data: bytes, new_char_offset: int, highlight_length: int, crdt_base_id: int = 16
+) -> bytes:
+    """Update the character offset anchors in extra_value_data.
+
+    The extra_value_data contains tagged fields for text anchoring:
+    - Field 15 (tag 0x7F): Start CrdtId (m_firstId) - first char of highlight
+    - Field 17 (tag 0x8F): Fixed prefix (0x01 0x01) + end position varint (m_lastId)
+
+    The device reads m_firstId from Field 15 and m_lastId end position from
+    the varint after the fixed prefix in Field 17. Both must be updated.
+
+    Format discovered from device firmware 3.6+ behavior:
+    - 7f [author_varint] [start_pos_varint]
+    - 8f 01 01 [end_pos_varint]
+    - [remaining fields...]
+
+    Args:
+        extra_data: Original extra_value_data bytes
+        new_char_offset: New character offset (start) in the text
+        highlight_length: Length of the highlighted text
+        crdt_base_id: Base ID from RootTextBlock (usually 16)
+
+    Returns:
+        Updated extra_value_data with new start and end positions
+    """
+    if len(extra_data) < 3:
+        logger.debug("extra_value_data too short to contain anchor CrdtId")
+        return extra_data
+
+    # Verify this is Field 15 with CrdtId type (tag 0x7F)
+    if extra_data[0] != 0x7F:
+        logger.debug(f"Expected tag 0x7F, got 0x{extra_data[0]:02x}")
+        return extra_data
+
+    # Decode Field 15: Start CrdtId (m_firstId)
+    old_start_crdt, pos_after_field15 = _decode_crdt_id(extra_data, 1)
+    author_id = old_start_crdt[0]
+
+    # Check for Field 17 (tag 0x8F)
+    if pos_after_field15 >= len(extra_data) or extra_data[pos_after_field15] != 0x8F:
+        logger.debug(
+            f"Expected tag 0x8F at pos {pos_after_field15}, "
+            f"got 0x{extra_data[pos_after_field15]:02x if pos_after_field15 < len(extra_data) else 'EOF'}"
+        )
+        return extra_data
+
+    # Field 17 has a fixed prefix of 0x01 0x01, then the end position as varint
+    # Verify the fixed prefix
+    field17_start = pos_after_field15 + 1  # Skip the 0x8F tag
+    if field17_start + 2 >= len(extra_data):
+        logger.debug("Field 17 too short for fixed prefix")
+        return extra_data
+
+    if extra_data[field17_start] != 0x01 or extra_data[field17_start + 1] != 0x01:
+        logger.debug(
+            f"Expected Field 17 prefix 01 01, got "
+            f"{extra_data[field17_start]:02x} {extra_data[field17_start + 1]:02x}"
+        )
+        return extra_data
+
+    # Decode the end position varint after the fixed prefix
+    end_pos_start = field17_start + 2
+    old_end_pos, pos_after_end = _decode_varint(extra_data, end_pos_start)
+
+    # Calculate new positions
+    new_start_part2 = crdt_base_id + new_char_offset
+    # End position is exclusive (start + length), not inclusive (start + length - 1)
+    new_end_pos = crdt_base_id + new_char_offset + highlight_length
+
+    # Encode new start CrdtId
+    new_start_bytes = _encode_crdt_id(author_id, new_start_part2)
+
+    # Encode new end position varint
+    new_end_bytes = _encode_varint(new_end_pos)
+
+    # Reconstruct:
+    # Field15 tag + start CrdtId + Field17 tag + fixed prefix + end varint + rest
+    new_extra = (
+        bytes([0x7F])
+        + new_start_bytes
+        + bytes([0x8F, 0x01, 0x01])
+        + new_end_bytes
+        + extra_data[pos_after_end:]
+    )
+
+    old_start_offset = old_start_crdt[1] - crdt_base_id
+    old_end_offset = old_end_pos - crdt_base_id
+
+    logger.debug(
+        f"Updated extra_value_data: start CrdtId ({author_id}, {old_start_crdt[1]})->({author_id}, {new_start_part2}) "
+        f"[char {old_start_offset}->{new_char_offset}], "
+        f"end pos {old_end_pos}->{new_end_pos} [char {old_end_offset}->{new_char_offset + highlight_length}]"
+    )
+
+    return new_extra
+
+
+def get_crdt_base_id_from_rm(rm_file_path: Path) -> int:
+    """Extract CRDT base ID from RootTextBlock in .rm file.
+
+    The base ID is the item_id.part2 of the first CrdtSequenceItem in the
+    RootTextBlock's text items.
+
+    Args:
+        rm_file_path: Path to .rm file
+
+    Returns:
+        Base ID (typically 16), or default 16 if not found
+    """
+    try:
+        with open(rm_file_path, "rb") as f:
+            for block in rmscene.read_blocks(f):
+                if type(block).__name__ == "RootTextBlock":
+                    for item in block.value.items.sequence_items():
+                        return item.item_id.part2
+    except Exception as e:
+        logger.warning(f"Failed to get CRDT base ID from {rm_file_path}: {e}")
+
+    return 16  # Default base ID
 
 
 @dataclass
@@ -139,47 +318,38 @@ class RemarkableGenerator:
        - Combines all text items with newlines (Phase 1 simplification)
        - Future: Multiple Text scene items for precise positioning
 
+    Layout constants are imported from rock_paper_sync.layout.constants,
+    which is the single source of truth for all layout-related values.
+
     Attributes:
         layout: Page layout configuration
         page_width: Page width in pixels (1404 for reMarkable Paper Pro)
         page_height: Page height in pixels (1872 for reMarkable Paper Pro)
-        line_height: Approximate pixels per line (35px)
+        line_height: Pixels per line (57px, calibrated from device)
         char_width: Pixels per character (15px, measured from device)
     """
 
-    # reMarkable Paper Pro dimensions
-    PAGE_WIDTH = 1404
-    PAGE_HEIGHT = 1872
-    LINE_HEIGHT = 35  # Approximate pixels per line
-    CHAR_WIDTH = 15  # Pixels per character (measured: 50-51 chars/line max)
-
-    # Text area dimensions for 1.0x display (optimized for Paper Pro)
-    TEXT_WIDTH = 750.0  # Width that displays at 1.0x zoom
-    TEXT_POS_X = -375.0  # Centered: -TEXT_WIDTH/2
-    TEXT_POS_Y = 94.0  # Top margin: ~2 lines worth (was 234.0 = 5 lines)
-
-    # Calculated default lines per page based on actual device measurements
-    # Visible lines on Paper Pro: 26 lines
-    # Conservative default with safety margin: 28 lines
-    # Total height: 94 (top) + 980 (content) + 94 (bottom) = 1168px
-    DEFAULT_LINES_PER_PAGE = 28
-
-    def __init__(self, layout_config: LayoutConfig) -> None:
+    def __init__(self, layout_config: AppLayoutConfig) -> None:
         """Initialize generator with layout settings.
 
         Args:
             layout_config: Page layout configuration
         """
         self.layout = layout_config
-        self.page_width = self.PAGE_WIDTH
-        self.page_height = self.PAGE_HEIGHT
-        self.line_height = self.LINE_HEIGHT
-        self.char_width = self.CHAR_WIDTH
+        self.page_width = PAGE_WIDTH
+        self.page_height = PAGE_HEIGHT
+        self.line_height = LINE_HEIGHT
+        self.char_width = CHAR_WIDTH
 
         # Initialize annotation adjustment strategies (Phase 1)
         self.text_anchor_strategy = HeuristicTextAnchor(context_window=50, fuzzy_threshold=0.8)
+        # Use proportional font metrics for accurate highlight positioning
+        # The device uses Noto Sans (proportional font), not monospace
         self.layout_engine = WordWrapLayoutEngine(
-            text_width=self.TEXT_WIDTH, avg_char_width=self.CHAR_WIDTH, line_height=self.LINE_HEIGHT
+            text_width=TEXT_WIDTH,
+            avg_char_width=CHAR_WIDTH,  # Fallback if font metrics unavailable
+            line_height=LINE_HEIGHT,
+            use_font_metrics=True,  # Enable Noto Sans font metrics for accuracy
         )
 
         logger.info(
@@ -346,7 +516,7 @@ class RemarkableGenerator:
                     rm_file_path
                 )
                 new_text_blocks = page.text_blocks
-                new_text_origin_y = self.TEXT_POS_Y  # New documents use TEXT_POS_Y constant
+                new_text_origin_y = TEXT_POS_Y  # New documents use TEXT_POS_Y constant
 
                 # Use FULL DOCUMENT text for content anchoring (not per-page)
                 old_text = old_full_text
@@ -367,21 +537,30 @@ class RemarkableGenerator:
                 # Calculate mapping between old and new text positions
                 position_map = calculate_position_mapping(old_text_blocks, new_text_blocks)
 
+                # Get CRDT base ID for updating highlight anchors (firmware 3.6+)
+                crdt_base_id = get_crdt_base_id_from_rm(rm_file_path)
+
                 # Adjust annotation blocks based on text repositioning
                 # Phase 1: Uses content anchoring for Glyph blocks, spatial for Line blocks
                 adjusted_blocks = []
                 for block in annotation_blocks:
-                    adjusted_block = self._adjust_annotation_block_position(
-                        block,
-                        old_text,
-                        new_text,
-                        old_text_blocks,
-                        new_text_blocks,
-                        position_map,
-                        old_text_origin_y,
-                        new_text_origin_y,
-                    )
-                    adjusted_blocks.append(adjusted_block)
+                    try:
+                        adjusted_block = self._adjust_annotation_block_position(
+                            block,
+                            old_text,
+                            new_text,
+                            old_text_blocks,
+                            new_text_blocks,
+                            position_map,
+                            old_text_origin_y,
+                            new_text_origin_y,
+                            crdt_base_id,
+                        )
+                        adjusted_blocks.append(adjusted_block)
+                    except Exception as e:
+                        logger.warning(f"Failed to adjust annotation block: {e}")
+                        # Still add the original block
+                        adjusted_blocks.append(block)
 
                 # Store the adjusted rmscene blocks AND original file path
                 page.annotation_blocks = adjusted_blocks
@@ -418,7 +597,7 @@ class RemarkableGenerator:
                 blocks = list(rmscene.read_blocks(f))
 
             text_blocks = []
-            text_origin_y = self.TEXT_POS_Y  # Default to constant
+            text_origin_y = TEXT_POS_Y  # Default to constant
             full_text = ""
 
             # Find RootTextBlock to get text content and position
@@ -458,7 +637,7 @@ class RemarkableGenerator:
 
         except Exception as e:
             logger.warning(f"Failed to extract text blocks from {rm_file_path}: {e}")
-            return [], self.TEXT_POS_Y, ""
+            return [], TEXT_POS_Y, ""
 
     def _adjust_annotation_block_position(
         self,
@@ -470,6 +649,7 @@ class RemarkableGenerator:
         position_map: dict[int, int],
         old_text_origin_y: float,
         new_text_origin_y: float,
+        crdt_base_id: int = 16,
     ):
         """Adjust rmscene annotation block coordinates based on text repositioning.
 
@@ -488,6 +668,7 @@ class RemarkableGenerator:
             position_map: Mapping from old text block indices to new indices
             old_text_origin_y: The RootTextBlock.pos_y from the old document
             new_text_origin_y: The RootTextBlock.pos_y for the new document
+            crdt_base_id: Base ID from RootTextBlock for CRDT offset calculation
 
         Returns:
             Modified block with adjusted coordinates
@@ -498,8 +679,9 @@ class RemarkableGenerator:
                 block,
                 old_text,
                 new_text,
-                (self.TEXT_POS_X, old_text_origin_y),
-                (self.TEXT_POS_X, new_text_origin_y),
+                (TEXT_POS_X, old_text_origin_y),
+                (TEXT_POS_X, new_text_origin_y),
+                crdt_base_id,
             )
 
         # For Lines (strokes), use spatial Y-only approach
@@ -566,21 +748,30 @@ class RemarkableGenerator:
         new_text: str,
         old_origin: tuple[float, float],
         new_origin: tuple[float, float],
+        crdt_base_id: int = 16,
     ):
-        """Adjust Glyph (highlight) using content anchoring (Phase 1).
+        """Re-render highlight rectangles using content anchoring.
 
-        This method anchors highlights to their text content, so they move both
-        horizontally and vertically as text reflows.
+        Uses a delta-based approach to preserve pixel-perfect rectangle positions:
+        1. Find where highlighted text was in old document (anchor)
+        2. Resolve where that text is in new document (new_offset)
+        3. Calculate position delta using SAME layout model for both
+        4. Apply delta to original pixel-perfect rectangles
+        5. Update CRDT anchor in extra_value_data for firmware 3.6+
+
+        This approach preserves the original Qt-rendered rectangle precision
+        while correctly shifting highlights when text moves.
 
         Args:
-            glyph_block: SceneGlyphItemBlock
+            glyph_block: SceneGlyphItemBlock containing highlight rectangles
             old_text: Full text of old document
             new_text: Full text of new document
             old_origin: (x, y) origin of old text block
             new_origin: (x, y) origin of new text block
+            crdt_base_id: Base ID from RootTextBlock for CRDT offset calculation
 
         Returns:
-            Modified glyph_block with adjusted rectangles
+            Modified glyph_block with adjusted rectangles and CRDT anchor
         """
         # Extract highlighted text
         if not hasattr(glyph_block.item, "value"):
@@ -594,13 +785,14 @@ class RemarkableGenerator:
 
         highlight_text = glyph_value.text
 
-        # Get old position (average of rectangles)
-        if hasattr(glyph_value, "rectangles") and glyph_value.rectangles:
-            old_x = sum(r.x for r in glyph_value.rectangles) / len(glyph_value.rectangles)
-            old_y = sum(r.y for r in glyph_value.rectangles) / len(glyph_value.rectangles)
-        else:
+        # Need rectangles to adjust
+        if not hasattr(glyph_value, "rectangles") or not glyph_value.rectangles:
             logger.warning("Glyph has no rectangles, keeping original position")
             return glyph_block
+
+        # Get old position (average of rectangles) for anchor finding
+        old_x = sum(r.x for r in glyph_value.rectangles) / len(glyph_value.rectangles)
+        old_y = sum(r.y for r in glyph_value.rectangles) / len(glyph_value.rectangles)
 
         # Find anchor in old document
         anchor = self.text_anchor_strategy.find_anchor(highlight_text, old_text, (old_x, old_y))
@@ -615,7 +807,6 @@ class RemarkableGenerator:
                 f"Low confidence anchor ({anchor.confidence:.2f}) for '{highlight_text[:30]}...', "
                 f"keeping original position"
             )
-            # Keep original position for low-confidence matches
             return glyph_block
 
         # Resolve anchor in new document
@@ -627,36 +818,139 @@ class RemarkableGenerator:
             )
             return glyph_block
 
-        logger.debug(
-            f"  Resolved to new_offset={new_offset} (delta={new_offset - (anchor.char_offset or 0)})"
-        )
-
-        # Calculate new position using layout engine
-        try:
-            new_x, new_y = self.layout_engine.offset_to_position(
-                new_offset, new_text, new_origin, self.TEXT_WIDTH
-            )
-            logger.debug(
-                f"  Layout engine: new_pos=({new_x:.1f}, {new_y:.1f}), origin={new_origin}"
-            )
-        except Exception as e:
-            logger.warning(f"Failed to calculate new position for highlight: {e}")
+        old_offset = anchor.char_offset
+        if old_offset is None:
+            logger.warning("Anchor has no char_offset, keeping original position")
             return glyph_block
 
-        # Calculate offset from old position
-        x_offset = new_x - old_x
-        y_offset = new_y - old_y
+        logger.debug(
+            f"  Resolved: old_offset={old_offset} -> new_offset={new_offset} "
+            f"(delta={new_offset - old_offset})"
+        )
 
-        logger.debug(f"  Calculated offset: ({x_offset:.1f}, {y_offset:.1f})")
+        # DELTA-BASED APPROACH: Calculate positions using SAME layout model
+        # This makes model inaccuracies cancel out
+        try:
+            old_x_model, old_y_model = self.layout_engine.offset_to_position(
+                old_offset, old_text, old_origin, TEXT_WIDTH
+            )
+            new_x_model, new_y_model = self.layout_engine.offset_to_position(
+                new_offset, new_text, new_origin, TEXT_WIDTH
+            )
+        except Exception as e:
+            logger.warning(f"Failed to calculate positions for highlight: {e}")
+            return glyph_block
 
-        # Adjust all rectangles
-        for rect in glyph_value.rectangles:
-            rect.x += x_offset
-            rect.y += y_offset
+        # Calculate delta between model positions (errors cancel out)
+        x_delta = new_x_model - old_x_model
+        y_delta = new_y_model - old_y_model
 
         logger.debug(
-            f"Adjusted highlight '{highlight_text[:30]}...' by offset=({x_offset:.1f}, {y_offset:.1f}), "
-            f"confidence={anchor.confidence:.2f}"
+            f"  Model positions: old=({old_x_model:.1f}, {old_y_model:.1f}), "
+            f"new=({new_x_model:.1f}, {new_y_model:.1f})"
+        )
+        logger.debug(f"  Delta: ({x_delta:.1f}, {y_delta:.1f})")
+
+        # REFLOW DETECTION: Check if highlight now spans different number of lines
+        # When text reflows, we need to recalculate rectangles from scratch
+        old_rect_count = len(glyph_value.rectangles)
+        new_end_offset = new_offset + len(highlight_text)
+        new_rects = self.layout_engine.calculate_highlight_rectangles(
+            new_offset, new_end_offset, new_text, new_origin, TEXT_WIDTH
+        )
+        new_rect_count = len(new_rects)
+
+        if new_rect_count != old_rect_count:
+            # REFLOW CASE: Highlight now spans different number of lines
+            # Use delta-based positioning for accuracy (font metric errors cancel out)
+            logger.debug(f"  Reflow detected: {old_rect_count} rect(s) → {new_rect_count} rect(s)")
+
+            # Preserve original rectangle properties
+            original_rect = glyph_value.rectangles[0] if glyph_value.rectangles else None
+            original_height = original_rect.h if original_rect else LINE_HEIGHT
+
+            # Strategy: Apply delta to first rect, then use known geometry for others
+            # This preserves pixel-perfect positioning from the original highlight
+            # while correctly handling multi-line splits
+
+            # Get layout-calculated positions for reference
+            first_new_x, first_new_y, first_new_w, _ = new_rects[0]
+
+            # Calculate first rectangle using delta approach (preserves accuracy)
+            if original_rect:
+                first_rect_x = original_rect.x + x_delta
+                first_rect_y = original_rect.y + y_delta
+            else:
+                first_rect_x = first_new_x
+                first_rect_y = first_new_y
+
+            glyph_value.rectangles.clear()
+            glyph_value.rectangles.append(
+                si.Rectangle(first_rect_x, first_rect_y, first_new_w, original_height)
+            )
+
+            # For additional rectangles, use KNOWN GEOMETRY instead of layout relative offsets
+            # Relative offsets from layout engine have font metric scaling errors
+            #
+            # Key insight: Each subsequent line's rectangle has:
+            # - X: Either at line start (TEXT_POS_X) or relative position within line
+            # - Y: Previous line Y + original_height (highlight rectangles are contiguous)
+            #
+            # We detect line-start by checking if layout X is close to text origin
+            line_start_x = new_origin[0]  # TEXT_POS_X
+            tolerance = 10.0  # Allow small deviation
+
+            for i, (x, y, w, _) in enumerate(new_rects[1:], start=1):
+                # Check if this rectangle starts at line beginning
+                is_line_start = abs(x - line_start_x) < tolerance
+
+                if is_line_start:
+                    # Rectangle at line start: use TEXT_POS_X directly
+                    # This avoids font metric errors in X calculation
+                    rect_x = TEXT_POS_X
+                else:
+                    # Mid-line continuation: use relative offset (rare case)
+                    rel_x = x - first_new_x
+                    rect_x = first_rect_x + rel_x
+
+                # Y position: each line is original_height below previous
+                # Device uses highlight height as line spacing (~44px), not LINE_HEIGHT
+                rect_y = first_rect_y + i * original_height
+
+                glyph_value.rectangles.append(si.Rectangle(rect_x, rect_y, w, original_height))
+                logger.debug(
+                    f"  rect[{i}]: x={rect_x:.1f}, y={rect_y:.1f}, w={w:.1f} (line_start={is_line_start})"
+                )
+
+            logger.debug(
+                f"  Created {len(glyph_value.rectangles)} rectangle(s) using delta+geometry"
+            )
+        else:
+            # DELTA CASE: Same line count, apply delta to preserve pixel-perfect positions
+            for rect in glyph_value.rectangles:
+                rect.x += x_delta
+                rect.y += y_delta
+
+        # Update start field for older firmware (< v3.6)
+        glyph_value.start = new_offset
+
+        # Update text field to match what's at the new position
+        new_highlighted_text = new_text[new_offset : new_offset + len(highlight_text)]
+        if new_highlighted_text:
+            glyph_value.text = new_highlighted_text
+            glyph_value.length = len(new_highlighted_text)
+
+        # UPDATE CRDT ANCHOR in extra_value_data for firmware 3.6+
+        # This is the critical fix: the device uses CrdtId in extra_value_data
+        # to anchor highlights to character positions in the text
+        if hasattr(glyph_block, "extra_value_data") and glyph_block.extra_value_data:
+            glyph_block.extra_value_data = update_glyph_extra_value_data(
+                glyph_block.extra_value_data, new_offset, len(highlight_text), crdt_base_id
+            )
+
+        logger.debug(
+            f"Adjusted highlight '{highlight_text[:30]}...' by delta=({x_delta:.1f}, {y_delta:.1f}), "
+            f"offset={old_offset}->{new_offset}, confidence={anchor.confidence:.2f}"
         )
 
         return glyph_block
@@ -685,7 +979,7 @@ class RemarkableGenerator:
         pages: list[list[ContentBlock]] = []
         current_page: list[ContentBlock] = []
         current_lines = 0
-        y_position = float(self.TEXT_POS_Y)  # Track Y for annotation mapping
+        y_position = float(TEXT_POS_Y)  # Track Y for annotation mapping
 
         for block in blocks:
             block_lines = self.estimate_block_lines(block)
@@ -698,7 +992,7 @@ class RemarkableGenerator:
                     pages.append(current_page)
                     current_page = []
                     current_lines = 0
-                    y_position = float(self.TEXT_POS_Y)
+                    y_position = float(TEXT_POS_Y)
                     block.page_y_start = y_position
 
             # Check if block fits on current page
@@ -707,7 +1001,7 @@ class RemarkableGenerator:
                 if self.layout.allow_paragraph_splitting and block.type == BlockType.PARAGRAPH:
                     # Split paragraph across pages
                     lines_available = self.layout.lines_per_page - current_lines
-                    chars_per_line = max(1, int(self.TEXT_WIDTH / self.CHAR_WIDTH))
+                    chars_per_line = max(1, int(TEXT_WIDTH / CHAR_WIDTH))
 
                     # Estimate chars that fit on current page
                     chars_for_current = lines_available * chars_per_line
@@ -746,27 +1040,27 @@ class RemarkableGenerator:
                             )
                             current_page = [next_block]
                             current_lines = self.estimate_block_lines(next_block)
-                            y_position = float(self.TEXT_POS_Y) + current_lines * self.line_height
+                            y_position = float(TEXT_POS_Y) + current_lines * self.line_height
                         else:
                             current_page = []
                             current_lines = 0
-                            y_position = float(self.TEXT_POS_Y)
+                            y_position = float(TEXT_POS_Y)
                     else:
                         # Not enough room to split meaningfully, start new page
                         if current_page:
                             pages.append(current_page)
                         current_page = [block]
                         current_lines = block_lines
-                        y_position = float(self.TEXT_POS_Y) + block_lines * self.line_height
-                        block.page_y_start = float(self.TEXT_POS_Y)
+                        y_position = float(TEXT_POS_Y) + block_lines * self.line_height
+                        block.page_y_start = float(TEXT_POS_Y)
                 else:
                     # Atomic block placement (default behavior)
                     if current_page:
                         pages.append(current_page)
                     current_page = [block]
                     current_lines = block_lines
-                    y_position = float(self.TEXT_POS_Y) + block_lines * self.line_height
-                    block.page_y_start = float(self.TEXT_POS_Y)
+                    y_position = float(TEXT_POS_Y) + block_lines * self.line_height
+                    block.page_y_start = float(TEXT_POS_Y)
             else:
                 current_page.append(block)
                 current_lines += block_lines
@@ -800,7 +1094,7 @@ class RemarkableGenerator:
 
         # Calculate based on text length and actual text width
         # Use TEXT_WIDTH instead of page margins for accurate pagination
-        chars_per_line = max(1, int(self.TEXT_WIDTH / self.char_width))
+        chars_per_line = max(1, int(TEXT_WIDTH / self.char_width))
 
         # Account for list item bullet
         text = block.text
@@ -845,7 +1139,7 @@ class RemarkableGenerator:
         """
         items: list[TextItem] = []
         text_blocks: list[TextBlock] = []
-        y_position = float(self.TEXT_POS_Y)  # Use rmscene constant, not margin_top
+        y_position = float(TEXT_POS_Y)  # Use rmscene constant, not margin_top
 
         for block in blocks:
             if block.type == BlockType.HORIZONTAL_RULE:
@@ -1090,9 +1384,9 @@ class RemarkableGenerator:
                         ]
                     ),
                     styles=styles,  # Now includes newline markers at format code 10
-                    pos_x=self.TEXT_POS_X,
-                    pos_y=self.TEXT_POS_Y,
-                    width=self.TEXT_WIDTH,
+                    pos_x=TEXT_POS_X,
+                    pos_y=TEXT_POS_Y,
+                    width=TEXT_WIDTH,
                 ),
             ),
             TreeNodeBlock(

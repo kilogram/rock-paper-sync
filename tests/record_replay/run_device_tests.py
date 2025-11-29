@@ -69,12 +69,15 @@ signal.signal(signal.SIGINT, _signal_handler)
 signal.signal(signal.SIGTERM, _signal_handler)
 
 
-def setup_workspace(device_folder: str = "DeviceBench") -> tuple[Bench, WorkspaceManager]:
+def setup_workspace(
+    device_folder: str = "DeviceBench",
+    cloud_url: str = "http://localhost:3000",
+) -> tuple[Bench, WorkspaceManager]:
     """Create and setup workspace."""
     global _workspace
 
     bench = Bench(REPO_ROOT, WORKSPACE_DIR / "logs")
-    workspace = WorkspaceManager(WORKSPACE_DIR, REPO_ROOT, bench, device_folder)
+    workspace = WorkspaceManager(WORKSPACE_DIR, REPO_ROOT, bench, None, device_folder, cloud_url)
     workspace.setup()
     _workspace = workspace
 
@@ -165,16 +168,17 @@ def run(
             --test-artifact=annotation_roundtrip_001
     """
     device_folder = ctx.obj["device_folder"]
-    bench, workspace = setup_workspace(device_folder)
+    # Pass cloud_url to workspace (single source of truth)
+    bench, workspace = setup_workspace(device_folder, cloud_url=rmfakecloud_url)
     testdata_store = get_testdata_store()
 
-    # Create device based on mode
+    # Create device based on mode (cloud_url comes from workspace)
     if mode == "online":
         device = OnlineDevice(workspace, testdata_store, bench)
         click.echo("Running in ONLINE mode (real device)")
     else:
-        device = OfflineEmulator(workspace, testdata_store, bench, cloud_url=rmfakecloud_url)
-        click.echo(f"Running in OFFLINE mode (rmfakecloud: {rmfakecloud_url})")
+        device = OfflineEmulator(workspace, testdata_store, bench)
+        click.echo(f"Running in OFFLINE mode (rmfakecloud: {workspace.cloud_url})")
 
         if test_artifact:
             device.load_test(test_artifact)

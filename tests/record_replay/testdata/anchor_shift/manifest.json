@@ -1,0 +1,79 @@
+{
+  "test_id": "anchor_shift",
+  "created_at": "2025-11-30T19:22:18.041040",
+  "doc_uuid": "21a39f9b-2e85-4021-a28d-f356ec72fc36",
+  "page_uuids": [
+    "a8bf9767-1203-4f02-9232-d466e88c897a"
+  ],
+  "description": "",
+  "annotations_count": 1,
+  "source_document": "source.md",
+  "phases": [
+    {
+      "phase_number": 0,
+      "phase_name": "initial",
+      "action": "setup",
+      "vault_files": [
+        "document.md"
+      ],
+      "device_state": {
+        "doc_uuid": null,
+        "page_uuids": [],
+        "rm_files_count": 0,
+        "has_annotations": false
+      },
+      "has_rm_files": false
+    },
+    {
+      "phase_number": 1,
+      "phase_name": "post_upload",
+      "action": "upload",
+      "vault_files": [
+        "document.md"
+      ],
+      "device_state": {
+        "doc_uuid": "21a39f9b-2e85-4021-a28d-f356ec72fc36",
+        "page_uuids": [
+          "a8bf9767-1203-4f02-9232-d466e88c897a"
+        ],
+        "rm_files_count": 1,
+        "has_annotations": true
+      },
+      "has_rm_files": true
+    },
+    {
+      "phase_number": 2,
+      "phase_name": "phase_2",
+      "action": "annotation_download",
+      "vault_files": [
+        "document.md"
+      ],
+      "device_state": {
+        "doc_uuid": "21a39f9b-2e85-4021-a28d-f356ec72fc36",
+        "page_uuids": [
+          "a8bf9767-1203-4f02-9232-d466e88c897a"
+        ],
+        "rm_files_count": 1,
+        "has_annotations": true
+      },
+      "has_rm_files": true
+    },
+    {
+      "phase_number": 3,
+      "phase_name": "post_modification",
+      "action": "sync_modified",
+      "vault_files": [
+        "document.md"
+      ],
+      "device_state": {
+        "doc_uuid": "21a39f9b-2e85-4021-a28d-f356ec72fc36",
+        "page_uuids": [
+          "a8bf9767-1203-4f02-9232-d466e88c897a"
+        ],
+        "rm_files_count": 1,
+        "has_annotations": true
+      },
+      "has_rm_files": true
+    }
+  ]
+}

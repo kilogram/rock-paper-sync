@@ -29,10 +29,6 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from .vault_manager import VaultOperation
 
 
 @dataclass
@@ -93,7 +89,7 @@ class TestManifest:
     """Metadata for a captured test.
 
     Stored as manifest.json alongside test artifacts.
-    Supports both legacy single-phase and new multi-phase testdata.
+    Uses multi-phase structure for all testdata.
     """
 
     test_id: str
@@ -105,7 +101,7 @@ class TestManifest:
     annotations_count: int
     metadata: dict[str, str] = field(default_factory=dict)
 
-    # Multi-phase support: NEW primary structure
+    # Multi-phase structure
     phases: list[dict] = field(default_factory=list)  # Phase metadata array
     # Each phase dict contains:
     # {
@@ -118,12 +114,6 @@ class TestManifest:
     #   "has_rm_files": bool
     # }
 
-    # Legacy vault snapshot fields (for backward compatibility)
-    vault_snapshots: list[str] = field(default_factory=list)  # e.g., ["initial", "final"]
-    vault_operations: list[dict] = field(default_factory=list)  # Recorded file ops
-    expected_state_after_unsync: dict = field(default_factory=dict)  # Expected results
-    expected_folders_remaining: list[tuple[str, str]] = field(default_factory=list)  # (path, uuid)
-
     def to_dict(self) -> dict:
         """Serialize manifest to dictionary."""
         return {
@@ -135,11 +125,7 @@ class TestManifest:
             "description": self.description,
             "annotations_count": self.annotations_count,
             "metadata": self.metadata,
-            "phases": self.phases,  # Multi-phase structure
-            "vault_snapshots": self.vault_snapshots,
-            "vault_operations": self.vault_operations,
-            "expected_state_after_unsync": self.expected_state_after_unsync,
-            "expected_folders_remaining": self.expected_folders_remaining,
+            "phases": self.phases,
         }
 
     @classmethod
@@ -154,11 +140,7 @@ class TestManifest:
             description=data.get("description", ""),
             annotations_count=data.get("annotations_count", 0),
             metadata=data.get("metadata", {}),
-            phases=data.get("phases", []),  # Multi-phase structure
-            vault_snapshots=data.get("vault_snapshots", []),
-            vault_operations=data.get("vault_operations", []),
-            expected_state_after_unsync=data.get("expected_state_after_unsync", {}),
-            expected_folders_remaining=data.get("expected_folders_remaining", []),
+            phases=data.get("phases", []),
         )
 
 
@@ -497,39 +479,6 @@ class TestdataStore:
 
         return snapshot_dir
 
-    def save_vault_operations(self, test_id: str, operations: list["VaultOperation"]) -> None:
-        """Save recorded vault operations for a test.
-
-        Args:
-            test_id: Test identifier
-            operations: List of vault operations
-        """
-        test_dir = self.base_dir / test_id
-        ops_file = test_dir / "vault_operations.json"
-
-        ops_data = [op.to_dict() for op in operations]
-        ops_file.write_text(json.dumps(ops_data, indent=2))
-
-    def load_vault_operations(self, test_id: str) -> list["VaultOperation"]:
-        """Load recorded vault operations for a test.
-
-        Args:
-            test_id: Test identifier
-
-        Returns:
-            List of vault operations (empty if not found)
-        """
-        test_dir = self._find_test_dir(test_id)
-        ops_file = test_dir / "vault_operations.json"
-
-        if not ops_file.exists():
-            return []
-
-        ops_data = json.loads(ops_file.read_text())
-        from .vault_manager import VaultOperation
-
-        return [VaultOperation.from_dict(op) for op in ops_data]
-
     def get_snapshot_dir(self, test_id: str, snapshot_name: str) -> Path:
         """Get path where snapshot should be saved/loaded.
 
@@ -602,9 +551,6 @@ class TestdataStore:
     def load_phases(self, test_id: str) -> list[PhaseData]:
         """Load all phases for a test artifact.
 
-        Supports both multi-phase (new structure) and legacy single-phase tests.
-        Automatically migrates legacy tests to multi-phase on first load.
-
         Args:
             test_id: Test identifier
 
@@ -612,14 +558,15 @@ class TestdataStore:
             List of PhaseData objects sorted by phase_number
 
         Raises:
-            FileNotFoundError: If test not found
+            FileNotFoundError: If test not found or has no phases
         """
         test_dir = self._find_test_dir(test_id)
         phases_dir = test_dir / "phases"
 
-        # If no phases directory, check if this is legacy and migrate
         if not phases_dir.exists():
-            return self._migrate_legacy_test(test_id)
+            raise FileNotFoundError(
+                f"No phases directory found for test '{test_id}'. " f"Expected at {phases_dir}"
+            )
 
         # Load all phases from phases directory
         phases: list[PhaseData] = []
@@ -680,155 +627,3 @@ class TestdataStore:
         test_dir = self.base_dir / test_id
         phase_dir = test_dir / "phases" / f"phase_{phase_num}_{phase_name}"
         return phase_dir
-
-    def _migrate_legacy_test(self, test_id: str) -> list[PhaseData]:
-        """Migrate legacy single-phase test to multi-phase structure.
-
-        Converts old test format (manifest.json, source.md, rm_files/) to new
-        multi-phase format (phases/phase_0_initial, phases/phase_1_final, etc.)
-
-        Legacy structure:
-            test_id/
-            ├── manifest.json
-            ├── source.md
-            └── rm_files/
-                ├── page1.rm
-                └── page2.rm
-
-        New structure:
-            test_id/
-            ├── manifest.json (updated with phases array)
-            └── phases/
-                ├── phase_0_initial/
-                │   ├── vault_snapshot/
-                │   │   └── source.md
-                │   └── phase_info.json
-                └── phase_1_final/
-                    ├── vault_snapshot/
-                    │   └── source.md
-                    ├── rm_files/
-                    │   ├── page1.rm
-                    │   └── page2.rm
-                    └── phase_info.json
-
-        Args:
-            test_id: Test identifier to migrate
-
-        Returns:
-            List of PhaseData objects for migrated test
-
-        Raises:
-            FileNotFoundError: If test not found
-        """
-        test_dir = self._find_test_dir(test_id)
-
-        # Check if already migrated
-        if (test_dir / "phases").exists():
-            return self.load_phases(test_id)
-
-        # Read legacy manifest
-        manifest_path = test_dir / "manifest.json"
-        if not manifest_path.exists():
-            raise FileNotFoundError(f"Manifest not found for test {test_id}")
-
-        manifest_data = json.loads(manifest_path.read_text())
-
-        # Create phases directory
-        phases_dir = test_dir / "phases"
-        phases_dir.mkdir(exist_ok=True)
-
-        phases_metadata: list[dict] = []
-
-        # Phase 0: Initial state
-        phase0_dir = phases_dir / "phase_0_initial"
-        phase0_dir.mkdir(exist_ok=True)
-        vault_snapshot_dir = phase0_dir / "vault_snapshot"
-        vault_snapshot_dir.mkdir(exist_ok=True)
-
-        # Copy source.md to phase 0 vault snapshot
-        source_path = test_dir / "source.md"
-        if source_path.exists():
-            shutil.copy(source_path, vault_snapshot_dir / "source.md")
-
-        # Save phase 0 info
-        phase0_info = PhaseInfo(
-            phase_number=0,
-            phase_name="initial",
-            timestamp=manifest_data.get("created_at", datetime.now().isoformat()),
-            action="setup",
-            description="Legacy test initial state (migrated)",
-            vault_hash="",
-            device_state=None,
-        )
-        (phase0_dir / "phase_info.json").write_text(json.dumps(phase0_info.to_dict(), indent=2))
-
-        phases_metadata.append(
-            {
-                "phase_number": 0,
-                "phase_name": "initial",
-                "description": "Legacy initial state",
-                "action": "setup",
-                "vault_files": ["source.md"],
-                "device_state": None,
-                "has_rm_files": False,
-            }
-        )
-
-        # Phase 1: Final state (with rm files)
-        phase1_dir = phases_dir / "phase_1_final"
-        phase1_dir.mkdir(exist_ok=True)
-        vault_snapshot_dir = phase1_dir / "vault_snapshot"
-        vault_snapshot_dir.mkdir(exist_ok=True)
-
-        # Copy source.md to phase 1 vault snapshot
-        if source_path.exists():
-            shutil.copy(source_path, vault_snapshot_dir / "source.md")
-
-        # Move legacy rm_files to phase 1
-        legacy_rm_dir = test_dir / "rm_files"
-        has_rm_files = False
-        if legacy_rm_dir.exists():
-            shutil.move(legacy_rm_dir, phase1_dir / "rm_files")
-            has_rm_files = True
-
-        # Save device state to phase 1
-        device_state = {
-            "doc_uuid": manifest_data.get("doc_uuid"),
-            "page_uuids": manifest_data.get("page_uuids", []),
-            "rm_files_count": manifest_data.get("annotations_count", 0),
-            "has_annotations": manifest_data.get("annotations_count", 0) > 0,
-        }
-        (phase1_dir / "device_state.json").write_text(json.dumps(device_state, indent=2))
-
-        # Save phase 1 info
-        phase1_info = PhaseInfo(
-            phase_number=1,
-            phase_name="final",
-            timestamp=manifest_data.get("created_at", datetime.now().isoformat()),
-            action="annotation_download",
-            description="Legacy test final state (migrated)",
-            vault_hash="",
-            device_state=device_state,
-        )
-        (phase1_dir / "phase_info.json").write_text(json.dumps(phase1_info.to_dict(), indent=2))
-
-        phases_metadata.append(
-            {
-                "phase_number": 1,
-                "phase_name": "final",
-                "description": "Legacy final state",
-                "action": "annotation_download",
-                "vault_files": ["source.md"],
-                "device_state": device_state,
-                "has_rm_files": has_rm_files,
-            }
-        )
-
-        # Update manifest with phases
-        manifest_data["phases"] = phases_metadata
-        manifest_data["metadata"] = manifest_data.get("metadata", {})
-        manifest_data["metadata"]["migrated_from_legacy"] = True
-        manifest_path.write_text(json.dumps(manifest_data, indent=2))
-
-        # Return the migrated phases
-        return self.load_phases(test_id)

@@ -11,6 +11,7 @@ from rock_paper_sync.annotations import (
     HeuristicTextAnchor,
     WordWrapLayoutEngine,
 )
+from rock_paper_sync.layout.constants import TEXT_POS_X, TEXT_POS_Y
 
 
 class TestHeuristicTextAnchor:
@@ -206,6 +207,102 @@ class TestWordWrapLayoutEngine:
         assert engine.get_avg_char_width() == 15.0
 
 
+class TestHighlightRectangleCalculation:
+    """Tests for calculate_highlight_rectangles method."""
+
+    def test_single_line_highlight(self):
+        """Test rectangle calculation for single-line highlight."""
+        engine = WordWrapLayoutEngine(text_width=750.0, avg_char_width=15.0, line_height=35.0)
+
+        text = "The target word is here."
+        origin = (-375.0, 94.0)
+
+        # Highlight "target" which starts at offset 4
+        rects = engine.calculate_highlight_rectangles(
+            start_offset=4,
+            end_offset=10,
+            text=text,
+            origin=origin,
+            width=750.0,
+        )
+
+        assert len(rects) == 1
+        x, y, w, h = rects[0]
+        assert x == origin[0] + 4 * 15.0  # 4 chars before
+        assert y == origin[1]  # First line
+        assert w == 6 * 15.0  # 6 chars wide
+        assert h == 35.0  # Default line height
+
+    def test_highlight_x_shift_after_insert(self):
+        """Test that X position shifts when text is inserted before highlight."""
+        engine = WordWrapLayoutEngine(text_width=750.0, avg_char_width=15.0, line_height=35.0)
+        anchor = HeuristicTextAnchor()
+
+        old_text = "The target word is here."
+        new_text = "The INSERTED target word is here."
+        origin = (-375.0, 94.0)
+
+        # Find "target" in old/new
+        anc = anchor.find_anchor("target", old_text, (0, 0))
+        new_offset = anchor.resolve_anchor(anc, new_text)
+
+        assert anc.char_offset is not None
+        assert new_offset is not None
+
+        old_rects = engine.calculate_highlight_rectangles(
+            anc.char_offset, anc.char_offset + 6, old_text, origin, 750.0
+        )
+        new_rects = engine.calculate_highlight_rectangles(
+            new_offset, new_offset + 6, new_text, origin, 750.0
+        )
+
+        assert len(old_rects) == 1
+        assert len(new_rects) == 1
+
+        x_delta = new_rects[0][0] - old_rects[0][0]
+        # "INSERTED " is 9 chars * 15px = 135px
+        assert x_delta > 100, f"Expected x_delta > 100, got {x_delta}"
+
+    def test_multiline_highlight(self):
+        """Test rectangle calculation spanning multiple lines."""
+        engine = WordWrapLayoutEngine(text_width=150.0, avg_char_width=15.0, line_height=35.0)
+        # 150px / 15px = 10 chars per line
+
+        text = "Short words wrap to multiple lines here."
+        origin = (0.0, 0.0)
+
+        # Highlight from offset 6 to 25 (should span multiple lines)
+        rects = engine.calculate_highlight_rectangles(
+            start_offset=6,
+            end_offset=25,
+            text=text,
+            origin=origin,
+            width=150.0,
+        )
+
+        # Should have multiple rectangles (one per line)
+        assert len(rects) >= 1
+
+    def test_custom_rect_height(self):
+        """Test custom rectangle height parameter."""
+        engine = WordWrapLayoutEngine(text_width=750.0, avg_char_width=15.0, line_height=35.0)
+
+        text = "Hello world"
+        origin = (0.0, 0.0)
+
+        rects = engine.calculate_highlight_rectangles(
+            start_offset=0,
+            end_offset=5,
+            text=text,
+            origin=origin,
+            width=750.0,
+            rect_height=20.0,
+        )
+
+        assert len(rects) == 1
+        assert rects[0][3] == 20.0  # Custom height
+
+
 class TestIntegration:
     """Integration tests for text anchoring with layout engine."""
 
@@ -311,6 +408,178 @@ class TestIntegration:
 
         # Should not find it
         assert new_offset is None
+
+
+class TestGeneratorAnchorAdjustment:
+    """Tests for RemarkableGenerator._adjust_glyph_with_content_anchoring."""
+
+    @pytest.fixture
+    def generator(self):
+        """Create generator for testing."""
+        from rock_paper_sync.config import LayoutConfig
+        from rock_paper_sync.generator import RemarkableGenerator
+
+        layout_config = LayoutConfig(
+            lines_per_page=45,
+            margin_top=50,
+            margin_bottom=50,
+            margin_left=50,
+            margin_right=50,
+        )
+        return RemarkableGenerator(layout_config)
+
+    def test_delta_based_adjustment_shifts_x(self, generator):
+        """Test that delta-based adjustment correctly shifts X position.
+
+        This replicates the test_anchor_shift integration test scenario.
+        """
+
+        # Create mock glyph block structure
+        class MockRectangle:
+            def __init__(self, x, y, w, h):
+                self.x = x
+                self.y = y
+                self.w = w
+                self.h = h
+
+        class MockGlyphValue:
+            def __init__(self, text, rectangles):
+                self.text = text
+                self.rectangles = rectangles
+
+        class MockGlyphItem:
+            def __init__(self, value):
+                self.value = value
+
+        class MockGlyphBlock:
+            def __init__(self, item):
+                self.item = item
+
+        # Create highlight on "target" at position matching old_text
+        # "The target word is here."
+        # "target" starts at offset 4
+        old_text = "The target word is here."
+        new_text = "The INSERTED target word is here."
+
+        # Create rectangle at approximate position (simulating device coords)
+        # In device coords, "target" at offset 4 would be at approximately:
+        # x = TEXT_POS_X + 4 * avg_char_width = -375.0 + 4*15 = -315.0
+        original_x = -315.0
+        rect = MockRectangle(x=original_x, y=94.0, w=90.0, h=35.0)
+        glyph_value = MockGlyphValue(text="target", rectangles=[rect])
+        glyph_item = MockGlyphItem(value=glyph_value)
+        glyph_block = MockGlyphBlock(item=glyph_item)
+
+        # Define origins (same as used in test_anchor_shift)
+        old_origin = (TEXT_POS_X, TEXT_POS_Y)
+        new_origin = (TEXT_POS_X, TEXT_POS_Y)
+
+        # Call the adjustment method
+        generator._adjust_glyph_with_content_anchoring(
+            glyph_block, old_text, new_text, old_origin, new_origin
+        )
+
+        # Rectangle should have shifted right
+        # "INSERTED " is 9 chars, so delta should be 9 * 15 = 135 pixels
+        expected_delta = 9 * 15  # 135 pixels
+        actual_delta = rect.x - original_x
+
+        assert actual_delta > 100, (
+            f"X position should have shifted right by ~{expected_delta}px, "
+            f"but only shifted by {actual_delta}px"
+        )
+
+    def test_adjustment_no_change_when_text_same_position(self, generator):
+        """Test that no adjustment occurs when text is at same position."""
+
+        class MockRectangle:
+            def __init__(self, x, y, w, h):
+                self.x = x
+                self.y = y
+                self.w = w
+                self.h = h
+
+        class MockGlyphValue:
+            def __init__(self, text, rectangles):
+                self.text = text
+                self.rectangles = rectangles
+
+        class MockGlyphItem:
+            def __init__(self, value):
+                self.value = value
+
+        class MockGlyphBlock:
+            def __init__(self, item):
+                self.item = item
+
+        # Same text, same position
+        old_text = "The target word is here."
+        new_text = "The target word is here."
+
+        original_x = -315.0
+        rect = MockRectangle(x=original_x, y=94.0, w=90.0, h=35.0)
+        glyph_value = MockGlyphValue(text="target", rectangles=[rect])
+        glyph_item = MockGlyphItem(value=glyph_value)
+        glyph_block = MockGlyphBlock(item=glyph_item)
+
+        old_origin = (TEXT_POS_X, TEXT_POS_Y)
+        new_origin = (TEXT_POS_X, TEXT_POS_Y)
+
+        generator._adjust_glyph_with_content_anchoring(
+            glyph_block, old_text, new_text, old_origin, new_origin
+        )
+
+        # No change expected
+        assert rect.x == original_x
+
+    def test_adjustment_with_text_deletion_before(self, generator):
+        """Test adjustment when text is deleted before highlight."""
+
+        class MockRectangle:
+            def __init__(self, x, y, w, h):
+                self.x = x
+                self.y = y
+                self.w = w
+                self.h = h
+
+        class MockGlyphValue:
+            def __init__(self, text, rectangles):
+                self.text = text
+                self.rectangles = rectangles
+
+        class MockGlyphItem:
+            def __init__(self, value):
+                self.value = value
+
+        class MockGlyphBlock:
+            def __init__(self, item):
+                self.item = item
+
+        # Text deleted before highlight
+        old_text = "DELETED The target word is here."
+        new_text = "The target word is here."
+
+        # "target" in old is at offset 12, in new at offset 4
+        original_x = -315.0 + 8 * 15  # Offset by 8 chars ("DELETED ")
+        rect = MockRectangle(x=original_x, y=94.0, w=90.0, h=35.0)
+        glyph_value = MockGlyphValue(text="target", rectangles=[rect])
+        glyph_item = MockGlyphItem(value=glyph_value)
+        glyph_block = MockGlyphBlock(item=glyph_item)
+
+        old_origin = (TEXT_POS_X, TEXT_POS_Y)
+        new_origin = (TEXT_POS_X, TEXT_POS_Y)
+
+        generator._adjust_glyph_with_content_anchoring(
+            glyph_block, old_text, new_text, old_origin, new_origin
+        )
+
+        # Rectangle should have shifted left
+        # "DELETED " is 8 chars, so delta should be -8 * 15 = -120 pixels
+        actual_delta = rect.x - original_x
+
+        assert actual_delta < -100, (
+            f"X position should have shifted left by ~120px, " f"but shifted by {actual_delta}px"
+        )
 
 
 if __name__ == "__main__":

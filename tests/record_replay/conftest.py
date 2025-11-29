@@ -255,20 +255,32 @@ def workspace(
     WorkspaceManager = _get_workspace_manager()  # noqa: N806
     no_cleanup = request.config.getoption("--no-cleanup")
     online = request.config.getoption("--online")
-    cloud_url = rmfakecloud
 
     # Determine device mode: online if --online flag set, else offline
     device_mode = "online" if online else "offline"
 
-    # Device folder handling:
-    # - Offline mode: use --device-folder option (defaults to DeviceBench)
-    # - Online mode: use vaults from user's config.toml (ignore --device-folder)
+    # Determine cloud_url based on mode (SINGLE SOURCE OF TRUTH)
+    # - Offline mode: use rmfakecloud fixture
+    # - Online mode: use user's actual cloud URL from their config
     if device_mode == "offline":
+        cloud_url = rmfakecloud
         device_folder = request.config.getoption("--device-folder")
     else:
-        # Online mode: workspace will use vaults from user's config.toml
-        # No override needed
-        device_folder = None
+        # Online mode: read cloud URL from user's actual config (REQUIRED)
+        from rock_paper_sync.config import load_config
+
+        user_config_path = Path.home() / ".config" / "rock-paper-sync" / "config.toml"
+        if not user_config_path.exists():
+            bench.error(
+                f"User config not found at {user_config_path}\n"
+                f"Online tests require: uv run rock-paper-sync init"
+            )
+            pytest.skip("User config required for online tests")
+
+        user_config = load_config(user_config_path)
+        cloud_url = user_config.cloud.base_url
+        bench.ok(f"Using user's cloud URL: {cloud_url}")
+        device_folder = None  # Online mode uses vaults from user's config
 
     # Create appropriate vault manager for the device mode
     if device_mode == "offline":
@@ -368,27 +380,11 @@ if p.exists():
 
         bench.ok(f"Using real device credentials from {creds_path}")
 
-        # For online tests, use user's actual config to get the real cloud base_url,
-        # but override the vault section with the test vault
-        actual_config_path = creds_dir / "config.toml"
-        if actual_config_path.exists():
-            from rock_paper_sync.config import load_config
-
-            actual_config = load_config(actual_config_path)
-            cloud_base_url = actual_config.cloud.base_url
-            bench.ok(f"Using real cloud at {cloud_base_url}")
-        else:
-            cloud_base_url = "http://localhost:3000"  # Fallback
-            bench.warn(
-                f"Actual config not found at {actual_config_path}\n"
-                f"Using default cloud URL: {cloud_base_url}"
-            )
-
-        # Generate test config with real cloud URL but isolated test vault
+        # Generate test config with real cloud URL (from workspace.cloud_url) but isolated test vault
         if test_config_file.exists():
             # Set environment variable for config template expansion
             os.environ["RPS_TEST_WORKSPACE"] = str(workspace_dir.resolve())
-            os.environ["RPS_CLOUD_BASE_URL"] = cloud_base_url
+            os.environ["RPS_CLOUD_BASE_URL"] = cloud_url  # Use cloud_url set earlier
 
             # Read fixture config template
             fixture_config_content = test_config_file.read_text()
@@ -464,8 +460,8 @@ def device(request, workspace, testdata_store, bench, rmfakecloud) -> "DeviceInt
         dev = OnlineDevice(workspace, testdata_store, bench)
     else:
         OfflineEmulator = _get_offline_emulator()  # noqa: N806
-        # Use dynamically allocated rmfakecloud URL (handles parallel execution)
-        dev = OfflineEmulator(workspace, testdata_store, bench, cloud_url=rmfakecloud)
+        # cloud_url comes from workspace (set during workspace setup)
+        dev = OfflineEmulator(workspace, testdata_store, bench)
 
         # Load specific test artifact if provided
         if test_artifact:
@@ -549,11 +545,11 @@ def offline_device(
     """
     OfflineEmulator = _get_offline_emulator()  # noqa: N806
 
+    # cloud_url comes from workspace (set during workspace setup)
     dev = OfflineEmulator(
         workspace=workspace,
         testdata_store=testdata_store,
         bench=bench,
-        cloud_url=rmfakecloud,
     )
 
     # Load test artifact if specified via CLI

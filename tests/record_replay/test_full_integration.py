@@ -184,7 +184,7 @@ def test_full_integration(device, workspace, fixtures_dir, tmp_path):
 
             # Verify anchor structure is valid
             assert anchor.annotation_type == "highlight"
-            assert anchor.text_hash is not None, "Highlight anchor should have text hash"
+            assert anchor.text is not None, "Highlight anchor should have text anchor"
 
     # Test stroke anchoring
     for i, stroke in enumerate(updated_strokes[:3]):  # Test first 3
@@ -258,12 +258,11 @@ def test_full_integration(device, workspace, fixtures_dir, tmp_path):
         print("✅ Highlight markers present in modified markdown")
 
     if updated_strokes:
-        has_stroke_markers = "<!-- STROKE:" in final_markdown or "STROKE:" in final_markdown
-        has_ocr_markers = "<!-- OCR:" in final_markdown or "OCR:" in final_markdown
-        assert (
-            has_stroke_markers or has_ocr_markers
-        ), "Modified document should contain stroke/OCR markers"
-        print("✅ Stroke/OCR markers present in modified markdown")
+        # Markers are formatted by AnnotationInfo.__str__() as "N stroke" or "N strokes"
+        # within <!-- ANNOTATED: ... --> comments
+        has_stroke_markers = " stroke" in final_markdown
+        assert has_stroke_markers, "Modified document should contain stroke markers"
+        print("✅ Stroke markers present in modified markdown")
 
     # === PHASE 7: Anchor Disambiguation ===
     # Test that anchors can disambiguate between nearby annotations
@@ -282,18 +281,18 @@ def test_full_integration(device, workspace, fixtures_dir, tmp_path):
                 paragraph_index=para_idx,
                 page_num=0,
             )
-            if anchor.text_hash:
-                highlight_anchors.append((anchor.annotation_id, anchor.text_hash, para_idx))
+            if anchor.text:
+                highlight_anchors.append((anchor.annotation_id, anchor.text.content, para_idx))
 
     # If we have multiple highlight anchors, verify they can be distinguished
     if len(highlight_anchors) > 1:
-        # Count unique text hashes
-        unique_hashes = set(h[1] for h in highlight_anchors)
-        # It's OK if some share hashes (overlapping highlights), but not all
+        # Count unique text contents
+        unique_texts = set(h[1] for h in highlight_anchors)
+        # It's OK if some share texts (overlapping highlights), but not all
         # Just verify the anchor system produces valid results
         print(
             f"✅ Anchor disambiguation: {len(highlight_anchors)} anchors, "
-            f"{len(unique_hashes)} unique hashes"
+            f"{len(unique_texts)} unique texts"
         )
 
     device.end_test(test_id)
@@ -309,7 +308,7 @@ def test_integration_conflict_stress(device, workspace, fixtures_dir):
     - Paragraph boundary changes
     - Tests anchor matching limits
     """
-    test_id = "integration_conflict_stress"
+    test_id = "full_integration"
 
     # Use same fixture as full integration
     fixture_doc = fixtures_dir / "test_full_integration.md"

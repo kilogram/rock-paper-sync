@@ -44,6 +44,7 @@ from .protocol import (
     DeviceInteractionProtocol,
     DeviceProtocol,  # Backward compatibility
     DocumentState,
+    derive_test_id,
 )
 from .testdata import TestArtifacts, TestdataStore, TestManifest
 from .vault_manager import VaultInteractionManager, VaultOperation
@@ -63,6 +64,7 @@ __all__ = [
     "DeviceProtocol",  # Backward compatibility alias
     "DeviceInteractionManager",  # Backward compatibility alias
     "DocumentState",
+    "derive_test_id",
     "OnlineDevice",
     "OfflineEmulator",
     # Vault protocol and implementations

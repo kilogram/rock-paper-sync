@@ -11,15 +11,13 @@ from pathlib import Path
 
 import rmscene
 
+# Import constants from single source of truth
+from rock_paper_sync.layout.constants import (
+    RM_TEXT_BLOCK_LINE_HEIGHT,
+    TEXT_POS_Y,
+)
+
 logger = logging.getLogger(__name__)
-
-# Constants from generator.py
-TEXT_POS_Y = 94.0  # Default text origin Y-coordinate in .rm files
-
-# Text block extraction constants
-# Line height in text-relative coordinates (based on reMarkable RootTextBlock rendering)
-# This is different from actual rendered line height - the coordinate space is condensed
-RM_TEXT_BLOCK_LINE_HEIGHT = 8.0
 
 
 @dataclass

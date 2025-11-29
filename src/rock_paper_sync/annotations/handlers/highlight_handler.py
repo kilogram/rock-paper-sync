@@ -20,12 +20,16 @@ Example:
 import logging
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from rock_paper_sync.annotations import Annotation, AnnotationType, read_annotations
 from rock_paper_sync.annotations.common.anchors import AnnotationAnchor
 from rock_paper_sync.annotations.common.spatial import find_nearest_paragraph_by_y
 from rock_paper_sync.annotations.common.text_extraction import extract_text_blocks_from_rm
 from rock_paper_sync.annotations.core.data_types import ExtractedAnnotation, RenderConfig
+
+if TYPE_CHECKING:
+    from rock_paper_sync.layout import LayoutContext
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +66,7 @@ class HighlightHandler:
         annotations: list[Annotation],
         markdown_blocks: list,
         rm_file_path: Path,
+        layout_context: "LayoutContext | None" = None,
     ) -> dict[int, list[Annotation]]:
         """Map highlights to markdown paragraphs using text matching.
 
@@ -72,10 +77,16 @@ class HighlightHandler:
             annotations: List of highlight annotations
             markdown_blocks: List of markdown content blocks
             rm_file_path: Path to .rm file (for coordinate extraction if needed)
+            layout_context: Optional layout context (not used by highlights since
+                text matching is more reliable, but accepted for protocol compliance)
 
         Returns:
             Dict mapping paragraph_index -> list of matching annotations
         """
+        # Note: Highlights use text matching which is more reliable than position-based
+        # matching. The layout_context parameter is accepted for protocol compliance
+        # but not used. If needed in the future, we could use it to improve
+        # position-based fallback matching.
         mappings: dict[int, list[Annotation]] = {}
 
         # Extract text origin for position-based fallback

@@ -45,6 +45,7 @@ from rock_paper_sync.coordinate_transformer import (
 )
 
 if TYPE_CHECKING:
+    from rock_paper_sync.layout import LayoutContext
     from rock_paper_sync.ocr.integration import OCRProcessor
 
 logger = logging.getLogger(__name__)
@@ -90,17 +91,24 @@ class StrokeHandler:
         annotations: list[Annotation],
         markdown_blocks: list,
         rm_file_path: Path,
+        layout_context: "LayoutContext | None" = None,
     ) -> dict[int, list[Annotation]]:
         """Map strokes to markdown paragraphs using coordinate transformation.
 
         Uses dual-anchor Y transformation for accurate positioning:
         - Positive Y strokes: text_origin_y + native_y
-        - Negative Y strokes: text_origin_y + 60px + native_y
+        - Negative Y strokes: text_origin_y + NEGATIVE_Y_OFFSET + native_y
+
+        When layout_context is provided, can also use position_to_offset() for
+        more accurate content-based anchoring (similar to highlights).
 
         Args:
             annotations: List of stroke annotations
             markdown_blocks: List of markdown content blocks
             rm_file_path: Path to .rm file for coordinate extraction
+            layout_context: Optional layout context for position calculations.
+                When provided, enables position_to_offset() for content-based
+                anchoring using the shared layout infrastructure.
 
         Returns:
             Dict mapping paragraph_index -> list of matching annotations
@@ -139,7 +147,7 @@ class StrokeHandler:
             # Apply coordinate transformation
             if is_text_relative(annotation.parent_id):
                 # Text-relative: use dual-anchor transform
-                _, absolute_y = transformer.to_absolute(
+                absolute_x, absolute_y = transformer.to_absolute(
                     native_x=bbox.x,
                     native_y=native_y,
                     parent_id=annotation.parent_id,
@@ -148,12 +156,40 @@ class StrokeHandler:
                 )
             else:
                 # Already absolute
+                absolute_x = bbox.x
                 absolute_y = native_y
 
-            # Find closest paragraph by Y position using common utility
-            # NOTE: Requires page_y_start attribute on ContentBlock
-            # See issue #5 for pagination metadata persistence implementation
-            paragraph_index = find_nearest_paragraph_by_y(absolute_y, markdown_blocks)
+            paragraph_index = None
+
+            # Strategy 1: Use layout context for position-to-offset mapping (if available)
+            # This enables content-based anchoring similar to highlights
+            if layout_context is not None:
+                try:
+                    # Convert stroke position to approximate character offset
+                    char_offset = layout_context.position_to_offset(absolute_x, absolute_y)
+
+                    # Find which paragraph contains this offset
+                    cumulative_offset = 0
+                    for idx, md_block in enumerate(markdown_blocks):
+                        block_length = len(md_block.text) + 1  # +1 for newline
+                        if cumulative_offset <= char_offset < cumulative_offset + block_length:
+                            paragraph_index = idx
+                            logger.debug(
+                                f"Mapped stroke via layout context: "
+                                f"pos=({absolute_x:.1f}, {absolute_y:.1f}) "
+                                f"→ offset={char_offset} → paragraph {idx}"
+                            )
+                            break
+                        cumulative_offset += block_length
+                except Exception as e:
+                    logger.debug(f"Layout context mapping failed: {e}, falling back to Y-position")
+
+            # Strategy 2: Fall back to Y-position matching
+            if paragraph_index is None:
+                # Find closest paragraph by Y position using common utility
+                # NOTE: Requires page_y_start attribute on ContentBlock
+                # See issue #5 for pagination metadata persistence implementation
+                paragraph_index = find_nearest_paragraph_by_y(absolute_y, markdown_blocks)
 
             if paragraph_index is not None:
                 if paragraph_index not in mappings:

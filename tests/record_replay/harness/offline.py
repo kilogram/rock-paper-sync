@@ -13,7 +13,7 @@ import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .protocol import DeviceInteractionManager, DocumentState
+from .protocol import DeviceInteractionManager, DocumentState, derive_test_id
 from .testdata import PhaseData, TestdataStore
 
 if TYPE_CHECKING:
@@ -56,20 +56,17 @@ class OfflineEmulator(DeviceInteractionManager):
         workspace: "WorkspaceManager",
         testdata_store: TestdataStore,
         bench: "Bench",
-        cloud_url: str = "http://localhost:3000",
     ) -> None:
         """Initialize offline emulator.
 
         Args:
-            workspace: Workspace manager for sync operations
+            workspace: Workspace manager for sync operations (provides cloud_url)
             testdata_store: Store for loading testdata
             bench: Bench utilities for logging
-            cloud_url: rmfakecloud URL
         """
         self.workspace = workspace
         self.testdata_store = testdata_store
         self.bench = bench
-        self.cloud_url = cloud_url
         self._current_test_id: str | None = None
 
         # Multi-phase support (only format supported)
@@ -110,6 +107,23 @@ class OfflineEmulator(DeviceInteractionManager):
             self.load_test(test_id)
         self.bench.info(f"Started offline test: {test_id}")
 
+    def start_test_for_fixture(self, fixture_path: Path, description: str = "") -> str:
+        """Begin test, deriving test_id from fixture path.
+
+        This is the preferred way to start tests as it ensures test_id
+        matches the fixture.
+
+        Args:
+            fixture_path: Path to the fixture markdown file
+            description: Test description (ignored in offline mode)
+
+        Returns:
+            The derived test_id
+        """
+        test_id = derive_test_id(fixture_path)
+        self.start_test(test_id, description)
+        return test_id
+
     def end_test(self, test_id: str) -> None:
         """End test.
 
@@ -122,6 +136,18 @@ class OfflineEmulator(DeviceInteractionManager):
         self._current_test_id = None
         self._current_phase = 0
         self._phases = []
+
+    def observe_result(self, message: str = "") -> None:
+        """No-op for offline mode.
+
+        In offline mode, there's no device to observe.
+        This is a no-op to satisfy the DeviceInteractionProtocol.
+
+        Args:
+            message: Ignored in offline mode
+        """
+        # No observation needed in offline mode
+        pass
 
     def cleanup(self) -> None:
         """Cleanup after test (silent for offline tests).
@@ -184,7 +210,10 @@ class OfflineEmulator(DeviceInteractionManager):
     def upload_document(self, markdown_path: Path) -> str:
         """Upload document via normal sync.
 
-        Advances to next phase after upload in multi-phase mode.
+        Advances through phases to match online mode:
+        - Skips phase_0 (initial) - pre-sync state
+        - Skips phase_1 (post_upload) - uploaded rm files
+        This aligns with the online harness which captures both phases.
 
         Args:
             markdown_path: Path to markdown file
@@ -206,9 +235,16 @@ class OfflineEmulator(DeviceInteractionManager):
 
         self.bench.ok(f"Uploaded document to rmfakecloud: {doc_uuid}")
 
-        # Advance to next phase in multi-phase mode
+        # Advance past phase_0 (initial) and phase_1 (post_upload)
+        # to match online mode which captures both phases during upload
         if self._phases:
-            self._advance_phase()
+            # Check if we have both initial and post_upload phases
+            if len(self._phases) > 1 and self._phases[1].phase_name == "post_upload":
+                self._advance_phase()  # Skip phase_0 -> phase_1
+                self._advance_phase()  # Skip phase_1 -> phase_2
+            else:
+                # Legacy format: just advance once
+                self._advance_phase()
 
         return doc_uuid
 
@@ -278,23 +314,60 @@ class OfflineEmulator(DeviceInteractionManager):
         if ret != 0:
             raise RuntimeError(f"Sync failed: {err}")
 
+    def capture_phase(self, phase_name: str, action: str = "capture") -> None:
+        """No-op for offline mode.
+
+        In offline mode, testdata is pre-recorded. This method exists
+        only to satisfy the DeviceInteractionProtocol.
+
+        Args:
+            phase_name: Ignored in offline mode
+            action: Ignored in offline mode
+        """
+        # No capture needed - testdata is pre-recorded
+        pass
+
     def get_document_state(self, doc_uuid: str) -> DocumentState:
-        """Get current document state from local cache.
+        """Get current document state by downloading fresh from cloud.
+
+        Downloads .rm files directly from rmfakecloud to ensure we get
+        the latest version after any sync operations that may have
+        adjusted annotation positions.
 
         Args:
             doc_uuid: Document UUID
 
         Returns:
-            Document state
+            Document state with fresh .rm files from cloud
         """
+        from rock_paper_sync.rm_cloud_client import RmCloudClient
+        from rock_paper_sync.rm_cloud_sync import RmCloudSync
+
         rm_files: dict[str, bytes] = {}
         page_uuids: list[str] = []
 
-        cached_files = self.workspace.get_cached_rm_files()
-        for rm_path in sorted(cached_files):
-            page_uuid = rm_path.stem
-            page_uuids.append(page_uuid)
-            rm_files[page_uuid] = rm_path.read_bytes()
+        # Create cloud client and sync instance
+        client = RmCloudClient(base_url=self.workspace.cloud_url)
+        sync = RmCloudSync(base_url=self.workspace.cloud_url, client=client)
+
+        # Get page UUIDs from cloud
+        try:
+            page_uuids = sync.get_existing_page_uuids(doc_uuid)
+        except Exception as e:
+            self.bench.warn(f"Failed to get page UUIDs: {e}")
+            page_uuids = []
+
+        if page_uuids:
+            # Download fresh .rm files from cloud to temp directory
+            import tempfile
+
+            with tempfile.TemporaryDirectory() as temp_dir:
+                temp_path = Path(temp_dir)
+                downloaded_files = sync.download_page_rm_files(doc_uuid, page_uuids, temp_path)
+                for i, rm_path in enumerate(downloaded_files):
+                    if rm_path and rm_path.exists():
+                        page_uuid = page_uuids[i]
+                        rm_files[page_uuid] = rm_path.read_bytes()
 
         has_annotations = len(rm_files) > 0
 
@@ -324,10 +397,10 @@ class OfflineEmulator(DeviceInteractionManager):
         self.bench.info(f"Injecting {len(rm_files)} .rm files into rmfakecloud...")
 
         # Create cloud client (loads credentials from ~/.config/rock-paper-sync/device-credentials.json)
-        client = RmCloudClient(base_url=self.cloud_url)
+        client = RmCloudClient(base_url=self.workspace.cloud_url)
 
         # Create sync instance using production code
-        sync = RmCloudSync(base_url=self.cloud_url, client=client)
+        sync = RmCloudSync(base_url=self.workspace.cloud_url, client=client)
 
         # Convert rm_files dict to list of (page_uuid, rm_data) tuples
         pages = [(page_uuid, rm_data) for page_uuid, rm_data in rm_files.items()]

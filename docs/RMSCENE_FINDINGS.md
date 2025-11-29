@@ -254,6 +254,108 @@ Would require:
 5. Verify multi-page documents
 6. Check special characters and Unicode
 
+## Layout Engine Calibration (2025-11-30)
+
+### Line Height Discovery
+
+When highlights are created on a reMarkable device and then text is modified (e.g., inserting
+paragraphs), the highlight rectangles must be repositioned. This requires an accurate model
+of how the device renders text.
+
+**Problem**: Initial `LINE_HEIGHT` values (35px, then 50px) caused highlights to appear at
+wrong Y positions after text modifications. A 45.2px error was observed for highlights that
+should have shifted down by ~4 lines.
+
+**Root Cause Analysis**:
+
+We created fresh highlights on the device and measured their actual pixel positions:
+
+| Highlight | Character Position | Device X | Device Y |
+|-----------|-------------------|----------|----------|
+| "target"  | char 77           | -218.9   | 205.8    |
+| "bottom"  | char 210          | -378.4   | 436.2    |
+
+From word-wrap analysis:
+- "target" is on display line 2
+- "bottom" is on display line 6
+
+Calculating effective line height from device data:
+```
+From target: (205.8 - 94.0) / 2 = 55.9px
+From bottom: (436.2 - 94.0) / 6 = 57.0px
+From delta:  (436.2 - 205.8) / 4 = 57.6px
+Average: ~57px per line
+```
+
+**Calibrated Values**:
+
+| Parameter | Old Value | New Value | Source |
+|-----------|-----------|-----------|--------|
+| `LINE_HEIGHT` | 35px | 57px | Device highlight Y positions |
+| `avg_char_width` | 15px | 15px | Unchanged (50-51 chars/line observed) |
+| `TEXT_WIDTH` | 750px | 750px | Unchanged |
+| `TEXT_POS_Y` | 94px | 94px | Unchanged (from RootTextBlock.pos_y) |
+
+**Highlight Rectangle Structure**:
+
+The highlight rect height is 44.4px, less than the 57px line height. This suggests:
+- Text line height: 57px total
+- Highlight box: 44.4px (covers text portion)
+- Inter-line gap: ~12.6px (spacing between lines)
+
+### CRDT Anchoring (Firmware 3.6+)
+
+Highlights store their text anchor position in `extra_value_data` as CRDT offsets:
+
+```
+Field 15 (tag 0x7F): Start CrdtId
+  - author_id (varint)
+  - position = base_id + char_offset (varint)
+
+Field 17 (tag 0x8F): End marker
+  - Fixed prefix: 01 01
+  - end_position (varint)
+```
+
+Where `base_id` is typically 16 (from RootTextBlock's CrdtSequenceItem.item_id.part2).
+
+**Key Finding**: CRDT offsets alone do NOT control display position. The device uses
+the rectangle coordinates for rendering. CRDT offsets may be used for text selection
+or editing operations, but visual positioning requires correct rectangle coordinates.
+
+### Word-Wrap Algorithm Bug Fix (2025-11-30)
+
+When repositioning highlights after text modifications, the layout engine must calculate
+line breaks to determine the (x, y) position of text. A bug in the `calculate_line_breaks`
+algorithm caused highlight rectangles to be positioned incorrectly after text shifts.
+
+**Problem**: Highlights appeared 2+ characters to the left of where they should be after
+text was inserted before the highlighted word (X-shift scenario).
+
+**Root Cause**:
+
+The word-wrap algorithm double-counted spaces:
+
+```python
+# Bug: space counted twice
+space_needed = 1 if line_length > 0 else 0  # (1) Pre-word space
+if line_length + space_needed + word_length > chars_per_line:
+    ...
+line_length += space_needed + word_length  # Adds space_needed
+...
+if text[pos] == " ":
+    line_length += 1  # (2) Post-word space - DOUBLE COUNT!
+```
+
+This caused line breaks to occur ~10 characters too early (36 chars vs 50 chars on a
+50-char-wide line), which meant the layout model calculated wrong X positions.
+
+**Fix**: Remove the duplicate `space_needed` logic since trailing spaces are already
+tracked when consumed after each word.
+
+**Impact**: Tests relying on old (buggy) layout engine behavior may need their testdata
+re-recorded. The `test_markdown_modifications` test requires re-recording for this reason.
+
 ## Known Issues
 
 None currently. The implementation works reliably for basic text documents.

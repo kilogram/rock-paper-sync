@@ -7,13 +7,18 @@ Replaces the old annotation_mapper.map_annotations_to_paragraphs() with
 a composable, extensible architecture.
 """
 
+from __future__ import annotations
+
 import logging
 from pathlib import Path
-from typing import BinaryIO
+from typing import TYPE_CHECKING, BinaryIO
 
 from rock_paper_sync.annotations.core.data_types import AnnotationInfo
 from rock_paper_sync.annotations.core.protocol import AnnotationHandler
 from rock_paper_sync.parser import ContentBlock
+
+if TYPE_CHECKING:
+    from rock_paper_sync.layout import LayoutContext
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +79,7 @@ class AnnotationProcessor:
         self,
         rm_file_path: Path | str | BinaryIO,
         markdown_blocks: list[ContentBlock],
+        layout_context: LayoutContext | None = None,
     ) -> dict[int, AnnotationInfo]:
         """Map annotations from .rm file to markdown paragraph indices.
 
@@ -83,6 +89,9 @@ class AnnotationProcessor:
         Args:
             rm_file_path: Path to .rm file (or file-like object)
             markdown_blocks: List of content blocks from parsed markdown
+            layout_context: Optional layout context for position calculations.
+                When provided, handlers can use position_to_offset() for
+                accurate content-based mapping.
 
         Returns:
             Dictionary mapping paragraph index to annotation summary
@@ -118,8 +127,8 @@ class AnnotationProcessor:
 
             logger.debug(f"Detected {len(annotations)} {handler_type} annotations")
 
-            # Map to paragraphs
-            mappings = handler.map(annotations, markdown_blocks, rm_path)
+            # Map to paragraphs (pass layout context if available)
+            mappings = handler.map(annotations, markdown_blocks, rm_path, layout_context)
 
             # Update annotation counts
             for paragraph_index, matches in mappings.items():

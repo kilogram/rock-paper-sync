@@ -12,6 +12,30 @@ from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 
+def derive_test_id(fixture_path: Path) -> str:
+    """Derive test_id from fixture filename.
+
+    Fixture files follow the pattern: test_{name}.md
+    The test_id is extracted as {name}.
+
+    Args:
+        fixture_path: Path to the fixture markdown file
+
+    Returns:
+        Test identifier derived from filename
+
+    Examples:
+        >>> derive_test_id(Path("fixtures/test_highlights.md"))
+        'highlights'
+        >>> derive_test_id(Path("fixtures/test_full_integration.md"))
+        'full_integration'
+    """
+    stem = fixture_path.stem  # e.g., "test_highlights"
+    if stem.startswith("test_"):
+        return stem[5:]  # Remove "test_" prefix
+    return stem  # If no prefix, use stem as-is
+
+
 @dataclass
 class DocumentState:
     """State of a document on the reMarkable cloud.
@@ -151,6 +175,28 @@ class DeviceInteractionProtocol(Protocol):
         """
         ...
 
+    def start_test_for_fixture(self, fixture_path: Path, description: str = "") -> str:
+        """Begin a test, deriving test_id from fixture path.
+
+        This is the preferred way to start tests as it ensures test_id
+        matches the fixture, avoiding redundant recordings.
+
+        Args:
+            fixture_path: Path to the fixture markdown file
+            description: Human-readable test description
+
+        Returns:
+            The derived test_id
+
+        Example:
+            test_id = device.start_test_for_fixture(
+                fixtures_dir / "test_highlights.md",
+                description="Highlight annotations"
+            )
+            # test_id will be "highlights"
+        """
+        ...
+
     def end_test(self, test_id: str) -> None:
         """End a test, finalizing artifact capture.
 
@@ -160,6 +206,34 @@ class DeviceInteractionProtocol(Protocol):
 
         Args:
             test_id: Test identifier (same as start_test)
+        """
+        ...
+
+    def observe_result(self, message: str = "") -> None:
+        """Pause for user to observe result on device before cleanup.
+
+        In online mode: Prompts user to view device and press Enter to continue.
+        In offline mode: No-op (no observation needed).
+
+        Call this after syncing up modified markdown to let the user verify
+        the changes look correct on the device before the test proceeds to cleanup.
+
+        Args:
+            message: Optional message describing what to observe
+        """
+        ...
+
+    def capture_phase(self, phase_name: str, action: str = "capture") -> None:
+        """Manually capture a phase at the current state.
+
+        In online mode: Saves current vault and device state as a named phase.
+        In offline mode: No-op (testdata is pre-recorded).
+
+        Use this after trigger_sync() or any operation to capture intermediate states.
+
+        Args:
+            phase_name: Name for this phase (e.g., "post_modification")
+            action: Action description for the phase metadata
         """
         ...
 

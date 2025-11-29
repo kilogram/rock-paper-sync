@@ -19,17 +19,22 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from rmscene.tagged_block_common import CrdtId
 
+# Import constants from single source of truth
+from .layout.constants import (
+    NEGATIVE_Y_OFFSET,
+    ROOT_LAYER_ID,
+)
+from .layout.constants import (
+    TEXT_POS_X as DEFAULT_TEXT_ORIGIN_X,
+)
+from .layout.constants import (
+    TEXT_POS_Y as DEFAULT_TEXT_ORIGIN_Y,
+)
+from .layout.constants import (
+    TEXT_WIDTH as DEFAULT_TEXT_WIDTH,
+)
+
 logger = logging.getLogger("rock_paper_sync.coordinate_transformer")
-
-# Typography-based constants for coordinate transformation
-# See docs/STROKE_ANCHORING.md for derivation
-NEGATIVE_Y_OFFSET = 60  # LINE_HEIGHT (35) + BASELINE_OFFSET (25)
-ROOT_LAYER_ID = (0, 11)  # CrdtId for root layer (absolute coordinates)
-
-# Standard text positioning
-DEFAULT_TEXT_ORIGIN_X = -375.0
-DEFAULT_TEXT_ORIGIN_Y = 94.0
-DEFAULT_TEXT_WIDTH = 750.0
 
 
 @dataclass

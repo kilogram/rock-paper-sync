@@ -10,6 +10,9 @@ types of annotations (highlights, strokes, sketches, etc.) with:
 
 # Core annotation types and utilities
 # Export new architecture components
+# Re-export WordWrapLayoutEngine from layout module for backwards compatibility
+from rock_paper_sync.layout import WordWrapLayoutEngine
+
 from .core.data_types import AnnotationInfo
 from .core.processor import AnnotationProcessor
 from .core.protocol import AnnotationHandler
@@ -24,7 +27,6 @@ from .core_types import (
     Stroke,
     TextAnchor,
     TextBlock,
-    WordWrapLayoutEngine,
     associate_annotations_with_content,
     calculate_position_mapping,
     preserve_strokes_in_scene,

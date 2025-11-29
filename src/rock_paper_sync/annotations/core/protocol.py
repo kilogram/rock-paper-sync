@@ -9,6 +9,7 @@ Design principles:
 - Handlers are pure processors (no state beyond config)
 - Corrections are managed separately by CorrectionManager
 - Coordinate transformation is a shared utility (not handler-specific)
+- Layout context provides unified access to text positioning (shared infrastructure)
 
 Example usage:
     class StrokeHandler:
@@ -20,8 +21,8 @@ Example usage:
             # Extract stroke annotations from .rm file
             ...
 
-        def map(self, annotations, markdown_blocks, rm_file_path) -> dict:
-            # Map strokes to paragraph indices
+        def map(self, annotations, markdown_blocks, rm_file_path, layout_context) -> dict:
+            # Map strokes to paragraph indices using layout context
             ...
 
         def render(self, paragraph_index, matches, content) -> str:
@@ -35,6 +36,7 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 if TYPE_CHECKING:
     from rock_paper_sync.annotations.common.anchors import AnnotationAnchor
     from rock_paper_sync.annotations.core.data_types import ExtractedAnnotation, RenderConfig
+    from rock_paper_sync.layout import LayoutContext
 
 
 @runtime_checkable
@@ -80,6 +82,7 @@ class AnnotationHandler(Protocol):
         annotations: list[Any],
         markdown_blocks: list[Any],
         rm_file_path: Path,
+        layout_context: "LayoutContext | None" = None,
     ) -> dict[int, list[Any]]:
         """Map annotations to markdown paragraph indices.
 
@@ -87,6 +90,10 @@ class AnnotationHandler(Protocol):
             annotations: List of annotations from detect()
             markdown_blocks: List of markdown content blocks
             rm_file_path: Path to .rm file (for coordinate extraction)
+            layout_context: Optional layout context for position calculations.
+                When provided, enables accurate character-offset-based mapping
+                using the shared layout infrastructure. Strokes can use
+                position_to_offset() for content-based anchoring.
 
         Returns:
             Dict mapping paragraph_index -> list of matching annotations
