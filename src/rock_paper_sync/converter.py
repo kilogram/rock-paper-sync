@@ -48,7 +48,7 @@ Each vault is synced independently:
 import logging
 import time
 import uuid as uuid_module
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .annotation_markers_v2 import (
@@ -555,6 +555,8 @@ class SyncEngine:
                 try:
                     # Parse clean content
                     clean_doc = parse_markdown_file(tmp_path)
+                    # Preserve original title (temp file has wrong name like "tmp3lvh83u3")
+                    clean_doc = replace(clean_doc, title=md_doc.title, path=md_doc.path)
                     content_for_device = clean_doc.content
                     logger.debug("Using clean content (markers stripped) for device generation")
                 finally:
