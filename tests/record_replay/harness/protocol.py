@@ -237,6 +237,42 @@ class DeviceInteractionProtocol(Protocol):
         """
         ...
 
+    def upload_golden_document(self, markdown_path: Path, prompt: str) -> DocumentState:
+        """Upload a fresh document for device-native ground truth capture.
+
+        This enables comparison between our re-anchored highlights and what the
+        device would produce if the user highlighted text at its final position.
+
+        Workflow:
+        1. Upload markdown_path as a NEW document (separate from main test doc)
+        2. In online mode: prompt user to create highlights matching the prompt
+        3. Capture the resulting .rm files as "golden_native" phase
+        4. Return state for comparison with re-anchored output
+
+        In online mode: Uploads fresh doc, prompts user, captures golden phase.
+        In offline mode: Loads pre-recorded golden phase from testdata.
+
+        Args:
+            markdown_path: Path to the (already modified) markdown document
+            prompt: Instructions for user (e.g., "Highlight 'target', 'bottom'")
+
+        Returns:
+            DocumentState with device-native annotations for comparison
+
+        Example:
+            # After re-anchoring flow completes
+            golden_state = device.upload_golden_document(
+                workspace.test_doc,  # Already modified
+                prompt="Highlight 'target', 'bottom', 'cross line'"
+            )
+            assert_highlights_match(
+                reanchored_state.rm_files,
+                golden_state.rm_files,
+                tolerance_px=5.0
+            )
+        """
+        ...
+
     def cleanup(self) -> None:
         """Cleanup after test completion.
 

@@ -430,6 +430,162 @@ class OnlineDevice(DeviceInteractionManager):
             "Press Enter when you're ready to continue...",
         )
 
+    def upload_golden_document(self, markdown_path: Path, prompt: str) -> DocumentState:
+        """Upload a fresh document for device-native ground truth capture.
+
+        Creates a separate document (different UUID) for the user to annotate
+        at the final text positions, enabling comparison with re-anchored output.
+
+        Args:
+            markdown_path: Path to the (already modified) markdown document
+            prompt: Instructions for user (e.g., "Highlight 'target', 'bottom'")
+
+        Returns:
+            DocumentState with device-native annotations
+        """
+        import time
+
+        if not self._current_test_id:
+            raise RuntimeError("No test started - call start_test() first")
+
+        # Create golden document with "_golden" suffix
+        golden_path = markdown_path.parent / f"{markdown_path.stem}_golden.md"
+        golden_path.write_text(markdown_path.read_text())
+
+        self.bench.info("📌 GOLDEN CAPTURE: Uploading fresh document for ground truth")
+
+        # Run sync to upload the golden document
+        ret, out, err = self.workspace.run_sync("Upload golden document")
+        if ret != 0:
+            raise RuntimeError(f"Failed to upload golden document: {err}")
+
+        # Get the golden document UUID (should be different from main doc)
+        golden_uuid = self._get_golden_document_uuid()
+        if not golden_uuid:
+            raise RuntimeError("Golden document UUID not found after sync")
+
+        self.bench.ok(f"Uploaded golden document: {golden_uuid}")
+
+        # Download fresh rm files from cloud
+        self._download_rm_files_to_cache(golden_uuid)
+
+        # Prompt user to annotate with specific instructions
+        self.bench.prompt_user(
+            "📌 GOLDEN CAPTURE",
+            f"Please annotate the GOLDEN document (uuid: {golden_uuid[:8]})",
+            f"Instructions: {prompt}",
+            "",
+            "IMPORTANT: Annotate the '_golden' document, not the original!",
+            "Make sure annotations sync back to cloud.",
+            "Then press Enter to capture ground truth...",
+        )
+
+        # Wait for annotations with multiple sync attempts
+        annotations_found = False
+        max_attempts = 5
+
+        for attempt in range(1, max_attempts + 1):
+            ret, out, err = self.workspace.run_sync(f"Golden sync (attempt {attempt})")
+            if ret != 0:
+                raise RuntimeError(f"Failed to sync golden annotations: {err}")
+
+            state = self.get_document_state(golden_uuid)
+            if state.has_annotations:
+                annotations_found = True
+                self.bench.ok(f"✓ Golden annotations found after {attempt} sync(s)")
+                break
+
+            if attempt < max_attempts:
+                self.bench.observe("No golden annotations yet, waiting 5s...")
+                time.sleep(5)
+
+        if not annotations_found:
+            self.bench.warn("No golden annotations captured - proceeding anyway")
+
+        # Capture as golden_native phase
+        self._capture_golden_phase(golden_uuid)
+
+        # Clean up golden file from vault (but keep in testdata)
+        if golden_path.exists():
+            golden_path.unlink()
+
+        return self.get_document_state(golden_uuid)
+
+    def _get_golden_document_uuid(self) -> str | None:
+        """Get UUID of the golden document from state.
+
+        Returns:
+            Golden document UUID, or None if not found
+        """
+        from rock_paper_sync.state import StateManager
+
+        state_db = self.workspace.state_dir / "state.db"
+        if not state_db.exists():
+            return None
+
+        state_manager = StateManager(state_db)
+        # Look for document with _golden suffix
+        for entry in state_manager.get_all_synced_files():
+            if "_golden" in entry.obsidian_path:
+                return entry.remarkable_uuid
+        return None
+
+    def _capture_golden_phase(self, golden_uuid: str) -> None:
+        """Capture golden document state as a special phase.
+
+        Args:
+            golden_uuid: UUID of the golden document
+        """
+        if not self._current_test_id:
+            raise RuntimeError("No test started")
+
+        test_dir = self.testdata_store.base_dir / self._current_test_id
+        phase_name = "golden_native"
+        phase_dir = test_dir / "phases" / f"phase_{self._current_phase}_{phase_name}"
+        phase_dir.mkdir(parents=True, exist_ok=True)
+
+        # Get golden document state
+        state = self.get_document_state(golden_uuid)
+
+        # Save device state metadata
+        device_state = {
+            "doc_uuid": golden_uuid,
+            "page_uuids": state.page_uuids,
+            "rm_files_count": len(state.rm_files),
+            "has_annotations": state.has_annotations,
+            "is_golden": True,
+        }
+        (phase_dir / "device_state.json").write_text(json.dumps(device_state, indent=2))
+
+        # Save .rm files
+        if state.rm_files:
+            rm_dir = phase_dir / "rm_files"
+            rm_dir.mkdir(parents=True, exist_ok=True)
+            for page_uuid, rm_bytes in state.rm_files.items():
+                (rm_dir / f"{page_uuid}.rm").write_bytes(rm_bytes)
+
+        # Save phase metadata
+        phase_info = {
+            "phase_number": self._current_phase,
+            "phase_name": phase_name,
+            "timestamp": datetime.now().isoformat(),
+            "action": "device_native_capture",
+            "is_golden": True,
+        }
+        (phase_dir / "phase_info.json").write_text(json.dumps(phase_info, indent=2))
+
+        self.bench.ok(f"Captured golden phase: {phase_name}")
+        self._phases.append(
+            PhaseData(
+                phase_number=self._current_phase,
+                phase_name=phase_name,
+                vault_snapshot_path=phase_dir,  # No vault snapshot for golden
+                device_state=device_state,
+                phase_info=phase_info,
+            )
+        )
+        self._current_phase += 1
+
     def cleanup(self) -> None:
         """Cleanup after test with user confirmation.
 

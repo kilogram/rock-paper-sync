@@ -1,0 +1,7 @@
+{
+  "phase_number": 4,
+  "phase_name": "golden_native",
+  "timestamp": "2025-11-30T19:40:37.588585",
+  "action": "device_native_capture",
+  "is_golden": true
+}

@@ -327,6 +327,59 @@ class OfflineEmulator(DeviceInteractionManager):
         # No capture needed - testdata is pre-recorded
         pass
 
+    def upload_golden_document(self, markdown_path: Path, prompt: str) -> DocumentState:
+        """Load pre-recorded golden phase for device-native ground truth.
+
+        In offline mode, this loads the golden_native phase from testdata
+        that was recorded during online capture.
+
+        Args:
+            markdown_path: Ignored (used only for online recording)
+            prompt: Ignored (used only for online user prompt)
+
+        Returns:
+            DocumentState with device-native annotations from golden phase
+
+        Raises:
+            FileNotFoundError: If no golden_native phase exists in testdata
+        """
+        if not self._phases:
+            raise RuntimeError("No test loaded - call load_test() or start_test() first")
+
+        # Find golden_native phase
+        golden_phase = None
+        for phase in self._phases:
+            if phase.phase_name == "golden_native":
+                golden_phase = phase
+                break
+
+        if golden_phase is None:
+            raise FileNotFoundError(
+                f"No golden_native phase in testdata for test '{self._current_test_id}'. "
+                "Re-run with --online -s to record golden ground truth."
+            )
+
+        # Get golden document UUID from device_state
+        golden_uuid = (
+            golden_phase.device_state.get("doc_uuid") if golden_phase.device_state else None
+        )
+        if not golden_uuid:
+            raise RuntimeError("Golden phase has no doc_uuid in device_state")
+
+        page_uuids = golden_phase.device_state.get("page_uuids", [])
+        rm_files = golden_phase.rm_files or {}
+
+        self.bench.ok(
+            f"Loaded golden phase: {len(rm_files)} .rm file(s) " f"(doc_uuid: {golden_uuid[:8]})"
+        )
+
+        return DocumentState(
+            doc_uuid=golden_uuid,
+            page_uuids=page_uuids,
+            rm_files=rm_files,
+            has_annotations=len(rm_files) > 0,
+        )
+
     def get_document_state(self, doc_uuid: str) -> DocumentState:
         """Get current document state by downloading fresh from cloud.
 

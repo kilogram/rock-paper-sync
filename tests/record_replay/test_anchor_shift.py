@@ -282,4 +282,37 @@ def test_anchor_shift(device, workspace, fixtures_dir):
             f"   'cross line': {crossline_rects_after} rectangles spanning {crossline_rects_after} line(s)"
         )
 
+    # OPTIONAL: Golden ground truth capture
+    # This captures device-native highlights for comparison with our re-anchored output
+    try:
+        from tests.record_replay.harness.comparison import (
+            assert_highlights_match,
+            print_highlight_comparison,
+        )
+
+        golden_state = device.upload_golden_document(
+            workspace.test_doc,
+            prompt="Highlight 'target', 'bottom', and 'cross line' (same words as before)",
+        )
+
+        if golden_state.has_annotations:
+            print("\n📌 GOLDEN COMPARISON: Re-anchored vs Device-Native")
+            print_highlight_comparison(after_state.rm_files, golden_state.rm_files)
+
+            # Assert positions match within tolerance
+            # Use 5px tolerance to account for minor rendering differences
+            assert_highlights_match(
+                after_state.rm_files,
+                golden_state.rm_files,
+                tolerance_px=5.0,
+            )
+            print("✅ All highlight positions match within 5px tolerance!")
+        else:
+            print("\n⚠️  Golden document has no annotations - skipping comparison")
+
+    except FileNotFoundError:
+        # No golden testdata recorded yet - that's OK
+        print("\n⚠️  No golden testdata recorded - skipping ground truth comparison")
+        print("   Re-run with --online -s to record golden ground truth")
+
     device.end_test(test_id)
