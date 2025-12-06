@@ -16,8 +16,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from rmscene.tagged_block_common import CrdtId
+
 if TYPE_CHECKING:
-    from rmscene.tagged_block_common import CrdtId
+    from .layout import LayoutContext
 
 # Import constants from single source of truth
 from .layout.constants import (
@@ -52,6 +54,30 @@ class AnchorOrigin:
 
     x: float
     y: float
+
+
+@dataclass
+class ParentAnchor:
+    """Per-parent anchor position for coordinate transformation.
+
+    Each stroke group (parent_id) has its own anchor position determined by:
+    - anchor_x: X coordinate offset from TreeNodeBlock.anchor_origin_x
+    - anchor_y: Y coordinate from anchor_id character offset resolution
+
+    Attributes:
+        anchor_x: X coordinate offset for this parent
+        anchor_y: Y coordinate for this parent (from text character position)
+        char_offset: Original character offset (for debugging/logging), None if unknown
+    """
+
+    anchor_x: float
+    anchor_y: float
+    char_offset: int | None = None
+
+
+# End-of-document marker in anchor_id (0xFFFFFFFFFFFF)
+# When anchor_id.part2 equals this value, the anchor is at end of document
+END_OF_DOC_ANCHOR_MARKER = 281474976710655
 
 
 def is_root_layer(parent_id: "CrdtId") -> bool:
@@ -322,6 +348,238 @@ def build_parent_anchor_map(rm_file: Path) -> dict["CrdtId", AnchorOrigin]:
         logger.warning(f"Failed to build parent anchor map from {rm_file}: {e}")
 
     return parent_to_anchor
+
+
+class ParentAnchorResolver:
+    """Resolves per-parent anchor positions from TreeNodeBlocks.
+
+    Each stroke group has a parent_id that maps to a TreeNodeBlock containing:
+    - anchor_origin_x: X offset for this parent's coordinate space
+    - anchor_id: CrdtId where part2 is a character offset determining Y position
+
+    This class extracts these mappings and resolves character offsets to
+    Y positions using a LayoutContext.
+
+    Example:
+        resolver = ParentAnchorResolver.from_rm_file(rm_path)
+        anchor = resolver.get_anchor(parent_id)
+        abs_x = anchor.anchor_x + native_x
+        abs_y = anchor.anchor_y + native_y
+
+    Or use the convenience method:
+        abs_x, abs_y = resolver.to_absolute(native_x, native_y, parent_id)
+    """
+
+    def __init__(
+        self,
+        parent_to_anchor_x: dict["CrdtId", float],
+        parent_to_char_offset: dict["CrdtId", int],
+        layout_ctx: "LayoutContext",
+        default_origin: TextOrigin,
+    ):
+        """Initialize resolver with extracted anchor data.
+
+        Use factory methods from_rm_file() or from_blocks() instead of
+        calling this directly.
+
+        Args:
+            parent_to_anchor_x: Map from parent_id to X anchor offset
+            parent_to_char_offset: Map from parent_id to character offset
+            layout_ctx: Layout context for character offset to Y resolution
+            default_origin: Default text origin for unknown parent_ids
+        """
+        self._parent_to_anchor_x = parent_to_anchor_x
+        self._parent_to_char_offset = parent_to_char_offset
+        self._layout_ctx = layout_ctx
+        self._default_origin = default_origin
+        self._cache: dict[CrdtId, ParentAnchor] = {}
+
+    @property
+    def layout_context(self) -> "LayoutContext":
+        """Get the layout context used for Y position resolution."""
+        return self._layout_ctx
+
+    @property
+    def text_content(self) -> str:
+        """Get the text content from the layout context."""
+        return self._layout_ctx.text_content
+
+    @classmethod
+    def from_rm_file(cls, rm_path: "Path") -> "ParentAnchorResolver":
+        """Create resolver from .rm file.
+
+        Reads the file, extracts TreeNodeBlocks for anchor mappings,
+        and creates a LayoutContext from the RootTextBlock.
+
+        Args:
+            rm_path: Path to .rm file
+
+        Returns:
+            ParentAnchorResolver ready for anchor lookups
+        """
+        import rmscene
+
+        with open(rm_path, "rb") as f:
+            blocks = list(rmscene.read_blocks(f))
+
+        return cls.from_blocks(blocks)
+
+    @classmethod
+    def from_blocks(cls, blocks: list) -> "ParentAnchorResolver":
+        """Create resolver from pre-read rmscene blocks.
+
+        Use this when you already have blocks from rmscene.read_blocks()
+        to avoid re-reading the file.
+
+        Args:
+            blocks: List of rmscene blocks from read_blocks()
+
+        Returns:
+            ParentAnchorResolver ready for anchor lookups
+        """
+        from .layout import LayoutConfig, LayoutContext
+
+        # Extract text content and origin from RootTextBlock
+        full_text = ""
+        text_pos_x = DEFAULT_TEXT_ORIGIN_X
+        text_pos_y = DEFAULT_TEXT_ORIGIN_Y
+
+        for block in blocks:
+            if "RootText" in type(block).__name__:
+                text_data = block.value
+                text_pos_x = text_data.pos_x
+                text_pos_y = text_data.pos_y
+
+                # Extract text from CrdtSequence
+                text_parts = []
+                for item in text_data.items.sequence_items():
+                    if hasattr(item, "value") and isinstance(item.value, str):
+                        text_parts.append(item.value)
+                full_text = "".join(text_parts)
+                break
+
+        # Create layout context for Y position resolution
+        layout_ctx = LayoutContext.from_text(
+            full_text,
+            use_font_metrics=True,
+            config=LayoutConfig(text_pos_x=text_pos_x, text_pos_y=text_pos_y),
+        )
+
+        default_origin = TextOrigin(x=text_pos_x, y=text_pos_y)
+
+        # Extract per-parent anchor mappings from TreeNodeBlocks
+        parent_to_anchor_x: dict[CrdtId, float] = {}
+        parent_to_char_offset: dict[CrdtId, int] = {}
+
+        for block in blocks:
+            if type(block).__name__ == "TreeNodeBlock":
+                if hasattr(block, "group") and block.group:
+                    g = block.group
+                    node_id = g.node_id
+
+                    # Get anchor_origin_x
+                    if (
+                        hasattr(g, "anchor_origin_x")
+                        and g.anchor_origin_x
+                        and g.anchor_origin_x.value is not None
+                    ):
+                        parent_to_anchor_x[node_id] = g.anchor_origin_x.value
+
+                    # Get anchor_id (character offset)
+                    if hasattr(g, "anchor_id") and g.anchor_id and g.anchor_id.value:
+                        anchor_id = g.anchor_id.value
+                        if hasattr(anchor_id, "part2"):
+                            parent_to_char_offset[node_id] = anchor_id.part2
+
+        return cls(parent_to_anchor_x, parent_to_char_offset, layout_ctx, default_origin)
+
+    def get_anchor(self, parent_id: "CrdtId | None") -> ParentAnchor:
+        """Get anchor position for a parent_id.
+
+        Returns default origin if parent_id is unknown or is root layer.
+        Uses caching for efficiency.
+
+        Args:
+            parent_id: Parent layer CrdtId
+
+        Returns:
+            ParentAnchor with resolved anchor_x and anchor_y
+        """
+        # Handle None or root layer
+        if parent_id is None or is_root_layer(parent_id):
+            return ParentAnchor(0.0, 0.0, None)
+
+        # Check cache
+        if parent_id in self._cache:
+            return self._cache[parent_id]
+
+        # Resolve anchor_x
+        anchor_x = self._parent_to_anchor_x.get(parent_id, self._default_origin.x)
+
+        # Resolve anchor_y from character offset
+        char_offset = self._parent_to_char_offset.get(parent_id)
+
+        if char_offset is None:
+            # No anchor_id for this parent - use default
+            anchor_y = self._default_origin.y
+        elif char_offset == END_OF_DOC_ANCHOR_MARKER:
+            # End of document marker - position after last character
+            text_len = len(self._layout_ctx.text_content)
+            if text_len > 0:
+                _, last_y = self._layout_ctx.offset_to_position(text_len - 1)
+                anchor_y = last_y + self._layout_ctx.line_height
+            else:
+                anchor_y = self._default_origin.y
+        elif char_offset < len(self._layout_ctx.text_content):
+            # Normal case - resolve character offset to Y position
+            _, anchor_y = self._layout_ctx.offset_to_position(char_offset)
+        else:
+            # Character offset out of bounds - use default
+            anchor_y = self._default_origin.y
+            char_offset = None  # Mark as invalid for debugging
+
+        anchor = ParentAnchor(anchor_x, anchor_y, char_offset)
+        self._cache[parent_id] = anchor
+        return anchor
+
+    def to_absolute(
+        self,
+        native_x: float,
+        native_y: float,
+        parent_id: "CrdtId | None",
+    ) -> tuple[float, float]:
+        """Transform native coordinates to absolute using per-parent anchors.
+
+        For root layer items (absolute coordinate space), returns coordinates unchanged.
+        For text-relative items, adds the per-parent anchor offset.
+
+        Args:
+            native_x: X coordinate in native space
+            native_y: Y coordinate in native space
+            parent_id: Parent layer CrdtId
+
+        Returns:
+            (absolute_x, absolute_y) tuple
+        """
+        if parent_id is None or is_root_layer(parent_id):
+            return native_x, native_y
+
+        anchor = self.get_anchor(parent_id)
+        return anchor.anchor_x + native_x, anchor.anchor_y + native_y
+
+    def get_text_end_y(self) -> float:
+        """Get Y position after the last line of text.
+
+        Useful for detecting implicit paragraphs (strokes below all text).
+
+        Returns:
+            Y coordinate for end of text
+        """
+        text_len = len(self._layout_ctx.text_content)
+        if text_len > 0:
+            _, last_y = self._layout_ctx.offset_to_position(text_len - 1)
+            return last_y + self._layout_ctx.line_height
+        return self._default_origin.y
 
 
 def get_annotation_center_y(block, text_origin_y: float = DEFAULT_TEXT_ORIGIN_Y) -> float | None:

@@ -451,16 +451,15 @@ class OCRProcessor:
         Returns:
             List of annotation clusters
         """
-        import math
-        from collections import defaultdict
+        from ..annotations.common.spatial import cluster_by_proximity
 
         if not annotations:
             return []
 
         # Extract bounding boxes and calculate centers
         # Filter out annotations without valid geometry to avoid corrupt clustering
-        centers = []
-        valid_annotations = []
+        centers: list[tuple[float, float]] = []
+        valid_annotations: list[Annotation] = []
 
         for ann in annotations:
             center = None
@@ -479,59 +478,14 @@ class OCRProcessor:
             else:
                 logger.warning(f"Skipping annotation with no valid geometry: type={ann.type}")
 
-        # Use valid_annotations for the rest of clustering
-        annotations = valid_annotations
-        if not annotations:
+        if not valid_annotations:
             return []
 
-        if len(annotations) == 1:
-            return [annotations]
+        # Use shared clustering algorithm
+        index_clusters = cluster_by_proximity(centers, distance_threshold)
 
-        # Build adjacency graph using Euclidean distance
-        n = len(annotations)
-        graph = defaultdict(list)
-
-        for i in range(n):
-            cx_i, cy_i = centers[i]
-            for j in range(i + 1, n):
-                cx_j, cy_j = centers[j]
-
-                # Euclidean distance between centers
-                distance = math.sqrt((cx_j - cx_i) ** 2 + (cy_j - cy_i) ** 2)
-
-                logger.debug(
-                    f"Annotation {i}→{j}: distance={distance:.1f} (threshold={distance_threshold})"
-                )
-
-                if distance < distance_threshold:
-                    graph[i].append(j)
-                    graph[j].append(i)
-                    logger.debug("  → Connected (distance < threshold)")
-
-        # Find connected components using DFS
-        visited = set()
-        clusters = []
-
-        for i in range(n):
-            if i not in visited:
-                # Start new cluster
-                cluster_indices = []
-                stack = [i]
-
-                while stack:
-                    node = stack.pop()
-                    if node not in visited:
-                        visited.add(node)
-                        cluster_indices.append(node)
-                        # Add all connected neighbors to stack
-                        stack.extend(graph[node])
-
-                # Convert indices to annotations
-                cluster = [annotations[idx] for idx in cluster_indices]
-                clusters.append(cluster)
-                logger.debug(f"Created cluster {len(clusters)} with {len(cluster)} annotation(s)")
-
-        return clusters
+        # Convert index clusters to annotation clusters
+        return [[valid_annotations[idx] for idx in cluster] for cluster in index_clusters]
 
     def _get_text_origin_x(self, rm_file: Path) -> float:
         """Extract text origin X coordinate from RootTextBlock.

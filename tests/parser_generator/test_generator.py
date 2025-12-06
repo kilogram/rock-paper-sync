@@ -257,10 +257,12 @@ class TestEstimateBlockLines:
 
     def test_long_paragraph(self, generator: RemarkableGenerator) -> None:
         """Long paragraph should take multiple lines."""
+        # Use realistic text with spaces (word wrap only breaks at spaces)
+        words = "The quick brown fox jumps over the lazy dog. "
         block = ContentBlock(
             type=BlockType.PARAGRAPH,
             level=0,
-            text="A" * 2000,  # Very long text
+            text=words * 40,  # ~1800 chars of realistic text
             formatting=[],
         )
 
@@ -594,3 +596,99 @@ class TestGenerateRmFile:
         # ✓ Generated .rm files are valid v6 format
         # ✓ Binary contains format code 10 bytes (0x0A) beyond text newlines
         # ✓ Format code count matches expected newline count
+
+
+class TestStrokeReanchoring:
+    """Tests for stroke re-anchoring methods."""
+
+    def test_is_implicit_paragraph_no_text_blocks(self, generator):
+        """With no text blocks, everything is implicit."""
+        result = generator._is_implicit_paragraph(cluster_center_y=500.0, text_blocks=[])
+        assert result is True
+
+    def test_is_implicit_paragraph_stroke_above_text(self, generator):
+        """Stroke above text is not implicit."""
+        from rock_paper_sync.annotations.core_types import TextBlock
+
+        text_blocks = [
+            TextBlock(content="Hello", y_start=200.0, y_end=250.0, block_type="paragraph")
+        ]
+        # Stroke at Y=100 is above text starting at Y=200
+        result = generator._is_implicit_paragraph(cluster_center_y=100.0, text_blocks=text_blocks)
+        assert result is False
+
+    def test_is_implicit_paragraph_stroke_inline_with_text(self, generator):
+        """Stroke inline with text is not implicit."""
+        from rock_paper_sync.annotations.core_types import TextBlock
+
+        text_blocks = [
+            TextBlock(content="Hello", y_start=200.0, y_end=250.0, block_type="paragraph")
+        ]
+        # Stroke at Y=225 is within text range
+        result = generator._is_implicit_paragraph(cluster_center_y=225.0, text_blocks=text_blocks)
+        assert result is False
+
+    def test_is_implicit_paragraph_stroke_just_below_text(self, generator):
+        """Stroke just below text (small gap) is not implicit."""
+        from rock_paper_sync.annotations.core_types import TextBlock
+
+        text_blocks = [
+            TextBlock(content="Hello", y_start=200.0, y_end=250.0, block_type="paragraph")
+        ]
+        # Stroke at Y=260 is just below text (gap=10, less than LINE_HEIGHT)
+        result = generator._is_implicit_paragraph(cluster_center_y=260.0, text_blocks=text_blocks)
+        assert result is False  # Gap too small
+
+    def test_is_implicit_paragraph_stroke_well_below_text(self, generator):
+        """Stroke well below text (large gap) is implicit."""
+        from rock_paper_sync.annotations.core_types import TextBlock
+
+        text_blocks = [
+            TextBlock(content="Hello", y_start=200.0, y_end=250.0, block_type="paragraph")
+        ]
+        # Stroke at Y=400 is well below text (gap=150, more than LINE_HEIGHT)
+        result = generator._is_implicit_paragraph(cluster_center_y=400.0, text_blocks=text_blocks)
+        assert result is True
+
+    def test_is_implicit_paragraph_custom_threshold(self, generator):
+        """Custom gap threshold is respected."""
+        from rock_paper_sync.annotations.core_types import TextBlock
+
+        text_blocks = [
+            TextBlock(content="Hello", y_start=200.0, y_end=250.0, block_type="paragraph")
+        ]
+        # Gap of 60 pixels
+        cluster_y = 310.0
+
+        # With threshold of 50, it's implicit (gap=60 > 50)
+        result = generator._is_implicit_paragraph(
+            cluster_center_y=cluster_y, text_blocks=text_blocks, gap_threshold=50.0
+        )
+        assert result is True
+
+        # With threshold of 100, it's not implicit (gap=60 < 100)
+        result = generator._is_implicit_paragraph(
+            cluster_center_y=cluster_y, text_blocks=text_blocks, gap_threshold=100.0
+        )
+        assert result is False
+
+    def test_is_implicit_paragraph_multiple_text_blocks(self, generator):
+        """Uses the last text block's y_end for gap calculation."""
+        from rock_paper_sync.annotations.core_types import TextBlock
+
+        text_blocks = [
+            TextBlock(content="First", y_start=100.0, y_end=150.0, block_type="paragraph"),
+            TextBlock(content="Second", y_start=200.0, y_end=250.0, block_type="paragraph"),
+            TextBlock(content="Third", y_start=300.0, y_end=350.0, block_type="paragraph"),
+        ]
+        # Stroke at Y=500 is well below all text (gap from Y=350)
+        result = generator._is_implicit_paragraph(
+            cluster_center_y=500.0, text_blocks=text_blocks, gap_threshold=50.0
+        )
+        assert result is True
+
+        # Stroke at Y=360 is just below last text (gap=10)
+        result = generator._is_implicit_paragraph(
+            cluster_center_y=360.0, text_blocks=text_blocks, gap_threshold=50.0
+        )
+        assert result is False

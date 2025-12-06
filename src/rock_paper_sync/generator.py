@@ -9,7 +9,7 @@ import io
 import logging
 import time
 import uuid as uuid_module
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from uuid import uuid4
 
@@ -34,6 +34,8 @@ from .annotations import (
 )
 from .config import LayoutConfig as AppLayoutConfig
 from .coordinate_transformer import (
+    END_OF_DOC_ANCHOR_MARKER,
+    ParentAnchorResolver,
     apply_y_offset_to_block,
     get_annotation_center_y,
 )
@@ -541,9 +543,16 @@ class RemarkableGenerator:
                 crdt_base_id = get_crdt_base_id_from_rm(rm_file_path)
 
                 # Adjust annotation blocks based on text repositioning
-                # Phase 1: Uses content anchoring for Glyph blocks, spatial for Line blocks
+                # - Glyph blocks (highlights): content anchoring with delta-based X/Y
+                # - Line blocks (strokes): cluster by proximity, anchor to paragraph
                 adjusted_blocks = []
-                for block in annotation_blocks:
+
+                # Separate highlights from strokes
+                glyph_blocks = [b for b in annotation_blocks if "Glyph" in type(b).__name__]
+                stroke_blocks = [b for b in annotation_blocks if "Line" in type(b).__name__]
+
+                # Process highlights individually (content anchoring)
+                for block in glyph_blocks:
                     try:
                         adjusted_block = self._adjust_annotation_block_position(
                             block,
@@ -558,9 +567,61 @@ class RemarkableGenerator:
                         )
                         adjusted_blocks.append(adjusted_block)
                     except Exception as e:
-                        logger.warning(f"Failed to adjust annotation block: {e}")
-                        # Still add the original block
+                        logger.warning(f"Failed to adjust highlight block: {e}")
                         adjusted_blocks.append(block)
+
+                # Process strokes by cluster (context-aware anchoring)
+                if stroke_blocks:
+                    # Create ParentAnchorResolver from the existing blocks for per-parent
+                    # coordinate transformation. This ensures strokes with different parent_ids
+                    # are positioned correctly in absolute coordinate space.
+                    anchor_resolver = ParentAnchorResolver.from_blocks(existing_blocks)
+
+                    stroke_clusters = self._cluster_stroke_blocks(stroke_blocks, anchor_resolver)
+
+                    # Separate implicit paragraphs (below all text) from regular clusters
+                    # Implicit paragraphs should all move together as one unit
+                    implicit_clusters = []
+                    regular_clusters = []
+
+                    for cluster in stroke_clusters:
+                        # Calculate cluster center to check if implicit
+                        centers = []
+                        for block in cluster:
+                            center = self._get_stroke_center(block, anchor_resolver)
+                            if center:
+                                centers.append(center[1])
+                        if centers:
+                            cluster_center_y = sum(centers) / len(centers)
+                            if self._is_implicit_paragraph(cluster_center_y, old_text_blocks):
+                                implicit_clusters.append(cluster)
+                            else:
+                                regular_clusters.append(cluster)
+                        else:
+                            regular_clusters.append(cluster)
+
+                    # Merge all implicit paragraph clusters into one
+                    if implicit_clusters:
+                        merged_implicit = []
+                        for cluster in implicit_clusters:
+                            merged_implicit.extend(cluster)
+                        if merged_implicit:
+                            regular_clusters.append(merged_implicit)
+                            logger.debug(
+                                f"Merged {len(implicit_clusters)} implicit paragraph cluster(s) "
+                                f"into 1 ({len(merged_implicit)} strokes)"
+                            )
+
+                    # With anchor_id updates in _generate_rm_file_roundtrip(), strokes
+                    # are automatically positioned correctly because their TreeNodeBlock
+                    # anchor_ids now point to the correct text offsets.
+                    # We do NOT need to apply Y deltas to native coordinates.
+                    # See docs/STROKE_ANCHORING.md for details.
+                    for cluster in regular_clusters:
+                        adjusted_blocks.extend(cluster)
+                        logger.debug(
+                            f"Preserved {len(cluster)} stroke(s) in cluster (anchor_ids will be updated)"
+                        )
 
                 # Store the adjusted rmscene blocks AND original file path
                 page.annotation_blocks = adjusted_blocks
@@ -616,22 +677,50 @@ class RemarkableGenerator:
                     # Full text for content anchoring (join without splitting first)
                     full_text = "".join(text_parts)
 
-                    # Split into lines for TextBlock creation
-                    lines = full_text.split("\n")
+                    # Split into paragraphs for TextBlock creation
+                    paragraphs = full_text.split("\n")
 
-                    # Create TextBlock for each line with estimated Y positions
-                    y_pos = text_data.pos_y
-                    for line in lines:
-                        if line.strip():  # Skip empty lines
+                    # Create TextBlock for each paragraph with Y positions from layout engine
+                    # Use WordWrapLayoutEngine for consistent line break calculation
+                    from .layout import LayoutConfig as LayoutCfg
+                    from .layout import LayoutContext
+
+                    layout_ctx = LayoutContext.from_text(
+                        full_text,
+                        use_font_metrics=True,
+                        config=LayoutCfg(
+                            text_width=TEXT_WIDTH,
+                            text_pos_x=TEXT_POS_X,
+                            text_pos_y=text_data.pos_y,
+                        ),
+                    )
+
+                    # Track position in full text to map paragraphs to offsets
+                    current_offset = 0
+                    for paragraph in paragraphs:
+                        if paragraph.strip():
+                            # Find paragraph start/end in full text
+                            para_start = full_text.find(paragraph, current_offset)
+                            if para_start == -1:
+                                para_start = current_offset
+                            para_end = para_start + len(paragraph)
+                            current_offset = para_end + 1  # +1 for newline
+
+                            # Get Y positions from layout engine
+                            _, y_start = layout_ctx.offset_to_position(para_start)
+                            _, y_end = layout_ctx.offset_to_position(para_end)
+                            # Add one line height to y_end since offset_to_position
+                            # gives the TOP of the line containing that character
+                            y_end += layout_ctx.line_height
+
                             text_blocks.append(
                                 TextBlock(
-                                    content=line,
-                                    y_start=y_pos,
-                                    y_end=y_pos + self.line_height,
+                                    content=paragraph,
+                                    y_start=y_start,
+                                    y_end=y_end,
                                     block_type="paragraph",
                                 )
                             )
-                            y_pos += self.line_height
 
             return text_blocks, text_origin_y, full_text
 
@@ -955,6 +1044,420 @@ class RemarkableGenerator:
 
         return glyph_block
 
+    # =========================================================================
+    # Stroke Clustering and Re-Anchoring
+    # =========================================================================
+
+    def _get_stroke_center(
+        self, block, anchor_resolver: ParentAnchorResolver
+    ) -> tuple[float, float] | None:
+        """Extract center (X, Y) coordinates from stroke block in absolute coordinates.
+
+        Uses per-parent anchor positions for correct coordinate transformation.
+
+        Args:
+            block: rmscene SceneLineItemBlock
+            anchor_resolver: ParentAnchorResolver for per-parent coordinate transformation
+
+        Returns:
+            Tuple of (center_x, center_y) in absolute coordinates, or None if invalid
+        """
+        try:
+            if not hasattr(block, "item") or not hasattr(block.item, "value"):
+                return None
+
+            value = block.item.value
+
+            if "Line" not in type(value).__name__:
+                return None
+
+            if not hasattr(value, "points") or not value.points:
+                return None
+
+            # Calculate native center
+            xs = [p.x for p in value.points if hasattr(p, "x")]
+            ys = [p.y for p in value.points if hasattr(p, "y")]
+
+            if not xs or not ys:
+                return None
+
+            native_center_x = sum(xs) / len(xs)
+            native_center_y = sum(ys) / len(ys)
+
+            # Get parent_id for per-parent anchor lookup
+            parent_id = getattr(block, "parent_id", None)
+
+            # Transform to absolute using per-parent anchors
+            absolute_x, absolute_y = anchor_resolver.to_absolute(
+                native_center_x, native_center_y, parent_id
+            )
+
+            return (absolute_x, absolute_y)
+
+        except Exception as e:
+            logger.warning(f"Failed to get stroke center: {e}")
+            return None
+
+    def _get_stroke_bbox(
+        self, block, anchor_resolver: ParentAnchorResolver
+    ) -> tuple[float, float, float, float] | None:
+        """Extract bounding box from stroke block in absolute coordinates.
+
+        Uses per-parent anchor positions for correct coordinate transformation.
+
+        Args:
+            block: rmscene SceneLineItemBlock
+            anchor_resolver: ParentAnchorResolver for per-parent coordinate transformation
+
+        Returns:
+            Tuple of (x, y, width, height) in absolute coordinates, or None if invalid
+        """
+        try:
+            if not hasattr(block, "item") or not hasattr(block.item, "value"):
+                return None
+
+            value = block.item.value
+
+            if "Line" not in type(value).__name__:
+                return None
+
+            if not hasattr(value, "points") or not value.points:
+                return None
+
+            # Calculate bounding box from points
+            xs = [p.x for p in value.points if hasattr(p, "x")]
+            ys = [p.y for p in value.points if hasattr(p, "y")]
+
+            if not xs or not ys:
+                return None
+
+            min_x, max_x = min(xs), max(xs)
+            min_y, max_y = min(ys), max(ys)
+
+            # Get parent_id for per-parent anchor lookup
+            parent_id = getattr(block, "parent_id", None)
+
+            # Transform top-left corner to absolute using per-parent anchors
+            abs_x, abs_y = anchor_resolver.to_absolute(min_x, min_y, parent_id)
+
+            width = max_x - min_x
+            height = max_y - min_y
+
+            # Ensure minimum dimensions (for single-point strokes)
+            width = max(width, 1.0)
+            height = max(height, 1.0)
+
+            return (abs_x, abs_y, width, height)
+
+        except Exception as e:
+            logger.warning(f"Failed to get stroke bbox: {e}")
+            return None
+
+    def _cluster_stroke_blocks(
+        self,
+        stroke_blocks: list,
+        anchor_resolver: ParentAnchorResolver,
+        distance_threshold: float = 80.0,
+    ) -> list[list]:
+        """Cluster stroke blocks using efficient KDTree-based spatial indexing.
+
+        Uses transitive chaining via connected components: if stroke A is near B,
+        and B is near C, all three cluster together even if A and C are far apart.
+        This properly handles multi-line handwritten notes.
+
+        Uses per-parent anchor positions for correct coordinate transformation,
+        ensuring strokes with different parent_ids are placed correctly in
+        absolute coordinate space before clustering.
+
+        Args:
+            stroke_blocks: List of rmscene Line blocks
+            anchor_resolver: ParentAnchorResolver for per-parent coordinate transformation
+            distance_threshold: Max distance between bbox centers to cluster
+                              (default: 80px, captures multi-line handwriting)
+
+        Returns:
+            List of clusters, where each cluster is a list of stroke blocks
+        """
+        from .annotations.common.spatial import cluster_bboxes_kdtree
+
+        if not stroke_blocks:
+            return []
+
+        # Extract bounding boxes from stroke blocks using per-parent anchors
+        bboxes = []
+        valid_blocks = []
+
+        for block in stroke_blocks:
+            bbox = self._get_stroke_bbox(block, anchor_resolver)
+            if bbox is not None:
+                bboxes.append(bbox)
+                valid_blocks.append(block)
+
+        if not valid_blocks:
+            return []
+
+        # Use efficient KDTree clustering with transitive chaining
+        index_clusters = cluster_bboxes_kdtree(bboxes, distance_threshold)
+
+        # Convert index clusters to block clusters
+        clusters = [[valid_blocks[idx] for idx in indices] for indices in index_clusters]
+
+        logger.debug(
+            f"Clustered {len(valid_blocks)} strokes into {len(clusters)} cluster(s) "
+            f"(distance threshold: {distance_threshold}px)"
+        )
+        return clusters
+
+    def _is_implicit_paragraph(
+        self,
+        cluster_center_y: float,
+        text_blocks: list[TextBlock],
+        gap_threshold: float | None = None,
+    ) -> bool:
+        """Detect if stroke cluster is below all text (implicit handwritten paragraph).
+
+        Strokes below text with a gap > LINE_HEIGHT are treated as an implicit
+        paragraph that only moves when total text content expands.
+
+        Args:
+            cluster_center_y: Center Y of the stroke cluster
+            text_blocks: Text blocks from the document
+            gap_threshold: Minimum gap to consider implicit (default: LINE_HEIGHT)
+
+        Returns:
+            True if cluster is an implicit paragraph below all text
+        """
+        if gap_threshold is None:
+            gap_threshold = LINE_HEIGHT
+
+        if not text_blocks:
+            return True  # No text = everything is "implicit"
+
+        # Find the bottom of all text
+        last_text_y = max(tb.y_end for tb in text_blocks)
+
+        # Check if cluster is below text with sufficient gap
+        gap = cluster_center_y - last_text_y
+        is_implicit = gap > gap_threshold
+
+        if is_implicit:
+            logger.debug(
+                f"Stroke cluster at y={cluster_center_y:.1f} is implicit paragraph "
+                f"(gap={gap:.1f} > threshold={gap_threshold:.1f})"
+            )
+
+        return is_implicit
+
+    def _calculate_stroke_cluster_delta(
+        self,
+        cluster: list,
+        anchor_resolver: ParentAnchorResolver,
+        old_text_blocks: list[TextBlock],
+        new_text_blocks: list[TextBlock],
+        position_map: dict[int, int],
+    ) -> float:
+        """Calculate Y delta for a stroke cluster based on anchor paragraph movement.
+
+        Uses delta-based positioning like highlights: calculates delta between
+        old and new paragraph positions using same model, so errors cancel out.
+
+        For implicit paragraphs (below all text with gap), calculates delta
+        based on total text expansion.
+
+        Args:
+            cluster: List of stroke blocks in this cluster
+            anchor_resolver: ParentAnchorResolver for per-parent coordinate transformation
+            old_text_blocks: Text blocks from old document
+            new_text_blocks: Text blocks from new document
+            position_map: Mapping from old to new block indices
+
+        Returns:
+            Y offset to apply to all strokes in cluster
+        """
+        if not cluster:
+            return 0.0
+
+        # Calculate cluster center Y (average of all stroke centers)
+        centers = []
+        for block in cluster:
+            center = self._get_stroke_center(block, anchor_resolver)
+            if center:
+                centers.append(center[1])  # Y coordinate
+
+        if not centers:
+            return 0.0
+
+        cluster_center_y = sum(centers) / len(centers)
+
+        # Check for implicit paragraph (below all text with gap)
+        if self._is_implicit_paragraph(cluster_center_y, old_text_blocks):
+            # Calculate delta based on total text expansion
+            if not old_text_blocks or not new_text_blocks:
+                return 0.0
+
+            old_text_end = max(tb.y_end for tb in old_text_blocks)
+            new_text_end = max(tb.y_end for tb in new_text_blocks)
+            y_delta = new_text_end - old_text_end
+
+            logger.debug(
+                f"Implicit paragraph: text end moved {old_text_end:.1f} -> {new_text_end:.1f}, "
+                f"delta={y_delta:.1f}"
+            )
+            return y_delta
+
+        # Normal case: anchor to nearest paragraph
+        if not old_text_blocks:
+            return 0.0
+
+        # Find containing or nearest old paragraph
+        # Priority 1: Paragraph that CONTAINS the stroke (y_start <= stroke_y <= y_end)
+        # Priority 2: Nearest by center-to-center distance (fallback for margin notes)
+        nearest_old_idx = None
+
+        # First, check if stroke is within any paragraph's Y range
+        for idx, tb in enumerate(old_text_blocks):
+            if tb.y_start <= cluster_center_y <= tb.y_end:
+                nearest_old_idx = idx
+                logger.debug(
+                    f"Stroke at y={cluster_center_y:.1f} is within para {idx} "
+                    f"(y={tb.y_start:.1f}-{tb.y_end:.1f})"
+                )
+                break
+
+        # Fallback: find nearest by center distance (for margin notes beside text)
+        if nearest_old_idx is None:
+            min_distance = float("inf")
+            for idx, tb in enumerate(old_text_blocks):
+                block_center_y = (tb.y_start + tb.y_end) / 2
+                distance = abs(cluster_center_y - block_center_y)
+                if distance < min_distance:
+                    min_distance = distance
+                    nearest_old_idx = idx
+
+        if nearest_old_idx is None:
+            return 0.0
+
+        # Map to new paragraph
+        new_idx = position_map.get(nearest_old_idx)
+        if new_idx is None or new_idx >= len(new_text_blocks):
+            logger.debug(
+                f"No mapping for old paragraph {nearest_old_idx}, keeping cluster position"
+            )
+            return 0.0
+
+        # Calculate Y delta (same model for old/new → errors cancel)
+        old_para_y = (
+            old_text_blocks[nearest_old_idx].y_start + old_text_blocks[nearest_old_idx].y_end
+        ) / 2
+        new_para_y = (new_text_blocks[new_idx].y_start + new_text_blocks[new_idx].y_end) / 2
+        y_delta = new_para_y - old_para_y
+
+        logger.debug(
+            f"Stroke cluster at y={cluster_center_y:.1f} anchors to para {nearest_old_idx}, "
+            f"delta={y_delta:.1f}"
+        )
+
+        return y_delta
+
+    # =========================================================================
+    # TreeNodeBlock Anchor Update
+    # =========================================================================
+
+    def _compute_anchor_offset_delta(self, old_text: str, new_text: str) -> int:
+        """Compute the character offset delta between old and new text.
+
+        This determines how much to adjust TreeNodeBlock anchor_ids when text
+        changes. The anchor_id.part2 is a character offset into the text content.
+        When text is inserted before anchor points, the offset must increase.
+
+        Uses a simple heuristic: finds where old text content appears in new text
+        to determine the insertion offset.
+
+        Args:
+            old_text: Original text content from RootTextBlock
+            new_text: New text content to be written
+
+        Returns:
+            Offset delta to add to anchor_id values (positive = text inserted)
+        """
+        if not old_text or not new_text:
+            return 0
+
+        # Simple case: text length changed
+        len_delta = len(new_text) - len(old_text)
+        if len_delta == 0:
+            return 0
+
+        # Try to find where old text starts in new text
+        # This handles the common case of text prepended at the beginning
+        # Use first 100 chars of old text as a signature
+        signature_len = min(100, len(old_text))
+        signature = old_text[:signature_len]
+
+        if signature in new_text:
+            insertion_offset = new_text.find(signature)
+            if insertion_offset >= 0:
+                logger.debug(
+                    f"Anchor offset delta: found old text at position {insertion_offset} "
+                    f"(text grew by {len_delta} chars)"
+                )
+                return insertion_offset
+
+        # Fallback: assume text was prepended (delta = length difference)
+        # This is correct when new content is added at the beginning
+        if len_delta > 0:
+            logger.debug(
+                f"Anchor offset delta: using length delta {len_delta} (signature not found)"
+            )
+            return len_delta
+
+        # Text was shortened - more complex case, use 0 for now
+        logger.debug("Anchor offset delta: text shortened, using 0")
+        return 0
+
+    def _update_tree_node_anchor(self, block, offset_delta: int):
+        """Create a new TreeNodeBlock with updated anchor_id offset.
+
+        The anchor_id.value.part2 is a character offset into the text content.
+        When text is inserted before the anchor point, the offset must be
+        increased to maintain the correct text reference.
+
+        Args:
+            block: Original TreeNodeBlock
+            offset_delta: Amount to add to anchor_id.part2
+
+        Returns:
+            New TreeNodeBlock with updated anchor_id (or original if no anchor)
+        """
+        if not hasattr(block, "group") or not block.group:
+            return block
+
+        g = block.group
+        if not hasattr(g, "anchor_id") or not g.anchor_id or not g.anchor_id.value:
+            return block
+
+        old_anchor = g.anchor_id
+        old_offset = old_anchor.value.part2
+
+        # Don't modify end-of-document marker
+        if old_offset == END_OF_DOC_ANCHOR_MARKER:
+            return block
+
+        # Create new anchor_id with updated offset
+        new_offset = old_offset + offset_delta
+        new_anchor_value = CrdtId(old_anchor.value.part1, new_offset)
+        new_anchor_lww = LwwValue(timestamp=old_anchor.timestamp, value=new_anchor_value)
+
+        # Create new Group with updated anchor_id
+        new_group = replace(g, anchor_id=new_anchor_lww)
+
+        # Create new TreeNodeBlock with updated group
+        new_block = replace(block, group=new_group)
+
+        logger.debug(f"Updated TreeNodeBlock {g.node_id} anchor_id: {old_offset} -> {new_offset}")
+
+        return new_block
+
     def paginate_content(self, blocks: list[ContentBlock]) -> list[list[ContentBlock]]:
         """Split content blocks into pages based on line count.
 
@@ -1083,6 +1586,10 @@ class RemarkableGenerator:
     def estimate_block_lines(self, block: ContentBlock) -> int:
         """Estimate how many lines a content block will occupy.
 
+        Uses WordWrapLayoutEngine with font metrics for accurate line counting.
+        This ensures pagination matches actual text rendering, preventing text
+        from spilling beyond page boundaries.
+
         Args:
             block: Content block to estimate
 
@@ -1092,17 +1599,15 @@ class RemarkableGenerator:
         if block.type == BlockType.HORIZONTAL_RULE:
             return 2
 
-        # Calculate based on text length and actual text width
-        # Use TEXT_WIDTH instead of page margins for accurate pagination
-        chars_per_line = max(1, int(TEXT_WIDTH / self.char_width))
-
         # Account for list item bullet
         text = block.text
         if block.type == BlockType.LIST_ITEM:
             text = f"• {text}"
 
-        # Calculate wrapped lines (+1 accounts for partial last line)
-        text_lines = max(1, len(text) // chars_per_line + 1)
+        # Use layout engine with font metrics for accurate line counting
+        # This matches the actual rendering in blocks_to_text_items()
+        line_breaks = self.layout_engine.calculate_line_breaks(text, TEXT_WIDTH)
+        text_lines = len(line_breaks)
 
         # No extra spacing for paragraphs (spacing handled by blank lines in markdown)
         if block.type == BlockType.HEADER:
@@ -1123,7 +1628,8 @@ class RemarkableGenerator:
         """Convert content blocks to positioned text items.
 
         Each block is positioned on the page based on the running Y position
-        and the configured margins.
+        and the configured margins. Uses WordWrapLayoutEngine for consistent
+        line break calculation that matches _extract_text_blocks_from_rm().
 
         Note: Uses TEXT_POS_Y constant (94.0) for Y positioning to match
         the coordinate system used by RootTextBlock in rmscene. This ensures
@@ -1137,14 +1643,43 @@ class RemarkableGenerator:
             Tuple of (text_items, text_blocks) where text_blocks include Y-coordinates
             for annotation mapping
         """
+        from .layout import LayoutConfig as LayoutCfg
+        from .layout import LayoutContext
+
         items: list[TextItem] = []
         text_blocks: list[TextBlock] = []
-        y_position = float(TEXT_POS_Y)  # Use rmscene constant, not margin_top
 
+        # Build full text to use layout engine for consistent positioning
+        # This matches _extract_text_blocks_from_rm() behavior
+        full_text_parts = []
+        for block in blocks:
+            if block.type == BlockType.HORIZONTAL_RULE:
+                full_text_parts.append("")  # Placeholder for HR
+            else:
+                text = block.text
+                if block.type == BlockType.LIST_ITEM:
+                    text = f"• {text}"
+                full_text_parts.append(text)
+
+        full_text = "\n".join(full_text_parts)
+
+        # Create layout context for consistent Y positioning
+        layout_ctx = LayoutContext.from_text(
+            full_text,
+            use_font_metrics=True,
+            config=LayoutCfg(
+                text_width=TEXT_WIDTH,
+                text_pos_x=TEXT_POS_X,
+                text_pos_y=TEXT_POS_Y,
+            ),
+        )
+
+        # Track position in full text
+        current_offset = 0
         for block in blocks:
             if block.type == BlockType.HORIZONTAL_RULE:
                 # Skip horizontal rules (not rendered as text in Phase 1)
-                y_position += self.line_height * 2
+                current_offset += 1  # +1 for newline
                 continue
 
             x_position = float(self.layout.margin_left)
@@ -1153,28 +1688,27 @@ class RemarkableGenerator:
             # Prepare text with list bullet if needed
             text = block.text
             if block.type == BlockType.LIST_ITEM:
-                # Add bullet and indentation for lists
                 indent = 20 * block.level
                 x_position += indent
                 width -= indent
                 text = f"• {text}"
 
+            # Get Y positions from layout engine (consistent with extraction)
+            _, y_start = layout_ctx.offset_to_position(current_offset)
+            para_end = current_offset + len(text)
+            _, y_end = layout_ctx.offset_to_position(para_end)
+            y_end += layout_ctx.line_height  # Add line height for bottom of last line
+
             # Create text item
-            y_start = y_position
             items.append(
                 TextItem(
                     text=text,
                     x=x_position,
-                    y=y_position,
+                    y=y_start,
                     width=width,
                     formatting=block.formatting,
                 )
             )
-
-            # Update Y position for next block
-            lines = self.estimate_block_lines(block)
-            y_position += lines * self.line_height
-            y_end = y_position
 
             # Create text block for annotation mapping
             text_blocks.append(
@@ -1185,6 +1719,8 @@ class RemarkableGenerator:
                     block_type=block.type.name.lower(),
                 )
             )
+
+            current_offset = para_end + 1  # +1 for newline
 
         return items, text_blocks
 
@@ -1227,6 +1763,11 @@ class RemarkableGenerator:
         SceneInfo, etc.) which is critical for annotations to display correctly.
         Only modifies the text content and annotation positions.
 
+        IMPORTANT: When text changes, TreeNodeBlock anchor_ids must be updated
+        to track the original text content. The anchor_id.value.part2 is a
+        character offset into the text. If text is inserted before an anchor,
+        the offset must be adjusted. See docs/STROKE_ANCHORING.md for details.
+
         Args:
             page: RemarkablePage with annotation_blocks and original_rm_path
 
@@ -1241,6 +1782,19 @@ class RemarkableGenerator:
         combined_text = "\n".join(item.text for item in page.text_items)
         if not combined_text.strip():
             combined_text = " "
+
+        # Extract old text from original RootTextBlock for anchor_id adjustment
+        old_text = ""
+        for block in blocks:
+            if type(block).__name__ == "RootTextBlock":
+                for item in block.value.items.sequence_items():
+                    if hasattr(item, "value") and isinstance(item.value, str):
+                        old_text += item.value
+                break
+
+        # Compute anchor offset delta for TreeNodeBlock anchor_id updates
+        # This handles the case where text is inserted before anchor points
+        anchor_offset_delta = self._compute_anchor_offset_delta(old_text, combined_text)
 
         # Build index of original annotation blocks by block_id for matching
         original_annotation_ids = set()
@@ -1320,6 +1874,14 @@ class RemarkableGenerator:
                     text_lines_count=combined_text.count("\n") + 1,
                 )
                 modified_blocks.append(modified_block)
+
+            # Update TreeNodeBlock anchor_ids to track text content
+            elif block_type == "TreeNodeBlock":
+                if anchor_offset_delta != 0:
+                    modified_block = self._update_tree_node_anchor(block, anchor_offset_delta)
+                    modified_blocks.append(modified_block)
+                else:
+                    modified_blocks.append(block)
 
             # Keep all other blocks (scene tree, groups, etc.) unchanged
             else:

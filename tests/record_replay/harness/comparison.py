@@ -1,21 +1,17 @@
 """Comparison utilities for device-native ground truth testing.
 
-Provides tools to compare re-anchored highlights against device-native
-ground truth, enabling regression testing of highlight positioning accuracy.
+Provides tools to compare re-anchored annotations (highlights AND strokes)
+against device-native ground truth, enabling regression testing of
+positioning accuracy.
 
-The comparison works at the RECTANGLE level, not the highlight level:
-- Flattens all highlights to their component rectangles
-- Matches rectangles by spatial proximity (nearest neighbor)
-- This handles cases where our code creates 1 multi-rect highlight
-  but the device creates multiple single-rect highlights
+The comparison works at the RECTANGLE/BOUNDING BOX level:
+- Highlights: Flattens to component rectangles, matches by proximity
+- Strokes: Uses bounding boxes, matches by proximity
 
 Example:
     # Compare re-anchored output against device-native ground truth
-    assert_highlights_match(
-        reanchored_rm_files,
-        golden_rm_files,
-        tolerance_px=5.0
-    )
+    assert_highlights_match(reanchored_rm_files, golden_rm_files, tolerance_px=5.0)
+    assert_strokes_match(reanchored_rm_files, golden_rm_files, tolerance_px=20.0)
 """
 
 from __future__ import annotations
@@ -288,6 +284,273 @@ def print_highlight_comparison(
         print(f"\nUnmatched golden: {len(result.unmatched_golden)}")
         for rect, text in result.unmatched_golden:
             print(f"  x={rect.x:.1f}, y={rect.y:.1f} ('{text[:20]}...')")
+
+    print(f"\nMax delta: {result.max_delta_px:.1f}px")
+    print("=" * 60)
+
+
+# =============================================================================
+# STROKE COMPARISON
+# =============================================================================
+
+
+@dataclass
+class StrokeMatch:
+    """A matched pair of stroke bounding boxes with their distance."""
+
+    reanchored_bbox: Rectangle
+    golden_bbox: Rectangle
+
+    @property
+    def x_delta(self) -> float:
+        """X center difference (reanchored - golden)."""
+        ra_cx = self.reanchored_bbox.x + self.reanchored_bbox.w / 2
+        g_cx = self.golden_bbox.x + self.golden_bbox.w / 2
+        return ra_cx - g_cx
+
+    @property
+    def y_delta(self) -> float:
+        """Y center difference (reanchored - golden)."""
+        ra_cy = self.reanchored_bbox.y + self.reanchored_bbox.h / 2
+        g_cy = self.golden_bbox.y + self.golden_bbox.h / 2
+        return ra_cy - g_cy
+
+    @property
+    def distance(self) -> float:
+        """Euclidean distance between bounding box centers."""
+        return math.sqrt(self.x_delta**2 + self.y_delta**2)
+
+    def within_tolerance(self, tolerance_px: float) -> bool:
+        """Check if position difference is within tolerance."""
+        return self.distance <= tolerance_px
+
+    def format_diff(self) -> str:
+        """Format a human-readable diff for this match."""
+        ra = self.reanchored_bbox
+        g = self.golden_bbox
+        lines = [
+            f"  Δx={self.x_delta:+.1f}, Δy={self.y_delta:+.1f} "
+            f"(distance={self.distance:.1f}px)",
+            f"    reanchored: bbox=({ra.x:.1f}, {ra.y:.1f}, {ra.w:.1f}, {ra.h:.1f})",
+            f"    golden:     bbox=({g.x:.1f}, {g.y:.1f}, {g.w:.1f}, {g.h:.1f})",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
+class StrokeComparisonResult:
+    """Result of comparing strokes between re-anchored and golden."""
+
+    matches: list[StrokeMatch]
+    unmatched_reanchored: list[Rectangle]  # Bounding boxes
+    unmatched_golden: list[Rectangle]
+
+    @property
+    def max_delta_px(self) -> float:
+        """Maximum position difference across all matched strokes."""
+        if not self.matches:
+            return 0.0
+        return max(m.distance for m in self.matches)
+
+    @property
+    def stroke_count_matches(self) -> bool:
+        """Whether total stroke counts match."""
+        total_reanchored = len(self.matches) + len(self.unmatched_reanchored)
+        total_golden = len(self.matches) + len(self.unmatched_golden)
+        return total_reanchored == total_golden
+
+    def within_tolerance(self, tolerance_px: float) -> bool:
+        """Check if all matched strokes are within tolerance."""
+        if not self.matches:
+            return True
+        return all(m.within_tolerance(tolerance_px) for m in self.matches)
+
+
+def extract_stroke_bboxes_from_rm(rm_data: bytes) -> list[Rectangle]:
+    """Extract all stroke bounding boxes from .rm file bytes.
+
+    Args:
+        rm_data: Raw bytes of .rm file
+
+    Returns:
+        List of bounding box Rectangles
+    """
+    bboxes = []
+    for annotation in read_annotations(io.BytesIO(rm_data)):
+        if annotation.type == AnnotationType.STROKE and annotation.stroke:
+            bbox = annotation.stroke.bounding_box
+            bboxes.append(bbox)
+    return bboxes
+
+
+def bbox_center_distance(b1: Rectangle, b2: Rectangle) -> float:
+    """Calculate Euclidean distance between two bounding box centers."""
+    c1x = b1.x + b1.w / 2
+    c1y = b1.y + b1.h / 2
+    c2x = b2.x + b2.w / 2
+    c2y = b2.y + b2.h / 2
+    return math.sqrt((c1x - c2x) ** 2 + (c1y - c2y) ** 2)
+
+
+def match_strokes_by_proximity(
+    reanchored: list[Rectangle],
+    golden: list[Rectangle],
+    max_match_distance: float = 200.0,
+) -> StrokeComparisonResult:
+    """Match stroke bounding boxes by spatial proximity (nearest neighbor).
+
+    Args:
+        reanchored: List of bounding boxes from re-anchored document
+        golden: List of bounding boxes from golden document
+        max_match_distance: Maximum distance to consider a match
+
+    Returns:
+        StrokeComparisonResult with matches and unmatched strokes
+    """
+    matches = []
+    used_golden = set()
+    unmatched_reanchored = []
+
+    for ra_bbox in reanchored:
+        best_match = None
+        best_distance = float("inf")
+        best_idx = -1
+
+        for i, g_bbox in enumerate(golden):
+            if i in used_golden:
+                continue
+
+            dist = bbox_center_distance(ra_bbox, g_bbox)
+            if dist < best_distance:
+                best_distance = dist
+                best_match = g_bbox
+                best_idx = i
+
+        if best_match and best_distance <= max_match_distance:
+            matches.append(
+                StrokeMatch(
+                    reanchored_bbox=ra_bbox,
+                    golden_bbox=best_match,
+                )
+            )
+            used_golden.add(best_idx)
+        else:
+            unmatched_reanchored.append(ra_bbox)
+
+    # Collect unmatched golden bboxes
+    unmatched_golden = [bbox for i, bbox in enumerate(golden) if i not in used_golden]
+
+    return StrokeComparisonResult(
+        matches=matches,
+        unmatched_reanchored=unmatched_reanchored,
+        unmatched_golden=unmatched_golden,
+    )
+
+
+def compare_strokes(
+    reanchored_rm_files: dict[str, bytes],
+    golden_rm_files: dict[str, bytes],
+) -> StrokeComparisonResult:
+    """Compare stroke bounding boxes between re-anchored and golden documents.
+
+    Args:
+        reanchored_rm_files: page_uuid -> .rm bytes from re-anchored document
+        golden_rm_files: page_uuid -> .rm bytes from device-native document
+
+    Returns:
+        StrokeComparisonResult with matched and unmatched strokes
+    """
+    # Extract all bboxes from both sets of .rm files
+    reanchored_bboxes = []
+    for rm_data in reanchored_rm_files.values():
+        reanchored_bboxes.extend(extract_stroke_bboxes_from_rm(rm_data))
+
+    golden_bboxes = []
+    for rm_data in golden_rm_files.values():
+        golden_bboxes.extend(extract_stroke_bboxes_from_rm(rm_data))
+
+    return match_strokes_by_proximity(reanchored_bboxes, golden_bboxes)
+
+
+def assert_strokes_match(
+    reanchored_rm_files: dict[str, bytes],
+    golden_rm_files: dict[str, bytes],
+    tolerance_px: float = 20.0,
+) -> None:
+    """Assert that stroke bounding box positions match within tolerance.
+
+    Compares re-anchored strokes against device-native ground truth
+    using spatial proximity matching. Fails if any matched stroke
+    exceeds the tolerance.
+
+    Args:
+        reanchored_rm_files: page_uuid -> .rm bytes from re-anchored document
+        golden_rm_files: page_uuid -> .rm bytes from device-native document
+        tolerance_px: Maximum allowed position difference in pixels
+
+    Raises:
+        AssertionError: If any stroke position exceeds tolerance
+    """
+    result = compare_strokes(reanchored_rm_files, golden_rm_files)
+
+    if not result.matches:
+        ra_count = sum(
+            len(extract_stroke_bboxes_from_rm(rm)) for rm in reanchored_rm_files.values()
+        )
+        g_count = sum(len(extract_stroke_bboxes_from_rm(rm)) for rm in golden_rm_files.values())
+        raise AssertionError(
+            f"No matching strokes found to compare.\n"
+            f"Re-anchored has {ra_count} stroke(s), golden has {g_count} stroke(s)."
+        )
+
+    failures = [m for m in result.matches if not m.within_tolerance(tolerance_px)]
+
+    if failures:
+        lines = [
+            f"Stroke position mismatch (tolerance={tolerance_px}px):",
+            "",
+        ]
+        for f in failures:
+            lines.append(f.format_diff())
+            lines.append("")
+
+        raise AssertionError("\n".join(lines))
+
+
+def print_stroke_comparison(
+    reanchored_rm_files: dict[str, bytes],
+    golden_rm_files: dict[str, bytes],
+) -> None:
+    """Print a detailed comparison of stroke bounding boxes for debugging.
+
+    Args:
+        reanchored_rm_files: page_uuid -> .rm bytes from re-anchored document
+        golden_rm_files: page_uuid -> .rm bytes from device-native document
+    """
+    result = compare_strokes(reanchored_rm_files, golden_rm_files)
+
+    print("\n" + "=" * 60)
+    print("STROKE COMPARISON: Re-anchored vs Device-Native")
+    print("=" * 60)
+
+    if not result.matches:
+        print("No matching strokes found!")
+    else:
+        print(f"\nMatched {len(result.matches)} stroke(s):")
+        for i, m in enumerate(result.matches):
+            status = "✅" if m.distance < 20 else "❌"
+            print(f"\n{status} Stroke {i}:")
+            print(m.format_diff())
+
+    if result.unmatched_reanchored:
+        print(f"\nUnmatched re-anchored: {len(result.unmatched_reanchored)}")
+        for bbox in result.unmatched_reanchored:
+            print(f"  bbox=({bbox.x:.1f}, {bbox.y:.1f}, {bbox.w:.1f}, {bbox.h:.1f})")
+
+    if result.unmatched_golden:
+        print(f"\nUnmatched golden: {len(result.unmatched_golden)}")
+        for bbox in result.unmatched_golden:
+            print(f"  bbox=({bbox.x:.1f}, {bbox.y:.1f}, {bbox.w:.1f}, {bbox.h:.1f})")
 
     print(f"\nMax delta: {result.max_delta_px:.1f}px")
     print("=" * 60)

@@ -1,0 +1,95 @@
+{
+  "test_id": "stroke_reanchor",
+  "created_at": "2025-12-06T17:13:27.813563",
+  "doc_uuid": "06be7a8e-07d3-4eab-b5fc-68ed18f10726",
+  "page_uuids": [
+    "2384b9eb-be9f-4038-a864-5acd632cf3ce"
+  ],
+  "description": "",
+  "annotations_count": 1,
+  "source_document": "source.md",
+  "phases": [
+    {
+      "phase_number": 0,
+      "phase_name": "initial",
+      "action": "setup",
+      "vault_files": [
+        "document.md"
+      ],
+      "device_state": {
+        "doc_uuid": null,
+        "page_uuids": [],
+        "rm_files_count": 0,
+        "has_annotations": false
+      },
+      "has_rm_files": false
+    },
+    {
+      "phase_number": 1,
+      "phase_name": "post_upload",
+      "action": "upload",
+      "vault_files": [
+        "document.md"
+      ],
+      "device_state": {
+        "doc_uuid": "a519dde8-32e7-4403-b959-ff2c0e3751b3",
+        "page_uuids": [
+          "83b3eb97-d399-4807-aab5-e854c2ae5a3a"
+        ],
+        "rm_files_count": 1,
+        "has_annotations": true
+      },
+      "has_rm_files": true
+    },
+    {
+      "phase_number": 2,
+      "phase_name": "phase_2",
+      "action": "annotation_download",
+      "vault_files": [
+        "document.md"
+      ],
+      "device_state": {
+        "doc_uuid": "a519dde8-32e7-4403-b959-ff2c0e3751b3",
+        "page_uuids": [
+          "83b3eb97-d399-4807-aab5-e854c2ae5a3a"
+        ],
+        "rm_files_count": 1,
+        "has_annotations": true
+      },
+      "has_rm_files": true
+    },
+    {
+      "phase_number": 3,
+      "phase_name": "post_modification",
+      "action": "sync_modified",
+      "vault_files": [
+        "document.md"
+      ],
+      "device_state": {
+        "doc_uuid": "a519dde8-32e7-4403-b959-ff2c0e3751b3",
+        "page_uuids": [
+          "83b3eb97-d399-4807-aab5-e854c2ae5a3a"
+        ],
+        "rm_files_count": 1,
+        "has_annotations": true
+      },
+      "has_rm_files": true
+    },
+    {
+      "phase_number": 4,
+      "phase_name": "golden_native",
+      "action": "device_native_capture",
+      "vault_files": [],
+      "device_state": {
+        "doc_uuid": "06be7a8e-07d3-4eab-b5fc-68ed18f10726",
+        "page_uuids": [
+          "2384b9eb-be9f-4038-a864-5acd632cf3ce"
+        ],
+        "rm_files_count": 1,
+        "has_annotations": true,
+        "is_golden": true
+      },
+      "has_rm_files": true
+    }
+  ]
+}
