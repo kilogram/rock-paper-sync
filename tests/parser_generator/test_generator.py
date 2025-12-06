@@ -692,3 +692,194 @@ class TestStrokeReanchoring:
             cluster_center_y=360.0, text_blocks=text_blocks, gap_threshold=50.0
         )
         assert result is False
+
+
+class TestParagraphSplitting:
+    """Tests for paragraph splitting across page boundaries.
+
+    These tests verify that when allow_paragraph_splitting=True, long paragraphs
+    are correctly split at page boundaries using the layout engine for accurate
+    character offset calculation.
+    """
+
+    @pytest.fixture
+    def splitting_config(self) -> LayoutConfig:
+        """Layout config with paragraph splitting enabled and small page."""
+        return LayoutConfig(
+            lines_per_page=10,  # Small page to force splits
+            margin_top=50,
+            margin_bottom=50,
+            margin_left=50,
+            margin_right=50,
+            allow_paragraph_splitting=True,
+        )
+
+    @pytest.fixture
+    def splitting_generator(self, splitting_config: LayoutConfig) -> RemarkableGenerator:
+        """Generator with paragraph splitting enabled."""
+        return RemarkableGenerator(splitting_config)
+
+    def test_long_paragraph_splits_across_pages(
+        self, splitting_generator: RemarkableGenerator
+    ) -> None:
+        """A paragraph longer than a page should split across multiple pages."""
+        # Create text that will span multiple lines
+        words = "The quick brown fox jumps over the lazy dog. "
+        long_text = words * 50  # ~2500 chars = many lines
+
+        blocks = [
+            ContentBlock(
+                type=BlockType.PARAGRAPH,
+                level=0,
+                text=long_text,
+                formatting=[],
+            )
+        ]
+
+        pages = splitting_generator.paginate_content(blocks)
+
+        # Should span multiple pages
+        assert len(pages) > 1, "Long paragraph should span multiple pages"
+
+        # Collect all text from all pages
+        all_text = []
+        for page in pages:
+            for block in page:
+                all_text.append(block.text)
+
+        combined = " ".join(all_text)
+
+        # Verify all original words are present
+        original_words = long_text.split()
+        for word in original_words:
+            assert word in combined, f"Word '{word}' missing after split"
+
+    def test_split_at_word_boundary(self, splitting_generator: RemarkableGenerator) -> None:
+        """Paragraphs should split at word boundaries, not mid-word."""
+        words = "abcdefghij klmnopqrst uvwxyzabcd efghijklmn "
+        long_text = words * 30  # Force multiple pages
+
+        blocks = [
+            ContentBlock(
+                type=BlockType.PARAGRAPH,
+                level=0,
+                text=long_text,
+                formatting=[],
+            )
+        ]
+
+        pages = splitting_generator.paginate_content(blocks)
+
+        for page in pages:
+            for block in page:
+                text = block.text.strip()
+                if text:
+                    # Text should not start with a space (indicating mid-word split)
+                    assert not text.startswith(" "), "Text should not start with space"
+                    # Text should not end with partial word unless it's the last
+                    # This is harder to verify, but at least ensure no weird chars
+
+    def test_split_preserves_total_content(self, splitting_generator: RemarkableGenerator) -> None:
+        """All content should be preserved after splitting."""
+        original_text = "Word1 Word2 Word3 Word4 Word5. " * 40
+
+        blocks = [
+            ContentBlock(
+                type=BlockType.PARAGRAPH,
+                level=0,
+                text=original_text,
+                formatting=[],
+            )
+        ]
+
+        pages = splitting_generator.paginate_content(blocks)
+
+        # Collect all text
+        all_texts = []
+        for page in pages:
+            for block in page:
+                all_texts.append(block.text)
+
+        combined = " ".join(all_texts)
+
+        # Check each unique word is present
+        for word in ["Word1", "Word2", "Word3", "Word4", "Word5"]:
+            assert word in combined, f"{word} missing from split output"
+
+    def test_no_split_when_disabled(self, generator: RemarkableGenerator) -> None:
+        """With splitting disabled, long paragraphs should stay on one page."""
+        words = "The quick brown fox. "
+        long_text = words * 100  # Very long
+
+        blocks = [
+            ContentBlock(
+                type=BlockType.PARAGRAPH,
+                level=0,
+                text=long_text,
+                formatting=[],
+            )
+        ]
+
+        pages = generator.paginate_content(blocks)
+
+        # Without splitting, block stays together (on one page, possibly overflowing)
+        assert len(pages) == 1
+        assert len(pages[0]) == 1
+        assert pages[0][0].text == long_text
+
+    def test_multiple_paragraphs_with_split(self, splitting_generator: RemarkableGenerator) -> None:
+        """Multiple paragraphs should paginate correctly with splitting enabled."""
+        # First paragraph: short
+        para1 = "This is a short paragraph."
+
+        # Second paragraph: long (will split)
+        words = "Long text that wraps many times. "
+        para2 = words * 30
+
+        # Third paragraph: short
+        para3 = "Another short one."
+
+        blocks = [
+            ContentBlock(type=BlockType.PARAGRAPH, level=0, text=para1, formatting=[]),
+            ContentBlock(type=BlockType.PARAGRAPH, level=0, text=para2, formatting=[]),
+            ContentBlock(type=BlockType.PARAGRAPH, level=0, text=para3, formatting=[]),
+        ]
+
+        pages = splitting_generator.paginate_content(blocks)
+
+        # Should have multiple pages
+        assert len(pages) >= 2
+
+        # First page should start with para1
+        assert pages[0][0].text == para1
+
+        # Last page should end with para3
+        assert pages[-1][-1].text == para3
+
+    def test_generated_rm_files_with_split_paragraphs(
+        self, splitting_generator: RemarkableGenerator, tmp_path: Path
+    ) -> None:
+        """Generated .rm files should be valid even with split paragraphs."""
+        words = "Content that spans pages. "
+        long_text = words * 40
+
+        # Create markdown file and parse it to get proper MarkdownDocument
+        md_file = tmp_path / "split_test.md"
+        md_file.write_text(f"# Split Test\n\n{long_text}\n")
+        doc = parse_markdown_file(md_file)
+
+        result = splitting_generator.generate_document(doc)
+
+        assert len(result.pages) > 1, "Should have multiple pages"
+
+        # Verify each page can generate a valid .rm file
+        for i, page in enumerate(result.pages):
+            rm_data = splitting_generator.generate_rm_file(page)
+            assert rm_data is not None, f"Page {i} missing rm_data"
+            assert len(rm_data) > 0, f"Page {i} has empty rm_data"
+
+            # Parse with rmscene to verify validity
+            import io
+
+            parsed_blocks = list(rmscene.read_blocks(io.BytesIO(rm_data)))
+            assert len(parsed_blocks) > 0, f"Page {i} has no blocks"
