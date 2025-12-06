@@ -29,11 +29,15 @@ from .engine import WordWrapLayoutEngine
 
 
 @dataclass(frozen=True)
-class LayoutConfig:
-    """Immutable layout configuration.
+class TextAreaConfig:
+    """Immutable text area configuration.
 
     This is a lightweight configuration object that can be passed around
-    without the full text content or engine state.
+    without the full text content or engine state. It describes the text
+    area dimensions and positioning on a reMarkable page.
+
+    Note: This is distinct from config.LayoutConfig which is user-facing
+    configuration for pagination (lines_per_page, margins, etc.).
     """
 
     text_width: float = TEXT_WIDTH
@@ -79,7 +83,7 @@ class LayoutContext:
 
     def __init__(
         self,
-        config: LayoutConfig,
+        config: TextAreaConfig,
         engine: WordWrapLayoutEngine,
         text_content: str,
         line_breaks: list[int] | None = None,
@@ -100,8 +104,8 @@ class LayoutContext:
         )
 
     @property
-    def config(self) -> LayoutConfig:
-        """Get layout configuration."""
+    def config(self) -> TextAreaConfig:
+        """Get text area configuration."""
         return self._config
 
     @property
@@ -233,7 +237,7 @@ class LayoutContext:
         cls,
         text_content: str,
         use_font_metrics: bool = True,
-        config: LayoutConfig | None = None,
+        config: TextAreaConfig | None = None,
     ) -> LayoutContext:
         """Create layout context from text content.
 
@@ -242,12 +246,12 @@ class LayoutContext:
         Args:
             text_content: Full text content
             use_font_metrics: Whether to use Noto Sans font metrics
-            config: Optional custom layout configuration
+            config: Optional custom text area configuration
 
         Returns:
             LayoutContext ready for use
         """
-        config = config or LayoutConfig()
+        config = config or TextAreaConfig()
 
         engine = WordWrapLayoutEngine(
             text_width=config.text_width,
@@ -307,7 +311,7 @@ class LayoutContext:
             # Return empty context on error
             pass
 
-        config = LayoutConfig(
+        config = TextAreaConfig(
             text_width=text_width,
             text_pos_x=text_pos_x,
             text_pos_y=text_pos_y,
@@ -327,7 +331,7 @@ class LayoutContext:
         Returns:
             New LayoutContext with updated origin
         """
-        new_config = LayoutConfig(
+        new_config = TextAreaConfig(
             text_width=self._config.text_width,
             text_pos_x=origin[0],
             text_pos_y=origin[1],

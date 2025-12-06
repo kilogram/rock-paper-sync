@@ -28,12 +28,12 @@ Usage:
 """
 
 from .constants import LayoutConstants
-from .context import LayoutConfig, LayoutContext
+from .context import LayoutContext, TextAreaConfig
 from .engine import WordWrapLayoutEngine
 
 __all__ = [
     "LayoutConstants",
-    "LayoutConfig",
     "LayoutContext",
+    "TextAreaConfig",
     "WordWrapLayoutEngine",
 ]

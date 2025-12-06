@@ -437,7 +437,7 @@ class ParentAnchorResolver:
         Returns:
             ParentAnchorResolver ready for anchor lookups
         """
-        from .layout import LayoutConfig, LayoutContext
+        from .layout import LayoutContext, TextAreaConfig
 
         # Extract text content and origin from RootTextBlock
         full_text = ""
@@ -462,7 +462,7 @@ class ParentAnchorResolver:
         layout_ctx = LayoutContext.from_text(
             full_text,
             use_font_metrics=True,
-            config=LayoutConfig(text_pos_x=text_pos_x, text_pos_y=text_pos_y),
+            config=TextAreaConfig(text_pos_x=text_pos_x, text_pos_y=text_pos_y),
         )
 
         default_origin = TextOrigin(x=text_pos_x, y=text_pos_y)

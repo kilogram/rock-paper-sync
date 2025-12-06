@@ -682,13 +682,12 @@ class RemarkableGenerator:
 
                     # Create TextBlock for each paragraph with Y positions from layout engine
                     # Use WordWrapLayoutEngine for consistent line break calculation
-                    from .layout import LayoutConfig as LayoutCfg
-                    from .layout import LayoutContext
+                    from .layout import LayoutContext, TextAreaConfig
 
                     layout_ctx = LayoutContext.from_text(
                         full_text,
                         use_font_metrics=True,
-                        config=LayoutCfg(
+                        config=TextAreaConfig(
                             text_width=TEXT_WIDTH,
                             text_pos_x=TEXT_POS_X,
                             text_pos_y=text_data.pos_y,
@@ -1647,8 +1646,7 @@ class RemarkableGenerator:
             Tuple of (text_items, text_blocks) where text_blocks include Y-coordinates
             for annotation mapping
         """
-        from .layout import LayoutConfig as LayoutCfg
-        from .layout import LayoutContext
+        from .layout import LayoutContext, TextAreaConfig
 
         items: list[TextItem] = []
         text_blocks: list[TextBlock] = []
@@ -1671,7 +1669,7 @@ class RemarkableGenerator:
         layout_ctx = LayoutContext.from_text(
             full_text,
             use_font_metrics=True,
-            config=LayoutCfg(
+            config=TextAreaConfig(
                 text_width=TEXT_WIDTH,
                 text_pos_x=TEXT_POS_X,
                 text_pos_y=TEXT_POS_Y,
