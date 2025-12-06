@@ -1502,19 +1502,23 @@ class RemarkableGenerator:
             if current_lines + block_lines > self.layout.lines_per_page:
                 # Block doesn't fit - either split it or start new page
                 if self.layout.allow_paragraph_splitting and block.type == BlockType.PARAGRAPH:
-                    # Split paragraph across pages
+                    # Split paragraph across pages using layout engine for accurate split point
                     lines_available = self.layout.lines_per_page - current_lines
-                    chars_per_line = max(1, int(TEXT_WIDTH / CHAR_WIDTH))
 
-                    # Estimate chars that fit on current page
-                    chars_for_current = lines_available * chars_per_line
+                    # Use layout engine to find exact character offset for split
+                    line_breaks = self.layout_engine.calculate_line_breaks(block.text, TEXT_WIDTH)
 
-                    if chars_for_current > 0 and len(block.text) > chars_for_current:
-                        # Split the text (try to split at word boundary)
-                        split_point = chars_for_current
-                        # Try to find a space near the split point
+                    # Find character offset at end of lines_available lines
+                    if lines_available > 0 and lines_available < len(line_breaks):
+                        split_point = line_breaks[lines_available]
+                    else:
+                        # Fallback: can't split meaningfully
+                        split_point = 0
+
+                    if split_point > 0 and split_point < len(block.text):
+                        # Try to split at word boundary (find space before split point)
                         space_before = block.text.rfind(" ", 0, split_point)
-                        if space_before > chars_for_current * 0.8:  # Within 20% of target
+                        if space_before > split_point * 0.8:  # Within 20% of target
                             split_point = space_before
 
                         # Create two blocks from the split
