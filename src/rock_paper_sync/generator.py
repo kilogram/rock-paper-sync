@@ -1499,68 +1499,43 @@ class RemarkableGenerator:
 
             # Check if block fits on current page
             if current_lines + block_lines > self.layout.lines_per_page:
-                # Block doesn't fit - either split it or start new page
-                if self.layout.allow_paragraph_splitting and block.type == BlockType.PARAGRAPH:
-                    # Split paragraph across pages using layout engine for accurate split point
-                    lines_available = self.layout.lines_per_page - current_lines
+                # Block doesn't fit on current page
+                is_paragraph = block.type == BlockType.PARAGRAPH
+                is_oversized = block_lines > self.layout.lines_per_page
+                should_split = is_paragraph and (
+                    self.layout.allow_paragraph_splitting or is_oversized
+                )
 
-                    # Use layout engine to find exact character offset for split
-                    line_breaks = self.layout_engine.calculate_line_breaks(block.text, TEXT_WIDTH)
+                if should_split:
+                    # Split paragraph using layout engine
+                    chunks = self.layout_engine.split_for_pages(
+                        block.text, self.layout.lines_per_page
+                    )
 
-                    # Find character offset at end of lines_available lines
-                    if lines_available > 0 and lines_available < len(line_breaks):
-                        split_point = line_breaks[lines_available]
-                    else:
-                        # Fallback: can't split meaningfully
-                        split_point = 0
+                    for i, chunk_text in enumerate(chunks):
+                        chunk_lines = len(
+                            self.layout_engine.calculate_line_breaks(chunk_text, TEXT_WIDTH)
+                        )
 
-                    if split_point > 0 and split_point < len(block.text):
-                        # Try to split at word boundary (find space before split point)
-                        space_before = block.text.rfind(" ", 0, split_point)
-                        if space_before > split_point * 0.8:  # Within 20% of target
-                            split_point = space_before
-
-                        # Create two blocks from the split
-                        current_text = block.text[:split_point].rstrip()
-                        remaining_text = block.text[split_point:].lstrip()
-
-                        if current_text:
-                            current_block = ContentBlock(
-                                type=block.type,
-                                level=block.level,
-                                text=current_text,
-                                formatting=block.formatting,  # Note: formatting may not be accurate across split
-                            )
-                            current_page.append(current_block)
-
-                        if current_page:
-                            pages.append(current_page)
-
-                        # Start new page with remaining text
-                        if remaining_text:
-                            next_block = ContentBlock(
-                                type=block.type,
-                                level=block.level,
-                                text=remaining_text,
-                                formatting=[],  # Formatting lost across split for now
-                            )
-                            current_page = [next_block]
-                            current_lines = self.estimate_block_lines(next_block)
-                            y_position = float(TEXT_POS_Y) + current_lines * self.line_height
-                        else:
+                        # Start new page if needed (except for first chunk which may fit)
+                        if i > 0 or current_lines + chunk_lines > self.layout.lines_per_page:
+                            if current_page:
+                                pages.append(current_page)
                             current_page = []
                             current_lines = 0
                             y_position = float(TEXT_POS_Y)
-                    else:
-                        # Not enough room to split meaningfully, start new page
-                        if current_page:
-                            pages.append(current_page)
-                        current_page = [block]
-                        current_lines = block_lines
-                        y_position = float(TEXT_POS_Y) + block_lines * self.line_height
-                        block.page_y_start = float(TEXT_POS_Y)
+
+                        chunk_block = ContentBlock(
+                            type=block.type,
+                            level=block.level,
+                            text=chunk_text,
+                            formatting=block.formatting if i == 0 else [],
+                        )
+                        current_page.append(chunk_block)
+                        current_lines += chunk_lines
+                        y_position += chunk_lines * self.line_height
                 else:
-                    # Atomic block placement (default behavior)
+                    # Atomic block placement - start new page
                     if current_page:
                         pages.append(current_page)
                     current_page = [block]

@@ -806,10 +806,32 @@ class TestParagraphSplitting:
         for word in ["Word1", "Word2", "Word3", "Word4", "Word5"]:
             assert word in combined, f"{word} missing from split output"
 
-    def test_no_split_when_disabled(self, generator: RemarkableGenerator) -> None:
-        """With splitting disabled, long paragraphs should stay on one page."""
+    def test_no_split_when_disabled_and_fits(self, generator: RemarkableGenerator) -> None:
+        """With splitting disabled, paragraphs that fit on a page stay together."""
+        # Use text that fits on one page (generator has 28 lines/page default)
         words = "The quick brown fox. "
-        long_text = words * 100  # Very long
+        text = words * 10  # About 200 chars, ~8 lines - fits on one page
+
+        blocks = [
+            ContentBlock(
+                type=BlockType.PARAGRAPH,
+                level=0,
+                text=text,
+                formatting=[],
+            )
+        ]
+
+        pages = generator.paginate_content(blocks)
+
+        # Without splitting, block stays together
+        assert len(pages) == 1
+        assert len(pages[0]) == 1
+        assert pages[0][0].text == text
+
+    def test_oversized_paragraph_force_split(self, generator: RemarkableGenerator) -> None:
+        """Paragraphs too large for a single page MUST be split, even with splitting disabled."""
+        words = "The quick brown fox. "
+        long_text = words * 100  # Very long - won't fit on one page
 
         blocks = [
             ContentBlock(
@@ -822,10 +844,14 @@ class TestParagraphSplitting:
 
         pages = generator.paginate_content(blocks)
 
-        # Without splitting, block stays together (on one page, possibly overflowing)
-        assert len(pages) == 1
-        assert len(pages[0]) == 1
-        assert pages[0][0].text == long_text
+        # Oversized paragraph must be split across pages
+        assert len(pages) > 1, "Oversized paragraph must be split"
+
+        # All content should be preserved
+        all_text = " ".join(block.text for page in pages for block in page)
+        assert "quick" in all_text
+        assert "brown" in all_text
+        assert "fox" in all_text
 
     def test_multiple_paragraphs_with_split(self, splitting_generator: RemarkableGenerator) -> None:
         """Multiple paragraphs should paginate correctly with splitting enabled."""

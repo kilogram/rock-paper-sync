@@ -144,6 +144,52 @@ class WordWrapLayoutEngine:
 
         return line_breaks
 
+    def split_for_pages(self, text: str, lines_per_page: int) -> list[str]:
+        """Split text into page-sized chunks.
+
+        Uses word-wrap line breaks to find natural split points at page
+        boundaries. Each chunk will fit within `lines_per_page` lines.
+
+        Args:
+            text: Text content to split
+            lines_per_page: Maximum lines per page
+
+        Returns:
+            List of text chunks, each fitting on one page
+        """
+        if not text:
+            return []
+
+        line_breaks = self.calculate_line_breaks(text, self.text_width)
+        num_lines = len(line_breaks)
+
+        if num_lines <= lines_per_page:
+            # Fits on one page
+            return [text]
+
+        chunks = []
+        line_idx = 0
+
+        while line_idx < num_lines:
+            # Start of this chunk
+            chunk_start = line_breaks[line_idx]
+
+            # End of this chunk (after lines_per_page lines, or end of text)
+            end_line_idx = min(line_idx + lines_per_page, num_lines)
+
+            if end_line_idx < num_lines:
+                chunk_end = line_breaks[end_line_idx]
+            else:
+                chunk_end = len(text)
+
+            chunk = text[chunk_start:chunk_end].strip()
+            if chunk:
+                chunks.append(chunk)
+
+            line_idx = end_line_idx
+
+        return chunks
+
     def offset_to_position(
         self, offset: int, text: str, origin: tuple[float, float], width: float
     ) -> tuple[float, float]:
