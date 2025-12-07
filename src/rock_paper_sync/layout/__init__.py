@@ -1,39 +1,55 @@
 """Layout module for reMarkable document generation and annotation processing.
 
-This module provides a single source of truth for layout constants and text
+This module provides a single source of truth for device geometry and text
 positioning logic used across the codebase. It consolidates:
 
-- Page dimensions and text area constants
+- Device geometry (page dimensions, text area, typography)
 - Word-wrap layout engine with font metrics support
 - Layout context for annotation handlers
 - Coordinate transformation constants
 
-The key abstraction is `LayoutContext`, which provides a unified interface
-for all annotation handlers to access layout information without needing
-to understand the underlying implementation details.
+The key abstractions are:
+
+- `DeviceGeometry`: Immutable device-specific layout parameters
+- `LayoutContext`: Unified interface for annotation handlers
 
 Usage:
     from rock_paper_sync.layout import (
-        LayoutConstants,
-        WordWrapLayoutEngine,
+        DeviceGeometry,
+        PAPER_PRO,
         LayoutContext,
+        WordWrapLayoutEngine,
     )
 
-    # Create layout engine
-    engine = WordWrapLayoutEngine()
+    # Use pre-defined device geometry
+    geometry = PAPER_PRO
+    print(f"Lines per page: {geometry.lines_per_page}")
+
+    # Create layout engine from geometry
+    engine = WordWrapLayoutEngine.from_geometry(geometry)
 
     # Create context for annotation processing
-    context = LayoutContext.from_text(text_content)
+    context = LayoutContext.from_geometry(text_content, geometry)
     x, y = context.offset_to_position(char_offset)
+
+For backward compatibility, LayoutConstants is still available but should
+be considered deprecated for new code.
 """
 
+# Backward compatibility - prefer DeviceGeometry for new code
 from .constants import LayoutConstants
 from .context import LayoutContext, TextAreaConfig
+from .device import DEFAULT_DEVICE, PAPER_PRO_MOVE, DeviceGeometry
 from .engine import WordWrapLayoutEngine
 
 __all__ = [
-    "LayoutConstants",
+    # Primary exports (use these for new code)
+    "DeviceGeometry",
+    "PAPER_PRO_MOVE",
+    "DEFAULT_DEVICE",
     "LayoutContext",
     "TextAreaConfig",
     "WordWrapLayoutEngine",
+    # Backward compatibility
+    "LayoutConstants",
 ]

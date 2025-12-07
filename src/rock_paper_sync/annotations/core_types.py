@@ -508,14 +508,15 @@ class HeuristicTextAnchor:
         """
         import difflib
 
-        # Import layout constants from single source of truth
-        from rock_paper_sync.layout.constants import (
-            CHAR_WIDTH,
-            CHARS_PER_LINE,
-            LINE_HEIGHT,
-            TEXT_POS_X,
-            TEXT_POS_Y,
-        )
+        # Import from device geometry (single source of truth)
+        from rock_paper_sync.layout.device import DEFAULT_DEVICE
+
+        # Get layout values from default device geometry
+        char_width = DEFAULT_DEVICE.char_width
+        chars_per_line = DEFAULT_DEVICE.chars_per_line
+        line_height = DEFAULT_DEVICE.line_height
+        text_pos_x = DEFAULT_DEVICE.text_pos_x
+        text_pos_y = DEFAULT_DEVICE.text_pos_y
 
         def estimate_position(offset: int) -> tuple[float, float]:
             """Estimate (x, y) position for a character offset."""
@@ -533,13 +534,13 @@ class HeuristicTextAnchor:
             para_start = old_document.rfind("\n\n", 0, offset)
             para_start = para_start + 2 if para_start != -1 else 0
             chars_in_para = offset - para_start
-            wrap_lines = chars_in_para // CHARS_PER_LINE
+            wrap_lines = chars_in_para // chars_per_line
 
             total_lines = lines_before + wrap_lines
-            x_in_line = chars_in_line % CHARS_PER_LINE
+            x_in_line = chars_in_line % chars_per_line
 
-            est_x = TEXT_POS_X + x_in_line * CHAR_WIDTH
-            est_y = TEXT_POS_Y + total_lines * LINE_HEIGHT
+            est_x = text_pos_x + x_in_line * char_width
+            est_y = text_pos_y + total_lines * line_height
 
             return (est_x, est_y)
 

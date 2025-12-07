@@ -227,7 +227,9 @@ class SyncEngine:
         """
         self.config = config
         self.state = state
-        self.generator = generator or RemarkableGenerator(config.layout)
+        self.generator = generator or RemarkableGenerator(
+            config.layout, geometry=config.layout.get_device_geometry()
+        )
 
         # Initialize OCR processor if enabled
         self.ocr_processor: OCRProcessor | None = None

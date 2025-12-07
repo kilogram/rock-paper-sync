@@ -39,17 +39,8 @@ from .coordinate_transformer import (
     apply_y_offset_to_block,
     get_annotation_center_y,
 )
-from .layout import WordWrapLayoutEngine
-from .layout.constants import (
-    CHAR_WIDTH,
-    LINE_HEIGHT,
-    LINES_PER_PAGE,
-    PAGE_HEIGHT,
-    PAGE_WIDTH,
-    TEXT_POS_X,
-    TEXT_POS_Y,
-    TEXT_WIDTH,
-)
+from .layout import DeviceGeometry, WordWrapLayoutEngine
+from .layout.device import DEFAULT_DEVICE
 from .parser import BlockType, ContentBlock, MarkdownDocument, TextFormat
 
 logger = logging.getLogger("rock_paper_sync.generator")
@@ -321,37 +312,45 @@ class RemarkableGenerator:
        - Combines all text items with newlines (Phase 1 simplification)
        - Future: Multiple Text scene items for precise positioning
 
-    Layout constants are imported from rock_paper_sync.layout.constants,
-    which is the single source of truth for all layout-related values.
+    Device geometry parameters are provided via a DeviceGeometry instance,
+    which encapsulates all device-specific layout values. For backward
+    compatibility, the default geometry (Paper Pro) is used if not specified.
 
     Attributes:
         layout: Page layout configuration
-        page_width: Page width in pixels (1404 for reMarkable Paper Pro)
-        page_height: Page height in pixels (1872 for reMarkable Paper Pro)
-        line_height: Pixels per line (57px, calibrated from device)
-        char_width: Pixels per character (15px, measured from device)
+        geometry: Device geometry (page dimensions, typography, etc.)
+        page_width: Page width in pixels (from geometry)
+        page_height: Page height in pixels (from geometry)
+        line_height: Pixels per line (from geometry)
+        char_width: Pixels per character (from geometry)
     """
 
-    def __init__(self, layout_config: AppLayoutConfig) -> None:
+    def __init__(
+        self,
+        layout_config: AppLayoutConfig,
+        geometry: DeviceGeometry | None = None,
+    ) -> None:
         """Initialize generator with layout settings.
 
         Args:
             layout_config: Page layout configuration
+            geometry: Device geometry (uses DEFAULT_DEVICE if not provided)
         """
         self.layout = layout_config
-        self.page_width = PAGE_WIDTH
-        self.page_height = PAGE_HEIGHT
-        self.line_height = LINE_HEIGHT
-        self.char_width = CHAR_WIDTH
+        self.geometry = geometry or DEFAULT_DEVICE
+
+        # Derive dimensions from geometry
+        self.page_width = self.geometry.page_width
+        self.page_height = self.geometry.page_height
+        self.line_height = self.geometry.line_height
+        self.char_width = self.geometry.char_width
 
         # Initialize annotation adjustment strategies (Phase 1)
         self.text_anchor_strategy = HeuristicTextAnchor(context_window=50, fuzzy_threshold=0.8)
         # Use proportional font metrics for accurate highlight positioning
         # The device uses Noto Sans (proportional font), not monospace
-        self.layout_engine = WordWrapLayoutEngine(
-            text_width=TEXT_WIDTH,
-            avg_char_width=CHAR_WIDTH,  # Fallback if font metrics unavailable
-            line_height=LINE_HEIGHT,
+        self.layout_engine = WordWrapLayoutEngine.from_geometry(
+            self.geometry,
             use_font_metrics=True,  # Enable Noto Sans font metrics for accuracy
         )
 
@@ -519,7 +518,9 @@ class RemarkableGenerator:
                     rm_file_path
                 )
                 new_text_blocks = page.text_blocks
-                new_text_origin_y = TEXT_POS_Y  # New documents use TEXT_POS_Y constant
+                new_text_origin_y = (
+                    self.geometry.text_pos_y
+                )  # New documents use self.geometry.text_pos_y constant
 
                 # Use FULL DOCUMENT text for content anchoring (not per-page)
                 old_text = old_full_text
@@ -659,7 +660,7 @@ class RemarkableGenerator:
                 blocks = list(rmscene.read_blocks(f))
 
             text_blocks = []
-            text_origin_y = TEXT_POS_Y  # Default to constant
+            text_origin_y = self.geometry.text_pos_y  # Default to constant
             full_text = ""
 
             # Find RootTextBlock to get text content and position
@@ -689,8 +690,8 @@ class RemarkableGenerator:
                         full_text,
                         use_font_metrics=True,
                         config=TextAreaConfig(
-                            text_width=TEXT_WIDTH,
-                            text_pos_x=TEXT_POS_X,
+                            text_width=self.geometry.text_width,
+                            text_pos_x=self.geometry.text_pos_x,
                             text_pos_y=text_data.pos_y,
                         ),
                     )
@@ -726,7 +727,7 @@ class RemarkableGenerator:
 
         except Exception as e:
             logger.warning(f"Failed to extract text blocks from {rm_file_path}: {e}")
-            return [], TEXT_POS_Y, ""
+            return [], self.geometry.text_pos_y, ""
 
     def _adjust_annotation_block_position(
         self,
@@ -768,8 +769,8 @@ class RemarkableGenerator:
                 block,
                 old_text,
                 new_text,
-                (TEXT_POS_X, old_text_origin_y),
-                (TEXT_POS_X, new_text_origin_y),
+                (self.geometry.text_pos_x, old_text_origin_y),
+                (self.geometry.text_pos_x, new_text_origin_y),
                 crdt_base_id,
             )
 
@@ -921,10 +922,10 @@ class RemarkableGenerator:
         # This makes model inaccuracies cancel out
         try:
             old_x_model, old_y_model = self.layout_engine.offset_to_position(
-                old_offset, old_text, old_origin, TEXT_WIDTH
+                old_offset, old_text, old_origin, self.geometry.text_width
             )
             new_x_model, new_y_model = self.layout_engine.offset_to_position(
-                new_offset, new_text, new_origin, TEXT_WIDTH
+                new_offset, new_text, new_origin, self.geometry.text_width
             )
         except Exception as e:
             logger.warning(f"Failed to calculate positions for highlight: {e}")
@@ -945,7 +946,7 @@ class RemarkableGenerator:
         old_rect_count = len(glyph_value.rectangles)
         new_end_offset = new_offset + len(highlight_text)
         new_rects = self.layout_engine.calculate_highlight_rectangles(
-            new_offset, new_end_offset, new_text, new_origin, TEXT_WIDTH
+            new_offset, new_end_offset, new_text, new_origin, self.geometry.text_width
         )
         new_rect_count = len(new_rects)
 
@@ -956,7 +957,7 @@ class RemarkableGenerator:
 
             # Preserve original rectangle properties
             original_rect = glyph_value.rectangles[0] if glyph_value.rectangles else None
-            original_height = original_rect.h if original_rect else LINE_HEIGHT
+            original_height = original_rect.h if original_rect else self.geometry.line_height
 
             # Strategy: Apply delta to first rect, then use known geometry for others
             # This preserves pixel-perfect positioning from the original highlight
@@ -982,11 +983,11 @@ class RemarkableGenerator:
             # Relative offsets from layout engine have font metric scaling errors
             #
             # Key insight: Each subsequent line's rectangle has:
-            # - X: Either at line start (TEXT_POS_X) or relative position within line
+            # - X: Either at line start (self.geometry.text_pos_x) or relative position within line
             # - Y: Previous line Y + original_height (highlight rectangles are contiguous)
             #
             # We detect line-start by checking if layout X is close to text origin
-            line_start_x = new_origin[0]  # TEXT_POS_X
+            line_start_x = new_origin[0]  # self.geometry.text_pos_x
             tolerance = 10.0  # Allow small deviation
 
             for i, (x, y, w, _) in enumerate(new_rects[1:], start=1):
@@ -994,9 +995,9 @@ class RemarkableGenerator:
                 is_line_start = abs(x - line_start_x) < tolerance
 
                 if is_line_start:
-                    # Rectangle at line start: use TEXT_POS_X directly
+                    # Rectangle at line start: use self.geometry.text_pos_x directly
                     # This avoids font metric errors in X calculation
-                    rect_x = TEXT_POS_X
+                    rect_x = self.geometry.text_pos_x
                 else:
                     # Mid-line continuation: use relative offset (rare case)
                     rel_x = x - first_new_x
@@ -1216,19 +1217,19 @@ class RemarkableGenerator:
     ) -> bool:
         """Detect if stroke cluster is below all text (implicit handwritten paragraph).
 
-        Strokes below text with a gap > LINE_HEIGHT are treated as an implicit
+        Strokes below text with a gap > line_height are treated as an implicit
         paragraph that only moves when total text content expands.
 
         Args:
             cluster_center_y: Center Y of the stroke cluster
             text_blocks: Text blocks from the document
-            gap_threshold: Minimum gap to consider implicit (default: LINE_HEIGHT)
+            gap_threshold: Minimum gap to consider implicit (default: line_height from geometry)
 
         Returns:
             True if cluster is an implicit paragraph below all text
         """
         if gap_threshold is None:
-            gap_threshold = LINE_HEIGHT
+            gap_threshold = self.geometry.line_height
 
         if not text_blocks:
             return True  # No text = everything is "implicit"
@@ -1482,7 +1483,7 @@ class RemarkableGenerator:
         pages: list[list[ContentBlock]] = []
         current_page: list[ContentBlock] = []
         current_lines = 0
-        y_position = float(TEXT_POS_Y)  # Track Y for annotation mapping
+        y_position = float(self.geometry.text_pos_y)  # Track Y for annotation mapping
 
         for block in blocks:
             block_lines = self.estimate_block_lines(block)
@@ -1490,19 +1491,19 @@ class RemarkableGenerator:
 
             # Check if header should start new page (avoid orphan headers)
             if block.type == BlockType.HEADER and current_page:
-                remaining_space = LINES_PER_PAGE - current_lines
+                remaining_space = self.geometry.lines_per_page - current_lines
                 if remaining_space < 10:  # Less than 10 lines remaining
                     pages.append(current_page)
                     current_page = []
                     current_lines = 0
-                    y_position = float(TEXT_POS_Y)
+                    y_position = float(self.geometry.text_pos_y)
                     block.page_y_start = y_position
 
             # Check if block fits on current page
-            if current_lines + block_lines > LINES_PER_PAGE:
+            if current_lines + block_lines > self.geometry.lines_per_page:
                 # Block doesn't fit on current page
                 is_paragraph = block.type == BlockType.PARAGRAPH
-                is_oversized = block_lines > LINES_PER_PAGE
+                is_oversized = block_lines > self.geometry.lines_per_page
                 should_split = is_paragraph and (
                     self.layout.allow_paragraph_splitting or is_oversized
                 )
@@ -1512,9 +1513,11 @@ class RemarkableGenerator:
                     # Only fill remaining page space when splitting is explicitly allowed
                     # For forced oversized splits, start on a new page
                     if self.layout.allow_paragraph_splitting:
-                        remaining_lines = LINES_PER_PAGE - current_lines
+                        remaining_lines = self.geometry.lines_per_page - current_lines
                         chunks = self.layout_engine.split_for_pages(
-                            block.text, LINES_PER_PAGE, first_chunk_lines=remaining_lines
+                            block.text,
+                            self.geometry.lines_per_page,
+                            first_chunk_lines=remaining_lines,
                         )
                     else:
                         # Forced split (oversized) - start on new page with full-page chunks
@@ -1522,12 +1525,16 @@ class RemarkableGenerator:
                             pages.append(current_page)
                         current_page = []
                         current_lines = 0
-                        y_position = float(TEXT_POS_Y)
-                        chunks = self.layout_engine.split_for_pages(block.text, LINES_PER_PAGE)
+                        y_position = float(self.geometry.text_pos_y)
+                        chunks = self.layout_engine.split_for_pages(
+                            block.text, self.geometry.lines_per_page
+                        )
 
                     for i, chunk_text in enumerate(chunks):
                         chunk_lines = len(
-                            self.layout_engine.calculate_line_breaks(chunk_text, TEXT_WIDTH)
+                            self.layout_engine.calculate_line_breaks(
+                                chunk_text, self.geometry.text_width
+                            )
                         )
 
                         # Start new page after first chunk (first chunk fits by design)
@@ -1536,7 +1543,7 @@ class RemarkableGenerator:
                                 pages.append(current_page)
                             current_page = []
                             current_lines = 0
-                            y_position = float(TEXT_POS_Y)
+                            y_position = float(self.geometry.text_pos_y)
 
                         chunk_block = ContentBlock(
                             type=block.type,
@@ -1553,8 +1560,8 @@ class RemarkableGenerator:
                         pages.append(current_page)
                     current_page = [block]
                     current_lines = block_lines
-                    y_position = float(TEXT_POS_Y) + block_lines * self.line_height
-                    block.page_y_start = float(TEXT_POS_Y)
+                    y_position = float(self.geometry.text_pos_y) + block_lines * self.line_height
+                    block.page_y_start = float(self.geometry.text_pos_y)
             else:
                 current_page.append(block)
                 current_lines += block_lines
@@ -1566,7 +1573,7 @@ class RemarkableGenerator:
 
         logger.info(
             f"Paginated {len(blocks)} blocks into {len(pages)} page(s), "
-            f"target lines per page: {LINES_PER_PAGE}"
+            f"target lines per page: {self.geometry.lines_per_page}"
         )
         for i, page_blocks in enumerate(pages, 1):
             total_lines = sum(self.estimate_block_lines(block) for block in page_blocks)
@@ -1597,7 +1604,7 @@ class RemarkableGenerator:
 
         # Use layout engine with font metrics for accurate line counting
         # This matches the actual rendering in blocks_to_text_items()
-        line_breaks = self.layout_engine.calculate_line_breaks(text, TEXT_WIDTH)
+        line_breaks = self.layout_engine.calculate_line_breaks(text, self.geometry.text_width)
         text_lines = len(line_breaks)
 
         # No extra spacing for paragraphs (spacing handled by blank lines in markdown)
@@ -1622,7 +1629,7 @@ class RemarkableGenerator:
         and the configured margins. Uses WordWrapLayoutEngine for consistent
         line break calculation that matches _extract_text_blocks_from_rm().
 
-        Note: Uses TEXT_POS_Y constant (94.0) for Y positioning to match
+        Note: Uses self.geometry.text_pos_y constant (94.0) for Y positioning to match
         the coordinate system used by RootTextBlock in rmscene. This ensures
         consistency between text generation and extraction for annotation
         preservation.
@@ -1658,9 +1665,9 @@ class RemarkableGenerator:
             full_text,
             use_font_metrics=True,
             config=TextAreaConfig(
-                text_width=TEXT_WIDTH,
-                text_pos_x=TEXT_POS_X,
-                text_pos_y=TEXT_POS_Y,
+                text_width=self.geometry.text_width,
+                text_pos_x=self.geometry.text_pos_x,
+                text_pos_y=self.geometry.text_pos_y,
             ),
         )
 
@@ -1936,9 +1943,9 @@ class RemarkableGenerator:
                         ]
                     ),
                     styles=styles,  # Now includes newline markers at format code 10
-                    pos_x=TEXT_POS_X,
-                    pos_y=TEXT_POS_Y,
-                    width=TEXT_WIDTH,
+                    pos_x=self.geometry.text_pos_x,
+                    pos_y=self.geometry.text_pos_y,
+                    width=self.geometry.text_width,
                 ),
             ),
             TreeNodeBlock(

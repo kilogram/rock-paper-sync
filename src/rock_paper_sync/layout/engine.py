@@ -11,9 +11,15 @@ for accurate positioning. This is critical for highlight anchoring since the
 reMarkable device uses proportional fonts.
 """
 
-from collections.abc import Callable
+from __future__ import annotations
 
-from .constants import CHAR_WIDTH, LINE_HEIGHT, TEXT_WIDTH
+from collections.abc import Callable
+from typing import TYPE_CHECKING
+
+from .device import DEFAULT_DEVICE
+
+if TYPE_CHECKING:
+    from .device import DeviceGeometry
 
 
 class WordWrapLayoutEngine:
@@ -42,10 +48,11 @@ class WordWrapLayoutEngine:
 
     def __init__(
         self,
-        text_width: float = TEXT_WIDTH,
-        avg_char_width: float = CHAR_WIDTH,
-        line_height: float = LINE_HEIGHT,
+        text_width: float | None = None,
+        avg_char_width: float | None = None,
+        line_height: float | None = None,
         use_font_metrics: bool = False,
+        geometry: DeviceGeometry | None = None,
     ):
         """Initialize word wrap layout engine.
 
@@ -54,11 +61,21 @@ class WordWrapLayoutEngine:
             avg_char_width: Average character width (fallback: 15.0px)
             line_height: Line height in pixels (calibrated: 57.0px from device highlight analysis)
             use_font_metrics: If True, use Noto Sans font metrics for accurate width calculations
+            geometry: Device geometry to derive defaults from (uses DEFAULT_DEVICE if not provided)
         """
-        self.text_width = text_width
-        self.avg_char_width = avg_char_width
-        self.line_height = line_height
+        # Use provided geometry or default
+        effective_geometry = geometry or DEFAULT_DEVICE
+
+        # Use explicit parameters if provided, otherwise derive from geometry
+        self.text_width = text_width if text_width is not None else effective_geometry.text_width
+        self.avg_char_width = (
+            avg_char_width if avg_char_width is not None else effective_geometry.char_width
+        )
+        self.line_height = (
+            line_height if line_height is not None else effective_geometry.line_height
+        )
         self.use_font_metrics = use_font_metrics
+        self._geometry = effective_geometry
         self._text_width_fn: Callable[[str], float] | None = None
 
         if use_font_metrics:
@@ -69,6 +86,32 @@ class WordWrapLayoutEngine:
             except Exception:
                 # Fall back to fixed width if font metrics unavailable
                 self._text_width_fn = None
+
+    @classmethod
+    def from_geometry(
+        cls,
+        geometry: DeviceGeometry,
+        use_font_metrics: bool = False,
+    ) -> WordWrapLayoutEngine:
+        """Create layout engine from device geometry.
+
+        This is the preferred way to create an engine with device-specific
+        parameters.
+
+        Args:
+            geometry: Device geometry to use
+            use_font_metrics: If True, use Noto Sans font metrics
+
+        Returns:
+            WordWrapLayoutEngine configured for the device
+        """
+        return cls(
+            text_width=geometry.text_width,
+            avg_char_width=geometry.char_width,
+            line_height=geometry.line_height,
+            use_font_metrics=use_font_metrics,
+            geometry=geometry,
+        )
 
     def _get_text_width(self, text: str) -> float:
         """Get width of text string in pixels."""

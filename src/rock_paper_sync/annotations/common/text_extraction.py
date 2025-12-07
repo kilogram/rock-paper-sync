@@ -11,11 +11,12 @@ from pathlib import Path
 
 import rmscene
 
-# Import constants from single source of truth
-from rock_paper_sync.layout.constants import (
-    RM_TEXT_BLOCK_LINE_HEIGHT,
-    TEXT_POS_Y,
-)
+# Import from device geometry (single source of truth)
+from rock_paper_sync.layout.device import DEFAULT_DEVICE
+
+# Derive constants from default device geometry
+RM_TEXT_BLOCK_LINE_HEIGHT = DEFAULT_DEVICE.rm_text_block_line_height
+TEXT_POS_Y = DEFAULT_DEVICE.text_pos_y
 
 logger = logging.getLogger(__name__)
 

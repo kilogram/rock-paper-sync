@@ -3,7 +3,7 @@
 This module provides the LayoutContext class, which is the primary abstraction
 for accessing layout information during annotation processing. It provides:
 
-- Unified access to layout constants and configuration
+- Unified access to layout configuration and device geometry
 - Character offset to position conversion
 - Position to offset conversion (inverse mapping)
 - Pre-computed line breaks for efficiency
@@ -17,15 +17,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from .constants import (
-    CHAR_WIDTH,
-    LINE_HEIGHT,
-    TEXT_POS_X,
-    TEXT_POS_Y,
-    TEXT_WIDTH,
-)
+from .device import DEFAULT_DEVICE, DeviceGeometry
 from .engine import WordWrapLayoutEngine
+
+if TYPE_CHECKING:
+    pass
 
 
 @dataclass(frozen=True)
@@ -38,13 +36,48 @@ class TextAreaConfig:
 
     Note: This is distinct from config.LayoutConfig which is user-facing
     configuration for pagination (lines_per_page, margins, etc.).
+
+    For new code, prefer creating from DeviceGeometry:
+
+        config = TextAreaConfig.from_geometry(PAPER_PRO)
+
+    All values default to those from DEFAULT_DEVICE for backward compatibility.
     """
 
-    text_width: float = TEXT_WIDTH
-    text_pos_x: float = TEXT_POS_X
-    text_pos_y: float = TEXT_POS_Y
-    line_height: float = LINE_HEIGHT
-    char_width: float = CHAR_WIDTH
+    # All fields have defaults from DEFAULT_DEVICE for backward compatibility
+    text_width: float = DEFAULT_DEVICE.text_width
+    text_pos_x: float = DEFAULT_DEVICE.text_pos_x
+    text_pos_y: float = DEFAULT_DEVICE.text_pos_y
+    line_height: float = DEFAULT_DEVICE.line_height
+    char_width: float = DEFAULT_DEVICE.char_width
+
+    @classmethod
+    def from_geometry(cls, geometry: DeviceGeometry) -> TextAreaConfig:
+        """Create text area config from device geometry.
+
+        This is the preferred way to create a TextAreaConfig.
+
+        Args:
+            geometry: Device geometry to derive config from
+
+        Returns:
+            TextAreaConfig with values from the geometry
+        """
+        return cls(
+            text_width=geometry.text_width,
+            text_pos_x=geometry.text_pos_x,
+            text_pos_y=geometry.text_pos_y,
+            line_height=geometry.line_height,
+            char_width=geometry.char_width,
+        )
+
+    @classmethod
+    def default(cls) -> TextAreaConfig:
+        """Create default text area config (Paper Pro geometry).
+
+        This is a convenience method for backward compatibility.
+        """
+        return cls.from_geometry(DEFAULT_DEVICE)
 
     @property
     def origin(self) -> tuple[float, float]:
@@ -56,7 +89,8 @@ class LayoutContext:
     """Shared layout context for annotation processing.
 
     This is the primary abstraction for layout information. It encapsulates:
-    - Layout configuration (dimensions, positions)
+    - Device geometry (dimensions, positions)
+    - Layout configuration (derived from geometry)
     - Layout engine (word-wrap calculations)
     - Text content for the document/page
     - Pre-computed line breaks
@@ -68,8 +102,15 @@ class LayoutContext:
     - Calculating highlight rectangles
 
     Example:
-        # Create context for a page
+        # Create context with default device (Paper Pro)
         context = LayoutContext.from_text(page_text, use_font_metrics=True)
+
+        # Create context with specific device geometry
+        context = LayoutContext.from_text(
+            page_text,
+            geometry=PAPER_PRO,
+            use_font_metrics=True
+        )
 
         # Convert offset to position
         x, y = context.offset_to_position(100)
@@ -87,6 +128,7 @@ class LayoutContext:
         engine: WordWrapLayoutEngine,
         text_content: str,
         line_breaks: list[int] | None = None,
+        geometry: DeviceGeometry | None = None,
     ):
         """Initialize layout context.
 
@@ -95,6 +137,7 @@ class LayoutContext:
             engine: Word-wrap layout engine
             text_content: Full text content for this context
             line_breaks: Pre-computed line breaks (computed if not provided)
+            geometry: Device geometry (stored for reference)
         """
         self._config = config
         self._engine = engine
@@ -102,6 +145,7 @@ class LayoutContext:
         self._line_breaks = line_breaks or engine.calculate_line_breaks(
             text_content, config.text_width
         )
+        self._geometry = geometry or DEFAULT_DEVICE
 
     @property
     def config(self) -> TextAreaConfig:
@@ -137,6 +181,11 @@ class LayoutContext:
     def line_height(self) -> float:
         """Get line height."""
         return self._config.line_height
+
+    @property
+    def geometry(self) -> DeviceGeometry:
+        """Get device geometry."""
+        return self._geometry
 
     def offset_to_position(self, char_offset: int) -> tuple[float, float]:
         """Convert character offset to (x, y) position.
@@ -238,6 +287,7 @@ class LayoutContext:
         text_content: str,
         use_font_metrics: bool = True,
         config: TextAreaConfig | None = None,
+        geometry: DeviceGeometry | None = None,
     ) -> LayoutContext:
         """Create layout context from text content.
 
@@ -247,28 +297,65 @@ class LayoutContext:
             text_content: Full text content
             use_font_metrics: Whether to use Noto Sans font metrics
             config: Optional custom text area configuration
+            geometry: Device geometry (config will be derived from this if provided)
 
         Returns:
             LayoutContext ready for use
         """
-        config = config or TextAreaConfig()
+        # Determine geometry and config
+        if geometry is not None:
+            effective_geometry = geometry
+            effective_config = config or TextAreaConfig.from_geometry(geometry)
+        elif config is not None:
+            effective_geometry = DEFAULT_DEVICE
+            effective_config = config
+        else:
+            effective_geometry = DEFAULT_DEVICE
+            effective_config = TextAreaConfig.from_geometry(effective_geometry)
 
         engine = WordWrapLayoutEngine(
-            text_width=config.text_width,
-            avg_char_width=config.char_width,
-            line_height=config.line_height,
+            text_width=effective_config.text_width,
+            avg_char_width=effective_config.char_width,
+            line_height=effective_config.line_height,
             use_font_metrics=use_font_metrics,
         )
 
-        line_breaks = engine.calculate_line_breaks(text_content, config.text_width)
+        line_breaks = engine.calculate_line_breaks(text_content, effective_config.text_width)
 
-        return cls(config, engine, text_content, line_breaks)
+        return cls(effective_config, engine, text_content, line_breaks, effective_geometry)
+
+    @classmethod
+    def from_geometry(
+        cls,
+        text_content: str,
+        geometry: DeviceGeometry,
+        use_font_metrics: bool = True,
+    ) -> LayoutContext:
+        """Create layout context from device geometry.
+
+        This is a convenience method for creating contexts with a specific
+        device geometry.
+
+        Args:
+            text_content: Full text content
+            geometry: Device geometry to use
+            use_font_metrics: Whether to use Noto Sans font metrics
+
+        Returns:
+            LayoutContext ready for use
+        """
+        return cls.from_text(
+            text_content,
+            use_font_metrics=use_font_metrics,
+            geometry=geometry,
+        )
 
     @classmethod
     def from_rm_file(
         cls,
         rm_file: Path,
         use_font_metrics: bool = True,
+        geometry: DeviceGeometry | None = None,
     ) -> LayoutContext:
         """Create layout context from .rm file.
 
@@ -277,16 +364,18 @@ class LayoutContext:
         Args:
             rm_file: Path to .rm file
             use_font_metrics: Whether to use Noto Sans font metrics
+            geometry: Device geometry (uses DEFAULT_DEVICE if not provided)
 
         Returns:
             LayoutContext with text content and layout from the file
         """
         import rmscene
 
+        effective_geometry = geometry or DEFAULT_DEVICE
         text_content = ""
-        text_pos_x = TEXT_POS_X
-        text_pos_y = TEXT_POS_Y
-        text_width = TEXT_WIDTH
+        text_pos_x = effective_geometry.text_pos_x
+        text_pos_y = effective_geometry.text_pos_y
+        text_width = effective_geometry.text_width
 
         try:
             with rm_file.open("rb") as f:
@@ -315,9 +404,11 @@ class LayoutContext:
             text_width=text_width,
             text_pos_x=text_pos_x,
             text_pos_y=text_pos_y,
+            line_height=effective_geometry.line_height,
+            char_width=effective_geometry.char_width,
         )
 
-        return cls.from_text(text_content, use_font_metrics, config)
+        return cls.from_text(text_content, use_font_metrics, config, effective_geometry)
 
     def with_origin(self, origin: tuple[float, float]) -> LayoutContext:
         """Create new context with different origin.
@@ -339,7 +430,9 @@ class LayoutContext:
             char_width=self._config.char_width,
         )
 
-        return LayoutContext(new_config, self._engine, self._text_content, self._line_breaks)
+        return LayoutContext(
+            new_config, self._engine, self._text_content, self._line_breaks, self._geometry
+        )
 
     def with_text(self, text_content: str) -> LayoutContext:
         """Create new context with different text content.
@@ -352,4 +445,9 @@ class LayoutContext:
         Returns:
             New LayoutContext with updated text
         """
-        return LayoutContext.from_text(text_content, self._engine.use_font_metrics, self._config)
+        return LayoutContext.from_text(
+            text_content,
+            self._engine.use_font_metrics,
+            self._config,
+            self._geometry,
+        )

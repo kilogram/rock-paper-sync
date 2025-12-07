@@ -21,20 +21,15 @@ from rmscene.tagged_block_common import CrdtId
 if TYPE_CHECKING:
     from .layout import LayoutContext
 
-# Import constants from single source of truth
-from .layout.constants import (
-    NEGATIVE_Y_OFFSET,
-    ROOT_LAYER_ID,
-)
-from .layout.constants import (
-    TEXT_POS_X as DEFAULT_TEXT_ORIGIN_X,
-)
-from .layout.constants import (
-    TEXT_POS_Y as DEFAULT_TEXT_ORIGIN_Y,
-)
-from .layout.constants import (
-    TEXT_WIDTH as DEFAULT_TEXT_WIDTH,
-)
+# Import from device geometry (single source of truth)
+from .layout.device import DEFAULT_DEVICE
+
+# Aliases for backward compatibility - derived from default device geometry
+DEFAULT_TEXT_ORIGIN_X = DEFAULT_DEVICE.text_pos_x
+DEFAULT_TEXT_ORIGIN_Y = DEFAULT_DEVICE.text_pos_y
+DEFAULT_TEXT_WIDTH = DEFAULT_DEVICE.text_width
+NEGATIVE_Y_OFFSET = DEFAULT_DEVICE.negative_y_offset
+ROOT_LAYER_ID = DEFAULT_DEVICE.root_layer_id
 
 logger = logging.getLogger("rock_paper_sync.coordinate_transformer")
 

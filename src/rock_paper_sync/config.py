@@ -52,6 +52,7 @@ class LayoutConfig:
     Margins are configurable with sane defaults.
 
     Attributes:
+        device: Target device name ("paper_pro_move" is currently the only supported device)
         margin_top: Top margin in pixels
         margin_bottom: Bottom margin in pixels
         margin_left: Left margin in pixels
@@ -60,11 +61,56 @@ class LayoutConfig:
                                    (True = better page utilization, False = atomic paragraphs)
     """
 
+    device: str = "paper_pro_move"
     margin_top: int = 50
     margin_bottom: int = 50
     margin_left: int = 50
     margin_right: int = 50
     allow_paragraph_splitting: bool = False
+
+    def get_device_geometry(self) -> "DeviceGeometry":
+        """Get the DeviceGeometry for the configured device.
+
+        Returns:
+            DeviceGeometry for the configured device
+
+        Raises:
+            ConfigError: If the device name is not recognized
+        """
+        return get_device_geometry(self.device)
+
+
+# Type alias for forward reference
+DeviceGeometry = "DeviceGeometry"
+
+
+def get_device_geometry(device_name: str) -> "DeviceGeometry":
+    """Get DeviceGeometry by device name.
+
+    Args:
+        device_name: Name of the device (e.g., "paper_pro_move")
+
+    Returns:
+        DeviceGeometry for the specified device
+
+    Raises:
+        ConfigError: If the device name is not recognized
+
+    Supported devices:
+        - paper_pro_move: reMarkable Paper Pro Move (default)
+    """
+    from rock_paper_sync.layout.device import PAPER_PRO_MOVE
+
+    devices = {
+        "paper_pro_move": PAPER_PRO_MOVE,
+    }
+
+    device_name_lower = device_name.lower().replace("-", "_").replace(" ", "_")
+    if device_name_lower not in devices:
+        valid_devices = ", ".join(sorted(devices.keys()))
+        raise ConfigError(f"Unknown device '{device_name}'. Valid devices: {valid_devices}")
+
+    return devices[device_name_lower]
 
 
 @dataclass(frozen=True)
@@ -215,11 +261,15 @@ def load_config(config_path: Path) -> AppConfig:
 
         # Layout section is optional - all settings have defaults
         layout = config_dict.get("layout", {})
+        device = layout.get("device", "paper_pro_move")
         margin_top = layout.get("margin_top", 50)
         margin_bottom = layout.get("margin_bottom", 50)
         margin_left = layout.get("margin_left", 50)
         margin_right = layout.get("margin_right", 50)
         allow_paragraph_splitting = layout.get("allow_paragraph_splitting", False)
+
+        # Validate device name early
+        get_device_geometry(device)
 
         # Extract logging section
         logging_config = config_dict.get("logging", {})
@@ -240,6 +290,7 @@ def load_config(config_path: Path) -> AppConfig:
         )
 
         layout_config = LayoutConfig(
+            device=device,
             margin_top=margin_top,
             margin_bottom=margin_bottom,
             margin_left=margin_left,
