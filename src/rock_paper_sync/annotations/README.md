@@ -23,8 +23,9 @@ The annotation system provides a composable architecture for handling different 
 
 **`AnnotationHandler` Protocol** (`core/protocol.py`):
 - Interface for pluggable annotation processors
-- Methods: `detect()`, `map()`, `render()`, state management
+- Methods: `detect()`, `map()`, `render()`, `get_position()`, state management
 - Handlers are stateless processors (state persisted separately)
+- Handlers may import rmscene and coordinate_transformer directly for type-specific operations
 
 **`AnnotationProcessor`** (`core/processor.py`):
 - Orchestrates multiple handlers

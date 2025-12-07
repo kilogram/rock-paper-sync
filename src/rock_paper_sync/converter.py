@@ -63,6 +63,7 @@ from .annotations.handlers.stroke_handler import StrokeHandler
 from .audit import get_audit_logger
 from .config import AppConfig, VaultConfig
 from .generator import RemarkableGenerator
+from .layout import LayoutContext
 from .ocr.integration import OCRProcessor
 from .parser import parse_markdown_file
 from .rm_cloud_client import RmCloudClient
@@ -191,6 +192,10 @@ class SyncEngine:
     ) -> dict[int, AnnotationInfo]:
         """Build annotation map from .rm files.
 
+        Uses LayoutContext.from_rm_file() to enable position-based mapping
+        for strokes. This was the missing connection that caused strokes to
+        be lost when page_y_start wasn't available on ContentBlocks.
+
         Args:
             rm_files: List of .rm file paths (may contain None)
             content_blocks: ContentBlock list for annotation mapping
@@ -201,8 +206,12 @@ class SyncEngine:
         annotation_map = {}
         for rm_file in rm_files:
             if rm_file and rm_file.exists():
+                # Create layout context from .rm file for position-based mapping
+                # This enables stroke mapping using position_to_offset()
+                layout_context = LayoutContext.from_rm_file(rm_file, use_font_metrics=True)
+
                 file_annotations = self.annotation_processor.map_annotations_to_paragraphs(
-                    rm_file, content_blocks
+                    rm_file, content_blocks, layout_context=layout_context
                 )
                 merge_annotation_maps(annotation_map, file_annotations)
         return annotation_map

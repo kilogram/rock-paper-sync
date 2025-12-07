@@ -624,9 +624,13 @@ def get_annotation_center_y(block, text_origin_y: float = DEFAULT_TEXT_ORIGIN_Y)
 
         # Transform to absolute if needed
         if is_text_rel:
-            absolute_y = text_origin_y + native_y
+            # Apply NEGATIVE_Y_OFFSET for strokes with negative Y (dual-anchor system)
+            # See docs/STROKE_ANCHORING.md for details
+            y_offset = NEGATIVE_Y_OFFSET if native_y < 0 else 0
+            absolute_y = text_origin_y + y_offset + native_y
             logger.debug(
-                f"Transformed text-relative y={native_y:.1f} to absolute y={absolute_y:.1f}"
+                f"Transformed text-relative y={native_y:.1f} to absolute y={absolute_y:.1f} "
+                f"(y_offset={y_offset})"
             )
             return absolute_y
         else:

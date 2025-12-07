@@ -31,10 +31,11 @@ from .annotations import (
     HeuristicTextAnchor,
     TextBlock,
 )
+from .annotations.handlers.highlight_handler import HighlightHandler
+from .annotations.handlers.stroke_handler import StrokeHandler
 from .config import LayoutConfig as AppLayoutConfig
 from .coordinate_transformer import (
     END_OF_DOC_ANCHOR_MARKER,
-    get_annotation_center_y,
 )
 from .layout import DeviceGeometry, WordWrapLayoutEngine
 from .layout.device import DEFAULT_DEVICE
@@ -370,9 +371,39 @@ class RemarkableGenerator:
             use_font_metrics=True,  # Enable Noto Sans font metrics for accuracy
         )
 
+        # Initialize annotation handlers for position extraction and relocation
+        self._highlight_handler = HighlightHandler()
+        self._stroke_handler = StrokeHandler()
+
         logger.info(
             "RemarkableGenerator initialized with rmscene integration and Phase 1 annotation anchoring"
         )
+
+    def _get_handler_for_block(self, block):
+        """Get the appropriate handler for an annotation block.
+
+        Args:
+            block: Raw rmscene annotation block
+
+        Returns:
+            HighlightHandler for Glyph blocks, StrokeHandler for Line blocks, or None
+        """
+        # Check block type name first (matches original behavior)
+        block_type = type(block).__name__
+        if "Glyph" in block_type:
+            return self._highlight_handler
+        if "Line" in block_type:
+            return self._stroke_handler
+
+        # Fallback: check item.value type
+        if hasattr(block, "item") and hasattr(block.item, "value"):
+            value_type = type(block.item.value).__name__
+            if "Glyph" in value_type:
+                return self._highlight_handler
+            if "Line" in value_type:
+                return self._stroke_handler
+
+        return None
 
     def _build_text_styles(self, text: str) -> dict:
         """Build rmscene styles dictionary with newline markers.
@@ -522,12 +553,6 @@ class RemarkableGenerator:
         for page in pages:
             all_new_text_blocks.extend(page.text_blocks)
 
-        # Build full document text for content anchoring
-        old_full_text = "\n\n".join(d["page_text"] for d in old_page_data if d is not None)
-        new_full_text = "\n\n".join(
-            "\n".join(block.content for block in page.text_blocks) for page in pages
-        )
-
         logger.debug(
             f"Document-level: {len(all_old_text_blocks)} old blocks, "
             f"{len(all_new_text_blocks)} new blocks"
@@ -593,7 +618,13 @@ class RemarkableGenerator:
                 rm_file_path = page_data["rm_file_path"]
 
                 # Find which old text block this annotation belongs to
-                anno_center_y = get_annotation_center_y(anno_block, old_text_origin_y)
+                # Use handler's get_position() for type-specific coordinate transformation
+                handler = self._get_handler_for_block(anno_block)
+                if handler:
+                    position = handler.get_position(anno_block, old_text_origin_y)
+                    anno_center_y = position[1] if position else None
+                else:
+                    anno_center_y = None
                 if anno_center_y is None:
                     # Can't determine position - keep on same page
                     target_page_idx = min(source_page_idx, len(pages) - 1)
@@ -633,18 +664,26 @@ class RemarkableGenerator:
                 # Get CRDT base ID for position adjustment
                 crdt_base_id = get_crdt_base_id_from_rm(rm_file_path)
 
-                # Adjust annotation position
-                if "Glyph" in type(anno_block).__name__:
-                    adjusted_block = self._adjust_glyph_with_content_anchoring(
+                # Adjust annotation position via handler
+                handler = self._get_handler_for_block(anno_block)
+                if handler:
+                    # Get page-local text for position calculations
+                    old_page_text = page_data["page_text"]
+                    new_page_text = "\n".join(
+                        block.content for block in pages[target_page_idx].text_blocks
+                    )
+
+                    adjusted_block = handler.relocate(
                         anno_block,
-                        old_full_text,
-                        new_full_text,
+                        old_page_text,  # Use page-local text, not full document
+                        new_page_text,  # Use target page text
                         (self.geometry.text_pos_x, old_text_origin_y),
                         (self.geometry.text_pos_x, new_text_origin_y),
+                        self.layout_engine,
+                        self.geometry,
                         crdt_base_id,
                     )
                 else:
-                    # Strokes: keep as-is, anchor_ids will be updated in roundtrip
                     adjusted_block = anno_block
 
                 # Route to target page context

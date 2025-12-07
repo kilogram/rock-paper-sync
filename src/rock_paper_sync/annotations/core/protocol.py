@@ -186,8 +186,8 @@ class AnnotationHandler(Protocol):
         - Detect corrections from markdown edits
         - Apply corrections to RM files
 
-        This method hides RM v6 format complexity from the handler. Handlers
-        should never import from rmscene or coordinate_transformer directly.
+        This method extracts position/content information from the annotation
+        for anchor creation and matching.
 
         Args:
             annotation: Annotation object from detect()
@@ -205,6 +205,66 @@ class AnnotationHandler(Protocol):
                 paragraph_index=5,
                 page_num=0
             )
+        """
+        ...
+
+    def get_position(
+        self,
+        block: Any,
+        text_origin_y: float,
+    ) -> tuple[float, float] | None:
+        """Get absolute (x, y) position for an annotation block.
+
+        Encapsulates type-specific coordinate transformation logic.
+        Used by AnnotationPreserver for routing decisions during
+        document regeneration.
+
+        Args:
+            block: Raw rmscene annotation block (SceneGlyphItemBlock or SceneLineItemBlock)
+            text_origin_y: Y coordinate of text origin from .rm file
+
+        Returns:
+            Tuple of (absolute_x, absolute_y) in page coordinates,
+            or None if position cannot be determined.
+
+        Note:
+            - Highlights use simple text-relative offset
+            - Strokes use dual-anchor system with NEGATIVE_Y_OFFSET for negative Y
+        """
+        ...
+
+    def relocate(
+        self,
+        block: Any,
+        old_text: str,
+        new_text: str,
+        old_origin: tuple[float, float],
+        new_origin: tuple[float, float],
+        layout_engine: Any,
+        geometry: Any,
+        crdt_base_id: int | None = None,
+    ) -> Any:
+        """Relocate annotation when content changes.
+
+        Adjusts annotation coordinates when document text shifts. Used by
+        AnnotationPreserver during document regeneration.
+
+        Args:
+            block: Raw rmscene annotation block
+            old_text: Page text before modification
+            new_text: Page text after modification
+            old_origin: (x, y) origin of old text block
+            new_origin: (x, y) origin of new text block
+            layout_engine: WordWrapLayoutEngine for position calculations
+            geometry: DeviceGeometry for layout parameters
+            crdt_base_id: Base ID for CRDT offset calculation (highlights only)
+
+        Returns:
+            Modified block with adjusted coordinates/anchors
+
+        Note:
+            - Highlights use content-based anchoring with delta calculation
+            - Strokes return block unchanged (anchor roundtrip handles them)
         """
         ...
 

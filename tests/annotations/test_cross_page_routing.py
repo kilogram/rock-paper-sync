@@ -204,10 +204,12 @@ class TestCrossPageAnnotationRouting:
 
         pages = [page0]
 
-        # Mock get_annotation_center_y to return None (indeterminate Y position)
-        with patch("rock_paper_sync.generator.get_annotation_center_y") as mock_center:
-            mock_center.return_value = None
-            # Use real annotated file - should not raise even with None center_y
+        # Mock handler's get_position to return None (indeterminate position)
+        with (
+            patch.object(generator._highlight_handler, "get_position", return_value=None),
+            patch.object(generator._stroke_handler, "get_position", return_value=None),
+        ):
+            # Use real annotated file - should not raise even with None position
             generator._preserve_annotations(pages, [annotated_rm_file])
 
         # Verify annotation_context was set and annotations stayed on same page

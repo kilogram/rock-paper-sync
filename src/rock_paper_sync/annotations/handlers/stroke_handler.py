@@ -38,6 +38,7 @@ from rock_paper_sync.annotations.core.data_types import (
     RenderConfig,
 )
 from rock_paper_sync.coordinate_transformer import (
+    NEGATIVE_Y_OFFSET,
     CoordinateTransformer,
     build_parent_anchor_map,
     extract_text_origin,
@@ -358,6 +359,107 @@ class StrokeHandler:
             context_before=context_before,
             context_after=context_after,
         )
+
+    def get_position(
+        self,
+        block,
+        text_origin_y: float,
+    ) -> tuple[float, float] | None:
+        """Get absolute position for a stroke (Line) block.
+
+        Strokes use the dual-anchor coordinate system:
+        - Positive Y: absolute_y = text_origin_y + native_y
+        - Negative Y: absolute_y = text_origin_y + NEGATIVE_Y_OFFSET + native_y
+
+        Args:
+            block: Raw rmscene SceneLineItemBlock
+            text_origin_y: Y coordinate of text origin from .rm file
+
+        Returns:
+            Tuple of (absolute_x, absolute_y), or None if position cannot be determined
+        """
+        try:
+            if not hasattr(block, "item") or not hasattr(block.item, "value"):
+                return None
+
+            value = block.item.value
+
+            # Verify this is a Line block
+            if "Line" not in type(value).__name__:
+                return None
+
+            # Extract native coordinates from points
+            if not hasattr(value, "points") or not value.points:
+                return None
+
+            xs = [p.x for p in value.points if hasattr(p, "x")]
+            ys = [p.y for p in value.points if hasattr(p, "y")]
+
+            if not xs or not ys:
+                return None
+
+            native_x = sum(xs) / len(xs)
+            native_y = sum(ys) / len(ys)
+
+            # Check if text-relative
+            is_text_rel = False
+            if hasattr(block, "parent_id"):
+                is_text_rel = is_text_relative(block.parent_id)
+
+            # Transform to absolute coordinates using dual-anchor system
+            if is_text_rel:
+                # Apply NEGATIVE_Y_OFFSET for negative Y strokes
+                y_offset = NEGATIVE_Y_OFFSET if native_y < 0 else 0
+                absolute_y = text_origin_y + y_offset + native_y
+            else:
+                absolute_y = native_y
+
+            # X coordinate doesn't need transformation for routing decisions
+            absolute_x = native_x
+
+            logger.debug(
+                f"Stroke position: native_y={native_y:.1f} → absolute_y={absolute_y:.1f} "
+                f"(y_offset={NEGATIVE_Y_OFFSET if native_y < 0 else 0})"
+            )
+            return (absolute_x, absolute_y)
+
+        except Exception as e:
+            logger.warning(f"Failed to get stroke position: {e}")
+            return None
+
+    def relocate(
+        self,
+        block,
+        old_text: str,
+        new_text: str,
+        old_origin: tuple[float, float],
+        new_origin: tuple[float, float],
+        layout_engine,
+        geometry,
+        crdt_base_id: int | None = None,
+    ):
+        """Relocate stroke annotation (pass-through).
+
+        Strokes don't need coordinate adjustment during regeneration because:
+        1. Their positions are relative to TreeNodeBlock anchors
+        2. The roundtrip mechanism updates anchor_ids automatically
+
+        Args:
+            block: Raw rmscene SceneLineItemBlock
+            old_text: Page text before modification (unused)
+            new_text: Page text after modification (unused)
+            old_origin: Origin of old text block (unused)
+            new_origin: Origin of new text block (unused)
+            layout_engine: Layout engine (unused)
+            geometry: Device geometry (unused)
+            crdt_base_id: CRDT base ID (unused)
+
+        Returns:
+            Block unchanged - anchor roundtrip handles stroke relocation
+        """
+        # Strokes use anchor-based positioning via TreeNodeBlocks
+        # The roundtrip mechanism in generate_rm_file handles updating anchor_ids
+        return block
 
     def extract_from_markdown(
         self,
