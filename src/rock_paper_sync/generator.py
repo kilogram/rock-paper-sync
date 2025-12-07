@@ -28,7 +28,6 @@ from rmscene.scene_stream import (
 from rmscene.tagged_block_common import LwwValue
 
 from .annotations import (
-    Annotation,
     HeuristicTextAnchor,
     TextBlock,
 )
@@ -236,6 +235,27 @@ class TextItem:
 
 
 @dataclass
+class PageAnnotationContext:
+    """Unified annotation context for a page.
+
+    Replaces the previous 4 parallel dicts (same_page_annotations,
+    cross_page_annotations, page_rm_paths, moved_out_ids) with a single
+    context object per page.
+
+    Attributes:
+        annotations: All annotation blocks routed to this page
+        source_rm_path: Original .rm file path (for roundtrip preservation)
+        exclude_ids: Annotation IDs that moved OUT of this page (exclude from roundtrip)
+        has_same_page: True if any annotations stayed on their original page
+    """
+
+    annotations: list = field(default_factory=list)
+    source_rm_path: Path | None = None
+    exclude_ids: set = field(default_factory=set)
+    has_same_page: bool = False
+
+
+@dataclass
 class RemarkablePage:
     """A single page in a reMarkable document.
 
@@ -243,17 +263,15 @@ class RemarkablePage:
         uuid: Unique page identifier
         text_items: List of positioned text items on this page
         text_blocks: List of text blocks with position info (for annotation mapping)
-        annotations: List of annotations to preserve on this page
-        annotation_blocks: Raw rmscene blocks for preserved annotations
-        original_rm_path: Path to original .rm file (for annotation preservation)
+        annotation_context: Unified annotation state for this page
+        content_blocks: Original parsed content blocks (for text extraction)
     """
 
     uuid: str
     text_items: list[TextItem] = field(default_factory=list)
     text_blocks: list[TextBlock] = field(default_factory=list)
-    annotations: list[Annotation] = field(default_factory=list)
-    annotation_blocks: list = field(default_factory=list)
-    original_rm_path: Path | None = None
+    annotation_context: PageAnnotationContext | None = None
+    content_blocks: list = field(default_factory=list)
 
 
 @dataclass
@@ -563,19 +581,11 @@ class RemarkableGenerator:
         logger.info(f"Collected {len(all_annotations)} total annotations for cross-page routing")
 
         # =================================================================
-        # PHASE 3: Route annotations to their target pages
+        # PHASE 3: Route annotations to target pages using unified contexts
         # =================================================================
 
-        # Initialize per-page annotation collections
-        # Track same-page vs cross-page annotations separately
-        # Same-page: can use roundtrip (preserve scene tree)
-        # Cross-page: need special handling (inject into target page)
-        same_page_annotations: dict[int, list] = {i: [] for i in range(len(pages))}
-        cross_page_annotations: dict[int, list] = {i: [] for i in range(len(pages))}
-        page_rm_paths: dict[int, Path] = {}  # Source page for same-page only
-        # Track item_ids that moved OUT of each page (to exclude from roundtrip)
-        moved_out_ids: dict[int, set] = {i: set() for i in range(len(pages))}
-
+        # Initialize one context per page (replaces 4 parallel dicts)
+        contexts = [PageAnnotationContext() for _ in pages]
         new_text_origin_y = self.geometry.text_pos_y
 
         for anno_block, source_page_idx, page_data, existing_blocks in all_annotations:
@@ -589,8 +599,10 @@ class RemarkableGenerator:
                 if anno_center_y is None:
                     # Can't determine position - keep on same page
                     target_page_idx = min(source_page_idx, len(pages) - 1)
-                    same_page_annotations[target_page_idx].append(anno_block)
-                    page_rm_paths[target_page_idx] = rm_file_path
+                    ctx = contexts[target_page_idx]
+                    ctx.annotations.append(anno_block)
+                    ctx.source_rm_path = rm_file_path
+                    ctx.has_same_page = True
                     continue
 
                 # Find nearest old text block (document-level index)
@@ -620,13 +632,7 @@ class RemarkableGenerator:
                 # Clamp to valid page range
                 target_page_idx = max(0, min(target_page_idx, len(pages) - 1))
 
-                # Log cross-page movement
-                if source_page_idx != target_page_idx:
-                    logger.debug(
-                        f"Annotation moving from page {source_page_idx} to page {target_page_idx}"
-                    )
-
-                # Get CRDT base ID
+                # Get CRDT base ID for position adjustment
                 crdt_base_id = get_crdt_base_id_from_rm(rm_file_path)
 
                 # Adjust annotation position
@@ -643,77 +649,59 @@ class RemarkableGenerator:
                     # Strokes: keep as-is, anchor_ids will be updated in roundtrip
                     adjusted_block = anno_block
 
-                # Separate same-page vs cross-page annotations
+                # Route to target page context
+                ctx = contexts[target_page_idx]
+                ctx.annotations.append(adjusted_block)
+
                 is_cross_page = source_page_idx != target_page_idx
                 if is_cross_page:
-                    cross_page_annotations[target_page_idx].append(adjusted_block)
                     # Track that this annotation moved OUT of source page
-                    # So it will be excluded from source page's roundtrip
                     if hasattr(anno_block, "item") and hasattr(anno_block.item, "item_id"):
-                        moved_out_ids[source_page_idx].add(anno_block.item.item_id)
+                        contexts[source_page_idx].exclude_ids.add(anno_block.item.item_id)
                     logger.debug(
-                        f"Cross-page: annotation from page {source_page_idx} -> {target_page_idx}"
+                        f"Annotation moving from page {source_page_idx} to page {target_page_idx}"
                     )
                 else:
-                    same_page_annotations[target_page_idx].append(adjusted_block)
-                    page_rm_paths[target_page_idx] = rm_file_path
+                    # Same page - use roundtrip with source file
+                    ctx.source_rm_path = rm_file_path
+                    ctx.has_same_page = True
 
             except Exception as e:
                 logger.warning(f"Failed to route annotation: {e}")
-                # Fallback: keep on source page as same-page
+                # Fallback: keep on source page
                 target_page_idx = min(source_page_idx, len(pages) - 1)
-                same_page_annotations[target_page_idx].append(anno_block)
+                contexts[target_page_idx].annotations.append(anno_block)
 
         # =================================================================
-        # PHASE 4: Assign annotations to pages
+        # PHASE 4: Assign contexts to pages
         # =================================================================
 
         for page_idx, page in enumerate(pages):
-            same_page = same_page_annotations.get(page_idx, [])
-            cross_page = cross_page_annotations.get(page_idx, [])
-            page_moved_out = moved_out_ids.get(page_idx, set())
+            ctx = contexts[page_idx]
 
-            # Store IDs that moved OUT of this page (to exclude from roundtrip)
-            if page_moved_out:
-                page.exclude_annotation_ids = page_moved_out
-                logger.debug(f"Page {page_idx}: {len(page_moved_out)} annotations moved out")
+            # Set source for roundtrip if we have same-page annotations
+            # or if we need to remove moved-out annotations
+            if not ctx.source_rm_path and ctx.exclude_ids:
+                # Need to roundtrip to remove moved-out annotations
+                if page_idx < len(existing_rm_files) and existing_rm_files[page_idx]:
+                    ctx.source_rm_path = existing_rm_files[page_idx]
 
-            if same_page or cross_page:
-                # Combine annotations, but track if we have cross-page ones
-                all_page_annos = same_page + cross_page
-                page.annotation_blocks = all_page_annos
+            # If only cross-page annotations and no same-page, use target's existing file
+            if ctx.annotations and not ctx.has_same_page:
+                if page_idx < len(existing_rm_files) and existing_rm_files[page_idx]:
+                    ctx.source_rm_path = existing_rm_files[page_idx]
 
-                # Only use roundtrip if we have same-page annotations AND a source file
-                # Cross-page annotations need injection approach
-                if same_page and page_idx in page_rm_paths:
-                    page.original_rm_path = page_rm_paths[page_idx]
-                    logger.info(
-                        f"Page {page_idx}: {len(same_page)} same-page + "
-                        f"{len(cross_page)} cross-page annotations (roundtrip)"
-                    )
-                elif page_idx < len(existing_rm_files) and existing_rm_files[page_idx]:
-                    # Use target page's existing .rm file for injection
-                    page.original_rm_path = existing_rm_files[page_idx]
-                    logger.info(
-                        f"Page {page_idx}: {len(cross_page)} cross-page annotations "
-                        f"(inject into existing)"
-                    )
-                else:
-                    # No existing file - annotations will be added to fresh .rm
-                    # Note: This requires special handling in generate_rm_file
-                    page.cross_page_annotations = cross_page
-                    logger.info(
-                        f"Page {page_idx}: {len(cross_page)} cross-page annotations "
-                        f"(inject into new)"
-                    )
-            elif (
-                page_moved_out and page_idx < len(existing_rm_files) and existing_rm_files[page_idx]
-            ):
-                # No annotations staying on this page, but some moved out
-                # Need to roundtrip to remove them
-                page.original_rm_path = existing_rm_files[page_idx]
-                page.annotation_blocks = []  # Empty - all moved out
-                logger.info(f"Page {page_idx}: All annotations moved out, updating file")
+            page.annotation_context = ctx
+
+            # Log summary
+            if ctx.annotations or ctx.exclude_ids:
+                same_count = len(ctx.annotations) if ctx.has_same_page else 0
+                cross_count = len(ctx.annotations) - same_count
+                mode = "roundtrip" if ctx.source_rm_path else "fresh"
+                logger.info(
+                    f"Page {page_idx}: {same_count} same-page + {cross_count} cross-page "
+                    f"annotations, {len(ctx.exclude_ids)} moved out ({mode})"
+                )
 
     def _find_nearest_page_with_content(
         self, source_page_idx: int, pages: list[RemarkablePage]
@@ -1837,9 +1825,9 @@ class RemarkableGenerator:
     def generate_rm_file(self, page: RemarkablePage) -> bytes:
         """Generate binary .rm file content with custom text width.
 
-        If the page has annotation_blocks AND original_rm_path, this does a
-        round-trip modification preserving the original scene tree structure.
-        Otherwise, creates a new document from scratch.
+        Uses annotation_context to determine generation strategy:
+        - If context has source_rm_path: roundtrip to preserve scene tree
+        - Otherwise: create from scratch
 
         Args:
             page: RemarkablePage with positioned text items
@@ -1851,19 +1839,14 @@ class RemarkableGenerator:
             Uses custom scene tree construction to set text width to 750px,
             which displays at 1.0x zoom on the Paper Pro (vs 0.8x with the
             default 936px width from simple_text_document).
-            Inline formatting (bold/italic) is preserved in the text but
-            not visually rendered due to rmscene/reMarkable limitations.
         """
-        # If we have annotations and original file, do round-trip modification
-        if (
-            hasattr(page, "annotation_blocks")
-            and page.annotation_blocks
-            and hasattr(page, "original_rm_path")
-            and page.original_rm_path
-        ):
+        ctx = page.annotation_context
+
+        # Roundtrip if we have a source file (for annotation preservation)
+        if ctx and ctx.source_rm_path and ctx.source_rm_path.exists():
             return self._generate_rm_file_roundtrip(page)
 
-        # Otherwise create from scratch (no annotations to preserve)
+        # Create from scratch (no annotations or no source file)
         return self._generate_rm_file_from_scratch(page)
 
     def _generate_rm_file_roundtrip(self, page: RemarkablePage) -> bytes:
@@ -1879,13 +1862,15 @@ class RemarkableGenerator:
         the offset must be adjusted. See docs/STROKE_ANCHORING.md for details.
 
         Args:
-            page: RemarkablePage with annotation_blocks and original_rm_path
+            page: RemarkablePage with annotation_context
 
         Returns:
             Binary .rm file content with preserved structure
         """
+        ctx = page.annotation_context
+
         # Read all blocks from original file
-        with open(str(page.original_rm_path), "rb") as f:
+        with open(str(ctx.source_rm_path), "rb") as f:
             blocks = list(rmscene.read_blocks(f))
 
         # Prepare new text content
@@ -1915,15 +1900,14 @@ class RemarkableGenerator:
                     original_annotation_ids.add(block.item.item_id)
 
         # Get IDs of annotations that moved OUT of this page (should be excluded)
-        exclude_ids = getattr(page, "exclude_annotation_ids", set())
-        if exclude_ids:
-            logger.debug(f"Excluding {len(exclude_ids)} annotations that moved to other pages")
+        if ctx.exclude_ids:
+            logger.debug(f"Excluding {len(ctx.exclude_ids)} annotations that moved to other pages")
 
         # Build index of adjusted annotations by item_id
         # Also track which are from the same file (can be matched) vs cross-page (must inject)
         adjusted_by_id = {}
         cross_page_to_inject = []
-        for adj_block in page.annotation_blocks:
+        for adj_block in ctx.annotations:
             if hasattr(adj_block, "item") and hasattr(adj_block.item, "item_id"):
                 item_id = adj_block.item.item_id
                 if item_id in original_annotation_ids:
@@ -1983,7 +1967,7 @@ class RemarkableGenerator:
                 if hasattr(block, "item") and hasattr(block.item, "item_id"):
                     item_id = block.item.item_id
                     # Skip annotations that moved to other pages
-                    if item_id in exclude_ids:
+                    if item_id in ctx.exclude_ids:
                         logger.debug(f"Excluding annotation {item_id} (moved to another page)")
                         continue
                     if item_id in adjusted_by_id:
@@ -2114,12 +2098,11 @@ class RemarkableGenerator:
             ),
         ]
 
-        # Add preserved annotations (strokes and highlights) as rmscene blocks
-        if hasattr(page, "annotation_blocks") and page.annotation_blocks:
-            blocks.extend(page.annotation_blocks)
-            logger.debug(
-                f"Added {len(page.annotation_blocks)} preserved annotation blocks to .rm file"
-            )
+        # Add preserved annotations (strokes and highlights) from context
+        ctx = page.annotation_context
+        if ctx and ctx.annotations:
+            blocks.extend(ctx.annotations)
+            logger.debug(f"Added {len(ctx.annotations)} preserved annotation blocks to .rm file")
 
         # Serialize to binary format
         buffer = io.BytesIO()

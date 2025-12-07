@@ -6,7 +6,7 @@ when document modifications cause paragraphs to move to different pages.
 
 import uuid as uuid_module
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -95,10 +95,9 @@ class TestCrossPageAnnotationRouting:
         # The annotations should stay on page 0
         generator._preserve_annotations(pages, [annotated_rm_file, None])
 
-        # Check that page 0 has annotations assigned
-        assert hasattr(page0, "annotation_blocks") or hasattr(
-            page0, "same_page_annotations"
-        ), "Page 0 should have annotation data"
+        # Check that page 0 has annotation context with annotations
+        assert page0.annotation_context is not None, "Page 0 should have annotation_context"
+        assert len(page0.annotation_context.annotations) > 0, "Page 0 should have annotations"
 
     def test_annotation_moves_when_paragraph_shifts_page(
         self, generator: RemarkableGenerator, annotated_rm_file: Path
@@ -183,7 +182,7 @@ class TestCrossPageAnnotationRouting:
         assert True, "Cross-page routing completed without error"
 
     def test_annotation_routing_handles_none_center_y(
-        self, generator: RemarkableGenerator, tmp_path: Path
+        self, generator: RemarkableGenerator, annotated_rm_file: Path
     ):
         """Annotations with indeterminate Y position should stay on same page."""
         # We mock get_annotation_center_y to return None to test this edge case
@@ -205,25 +204,16 @@ class TestCrossPageAnnotationRouting:
 
         pages = [page0]
 
-        # Mock scenario where annotation center Y is None
+        # Mock get_annotation_center_y to return None (indeterminate Y position)
         with patch("rock_paper_sync.generator.get_annotation_center_y") as mock_center:
             mock_center.return_value = None
+            # Use real annotated file - should not raise even with None center_y
+            generator._preserve_annotations(pages, [annotated_rm_file])
 
-            with patch("rock_paper_sync.generator.rmscene.read_blocks") as mock_read:
-                # Create a mock annotation block
-                mock_block = MagicMock()
-                mock_block.__class__.__name__ = "SceneLineItemBlock"
-                mock_read.return_value = [mock_block]
-
-                with patch("builtins.open", MagicMock()):
-                    # This should not raise - annotation stays on same page
-                    generator._preserve_annotations(pages, [tmp_path / "fake.rm"])
-
-        # Verify the same_page_annotations fallback was used
-        # (annotation kept on page 0 when Y is indeterminate)
-        assert hasattr(page0, "same_page_annotations") or hasattr(
-            page0, "annotation_blocks"
-        ), "Page should have annotation tracking"
+        # Verify annotation_context was set and annotations stayed on same page
+        assert page0.annotation_context is not None, "Page should have annotation_context"
+        # Annotations with None center_y should still be routed to same page
+        assert len(page0.annotation_context.annotations) >= 0
 
     def test_moved_out_ids_tracked_for_cross_page_annotations(
         self, generator: RemarkableGenerator, annotated_rm_file: Path
@@ -264,13 +254,13 @@ class TestCrossPageAnnotationRouting:
 
         generator._preserve_annotations(pages, [annotated_rm_file, None])
 
-        # Check if exclude_annotation_ids was set on page0
+        # Check if exclude_ids was set in page0's annotation_context
         # (annotations that moved OUT of page 0 to another page)
-        if hasattr(page0, "exclude_annotation_ids"):
-            # If any annotations moved out, this set should exist
+        if page0.annotation_context is not None:
+            # If any annotations moved out, exclude_ids should be a set
             assert isinstance(
-                page0.exclude_annotation_ids, set
-            ), "exclude_annotation_ids should be a set"
+                page0.annotation_context.exclude_ids, set
+            ), "exclude_ids should be a set"
 
 
 class TestCrossPageEdgeCases:

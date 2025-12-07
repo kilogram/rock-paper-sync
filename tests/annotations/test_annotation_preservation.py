@@ -354,7 +354,9 @@ class TestEndToEndPreservation:
 
         # Check annotations were preserved on some pages
         pages_with_annotations = sum(
-            1 for page in doc.pages if hasattr(page, "annotation_blocks") and page.annotation_blocks
+            1
+            for page in doc.pages
+            if page.annotation_context and page.annotation_context.annotations
         )
 
         print(f"\nPreserved annotations on {pages_with_annotations}/{len(doc.pages)} pages")
@@ -388,7 +390,8 @@ class TestEndToEndPreservation:
 
         # Try generating .rm file for pages with preserved annotations
         for page in doc.pages:
-            if hasattr(page, "annotation_blocks") and page.annotation_blocks:
+            ctx = page.annotation_context
+            if ctx and ctx.annotations:
                 # This should work without error
                 rm_bytes = generator.generate_rm_file(page)
 
@@ -401,5 +404,5 @@ class TestEndToEndPreservation:
 
                 print(
                     f"\nGenerated .rm file: {len(rm_bytes)} bytes, "
-                    f"{len(page.annotation_blocks)} annotations preserved"
+                    f"{len(ctx.annotations)} annotations preserved"
                 )
