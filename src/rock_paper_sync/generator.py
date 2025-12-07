@@ -1509,15 +1509,19 @@ class RemarkableGenerator:
 
                 if should_split:
                     # Split paragraph using layout engine
-                    chunks = self.layout_engine.split_for_pages(block.text, LINES_PER_PAGE)
+                    # First chunk should fit remaining space on current page
+                    remaining_lines = LINES_PER_PAGE - current_lines
+                    chunks = self.layout_engine.split_for_pages(
+                        block.text, LINES_PER_PAGE, first_chunk_lines=remaining_lines
+                    )
 
                     for i, chunk_text in enumerate(chunks):
                         chunk_lines = len(
                             self.layout_engine.calculate_line_breaks(chunk_text, TEXT_WIDTH)
                         )
 
-                        # Start new page if needed (except for first chunk which may fit)
-                        if i > 0 or current_lines + chunk_lines > LINES_PER_PAGE:
+                        # Start new page after first chunk (first chunk fits by design)
+                        if i > 0:
                             if current_page:
                                 pages.append(current_page)
                             current_page = []

@@ -754,6 +754,32 @@ class TestParagraphSplitting:
         for word in original_words:
             assert word in combined, f"Word '{word}' missing after split"
 
+    def test_paragraph_fills_remaining_page_space(
+        self, splitting_generator: RemarkableGenerator
+    ) -> None:
+        """When splitting, paragraph should fill remaining space on current page."""
+
+        # Create a header (1 line) followed by a very long paragraph
+        words = "The quick brown fox jumps over the lazy dog. "
+        long_text = words * 100  # Very long paragraph
+
+        blocks = [
+            ContentBlock(type=BlockType.HEADER, level=1, text="Title", formatting=[]),
+            ContentBlock(type=BlockType.PARAGRAPH, level=0, text=long_text, formatting=[]),
+        ]
+
+        pages = splitting_generator.paginate_content(blocks)
+
+        # Page 1 should have: header + first chunk of paragraph
+        assert len(pages[0]) == 2, "Page 1 should have header and paragraph chunk"
+        assert pages[0][0].type == BlockType.HEADER
+        assert pages[0][1].type == BlockType.PARAGRAPH
+
+        # First paragraph chunk should fill remaining space (~27 lines after header)
+        # Not start on a new page
+        first_chunk = pages[0][1].text
+        assert len(first_chunk) > 100, "First chunk should have substantial content"
+
     def test_split_at_word_boundary(self, splitting_generator: RemarkableGenerator) -> None:
         """Paragraphs should split at word boundaries, not mid-word."""
         words = "abcdefghij klmnopqrst uvwxyzabcd efghijklmn "

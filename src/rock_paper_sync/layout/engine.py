@@ -144,15 +144,19 @@ class WordWrapLayoutEngine:
 
         return line_breaks
 
-    def split_for_pages(self, text: str, lines_per_page: int) -> list[str]:
+    def split_for_pages(
+        self, text: str, lines_per_page: int, first_chunk_lines: int | None = None
+    ) -> list[str]:
         """Split text into page-sized chunks.
 
         Uses word-wrap line breaks to find natural split points at page
-        boundaries. Each chunk will fit within `lines_per_page` lines.
+        boundaries. Each chunk will fit within the specified line limits.
 
         Args:
             text: Text content to split
-            lines_per_page: Maximum lines per page
+            lines_per_page: Maximum lines per page (used for all chunks after first)
+            first_chunk_lines: Maximum lines for first chunk (to fill remaining
+                               space on current page). If None, uses lines_per_page.
 
         Returns:
             List of text chunks, each fitting on one page
@@ -163,19 +167,27 @@ class WordWrapLayoutEngine:
         line_breaks = self.calculate_line_breaks(text, self.text_width)
         num_lines = len(line_breaks)
 
-        if num_lines <= lines_per_page:
-            # Fits on one page
+        # First chunk size (remaining space on current page, or full page)
+        first_size = first_chunk_lines if first_chunk_lines is not None else lines_per_page
+
+        if num_lines <= first_size:
+            # Fits in first chunk
             return [text]
 
         chunks = []
         line_idx = 0
+        is_first = True
 
         while line_idx < num_lines:
             # Start of this chunk
             chunk_start = line_breaks[line_idx]
 
-            # End of this chunk (after lines_per_page lines, or end of text)
-            end_line_idx = min(line_idx + lines_per_page, num_lines)
+            # Determine chunk size
+            chunk_size = first_size if is_first else lines_per_page
+            is_first = False
+
+            # End of this chunk
+            end_line_idx = min(line_idx + chunk_size, num_lines)
 
             if end_line_idx < num_lines:
                 chunk_end = line_breaks[end_line_idx]
