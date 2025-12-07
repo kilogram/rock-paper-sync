@@ -1,7 +1,7 @@
 """Test paragraph pagination across page boundaries.
 
 Validates that long paragraphs are correctly paginated with and without
-paragraph splitting enabled. Stores generated .rm files as golden testdata.
+paragraph splitting enabled. Uses the record/replay harness for golden testdata.
 
 Recording (generate, verify on device, save as golden):
     uv run pytest tests/record_replay/test_paragraph_pagination.py --online -s
@@ -57,53 +57,6 @@ def compare_rm_content(generated: bytes, golden: bytes) -> tuple[bool, str]:
     return False, "Unknown difference"
 
 
-class PaginationGoldens:
-    """Manages golden .rm files for pagination tests."""
-
-    def __init__(self, testdata_dir: Path):
-        self.testdata_dir = testdata_dir
-
-    def rm_files_dir(self, config_name: str) -> Path:
-        return self.testdata_dir / config_name / "rm_files"
-
-    def has_golden(self, config_name: str) -> bool:
-        rm_dir = self.rm_files_dir(config_name)
-        return rm_dir.exists() and any(rm_dir.glob("*.rm"))
-
-    def save(self, config_name: str, rm_files: dict[int, bytes]) -> None:
-        """Save .rm files as golden."""
-        rm_dir = self.rm_files_dir(config_name)
-        rm_dir.mkdir(parents=True, exist_ok=True)
-        for page_idx, rm_data in rm_files.items():
-            (rm_dir / f"page_{page_idx}.rm").write_bytes(rm_data)
-
-    def load(self, config_name: str) -> dict[str, bytes]:
-        """Load golden .rm files."""
-        rm_dir = self.rm_files_dir(config_name)
-        return {f.stem: f.read_bytes() for f in sorted(rm_dir.glob("*.rm"))}
-
-    def compare(self, config_name: str, generated: dict[int, bytes]) -> tuple[bool, list[str]]:
-        """Compare generated .rm files against golden."""
-        golden = self.load(config_name)
-        errors = []
-
-        if len(generated) != len(golden):
-            errors.append(f"Page count: {len(generated)} generated vs {len(golden)} golden")
-            return False, errors
-
-        for page_idx, rm_data in generated.items():
-            golden_key = f"page_{page_idx}"
-            if golden_key not in golden:
-                errors.append(f"Missing golden for page {page_idx}")
-                continue
-
-            matches, msg = compare_rm_content(rm_data, golden[golden_key])
-            if not matches:
-                errors.append(f"Page {page_idx}: {msg}")
-
-        return len(errors) == 0, errors
-
-
 # Test document content - deterministic, long enough to span multiple pages
 LONG_PARAGRAPH = "The quick brown fox jumps over the lazy dog. " * 100
 
@@ -142,22 +95,18 @@ def generate_rm_files(config: LayoutConfig, md_path: Path) -> dict[int, bytes]:
 
 @pytest.mark.device
 @pytest.mark.parametrize("config_name", list(CONFIGS.keys()))
-def test_paragraph_pagination(config_name, device, workspace, fixtures_dir):
+def test_paragraph_pagination(config_name, device, workspace, testdata_store, device_mode):
     """Test paragraph pagination with golden .rm files.
 
-    Record mode (--online -s):
-    1. Generate document with config
-    2. Upload to device for visual verification
-    3. User approves pagination looks correct
-    4. Save .rm files as golden
-
-    Replay mode:
-    1. Generate document
-    2. Compare against golden .rm files
+    Uses the record/replay harness:
+    - Online mode (--online -s): Records new golden testdata (clears existing)
+    - Offline mode: Compares generated .rm files against golden testdata
     """
-    testdata_dir = fixtures_dir.parent / "testdata" / "paragraph_pagination"
-    goldens = PaginationGoldens(testdata_dir)
+    import shutil
+
+    test_id = f"paragraph_pagination/{config_name}"
     config = CONFIGS[config_name]
+    rm_dir = testdata_store.base_dir / test_id / "rm_files"
 
     from rock_paper_sync.layout.constants import LINES_PER_PAGE
 
@@ -181,26 +130,9 @@ def test_paragraph_pagination(config_name, device, workspace, fixtures_dir):
         text = extract_text_from_rm(rm_data)
         print(f"   Page {page_idx}: {len(text)} chars")
 
-    if goldens.has_golden(config_name):
-        # Replay: compare against golden
-        print("\n🔍 Comparing against golden...")
-        matches, errors = goldens.compare(config_name, generated)
-
-        if matches:
-            print("✅ Matches golden")
-        else:
-            for err in errors:
-                print(f"❌ {err}")
-            pytest.fail(f"Pagination mismatch for {config_name}:\n" + "\n".join(errors))
-    else:
-        # Record: upload to device, verify, save golden
-        try:
-            device.start_test(
-                f"pagination_{config_name}",
-                description=f"Verify pagination: {config_name}",
-            )
-        except FileNotFoundError:
-            pytest.skip(f"No testdata for {config_name}. Run with --online -s to record.")
+    if device_mode == "online":
+        # Record mode: upload to device, verify, save golden (clears existing)
+        device.start_test(test_id, description=f"Verify pagination: {config_name}")
 
         print("\n📤 Uploading to device...")
         device.upload_document(workspace.test_doc)
@@ -218,8 +150,40 @@ def test_paragraph_pagination(config_name, device, workspace, fixtures_dir):
             f"Does the pagination look correct?"
         )
 
-        # Save as golden
-        goldens.save(config_name, generated)
-        print(f"\n✅ Saved golden: {goldens.rm_files_dir(config_name)}")
+        # Save as golden (clear old files first)
+        if rm_dir.exists():
+            shutil.rmtree(rm_dir)
+        rm_dir.mkdir(parents=True, exist_ok=True)
+        for page_idx, rm_data in generated.items():
+            (rm_dir / f"page_{page_idx}.rm").write_bytes(rm_data)
+        print(f"\n✅ Saved golden: {rm_dir}")
 
-        device.end_test(f"pagination_{config_name}")
+        device.end_test(test_id)
+    else:
+        # Replay mode: compare against golden
+        if not rm_dir.exists() or not any(rm_dir.glob("*.rm")):
+            pytest.skip(f"No testdata for {config_name}. Run with --online -s to record.")
+
+        print("\n🔍 Comparing against golden...")
+        golden = {f.stem: f.read_bytes() for f in sorted(rm_dir.glob("*.rm"))}
+
+        errors = []
+        if len(generated) != len(golden):
+            errors.append(f"Page count: {len(generated)} generated vs {len(golden)} golden")
+        else:
+            for page_idx, rm_data in generated.items():
+                golden_key = f"page_{page_idx}"
+                if golden_key not in golden:
+                    errors.append(f"Missing golden for page {page_idx}")
+                    continue
+
+                matches, msg = compare_rm_content(rm_data, golden[golden_key])
+                if not matches:
+                    errors.append(f"Page {page_idx}: {msg}")
+
+        if errors:
+            for err in errors:
+                print(f"❌ {err}")
+            pytest.fail(f"Pagination mismatch for {config_name}:\n" + "\n".join(errors))
+        else:
+            print("✅ Matches golden")

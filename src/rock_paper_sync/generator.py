@@ -1509,11 +1509,21 @@ class RemarkableGenerator:
 
                 if should_split:
                     # Split paragraph using layout engine
-                    # First chunk should fit remaining space on current page
-                    remaining_lines = LINES_PER_PAGE - current_lines
-                    chunks = self.layout_engine.split_for_pages(
-                        block.text, LINES_PER_PAGE, first_chunk_lines=remaining_lines
-                    )
+                    # Only fill remaining page space when splitting is explicitly allowed
+                    # For forced oversized splits, start on a new page
+                    if self.layout.allow_paragraph_splitting:
+                        remaining_lines = LINES_PER_PAGE - current_lines
+                        chunks = self.layout_engine.split_for_pages(
+                            block.text, LINES_PER_PAGE, first_chunk_lines=remaining_lines
+                        )
+                    else:
+                        # Forced split (oversized) - start on new page with full-page chunks
+                        if current_page:
+                            pages.append(current_page)
+                        current_page = []
+                        current_lines = 0
+                        y_position = float(TEXT_POS_Y)
+                        chunks = self.layout_engine.split_for_pages(block.text, LINES_PER_PAGE)
 
                     for i, chunk_text in enumerate(chunks):
                         chunk_lines = len(
