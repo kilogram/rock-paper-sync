@@ -229,16 +229,16 @@ class TestIntegrationWithRealData:
 
     @pytest.fixture
     def testdata_dir(self):
-        """Get testdata directory path."""
-        return Path(__file__).parent / "testdata" / "record_replay" / "ocr_handwriting"
+        """Get testdata directory path - use record_replay testdata."""
+        return Path(__file__).parent.parent / "record_replay" / "testdata" / "ocr_handwriting"
 
     @pytest.fixture
     def has_testdata(self, testdata_dir):
-        """Check if testdata exists."""
-        rm_files_dir = testdata_dir / "rm_files"
-        return testdata_dir.exists() and (
-            list(testdata_dir.glob("*.rm")) or list(rm_files_dir.glob("*.rm"))
-        )
+        """Check if testdata exists (supports phases structure)."""
+        if not testdata_dir.exists():
+            return False
+        # Check for any .rm files anywhere in the testdata
+        return bool(list(testdata_dir.rglob("*.rm")))
 
     def test_cluster_mapping_with_real_annotations(self, testdata_dir, has_testdata):
         """Test paragraph mapping with real .rm files containing handwriting."""
@@ -257,21 +257,36 @@ class TestIntegrationWithRealData:
 
         manifest = json.loads(manifest_path.read_text())
 
-        # Load markdown
-        markdown_path = testdata_dir / "markdown" / manifest["source_document"]
+        # Load markdown (source.md at root for phases structure)
+        source_doc = manifest.get("source_document", "source.md")
+        markdown_path = testdata_dir / source_doc
+        if not markdown_path.exists():
+            markdown_path = testdata_dir / "markdown" / source_doc
         if not markdown_path.exists():
             pytest.skip("Source markdown not found")
 
         markdown_content = markdown_path.read_text()
         markdown_blocks = parse_content(markdown_content)
 
-        # Test each .rm file
-        for rm_filename in manifest["rm_files"]:
-            # .rm files can be in root or in rm_files/ subdirectory
-            rm_file = testdata_dir / rm_filename
-            if not rm_file.exists():
-                rm_file = testdata_dir / "rm_files" / rm_filename
+        # Find .rm files from phases structure
+        rm_files = []
+        phases = manifest.get("phases", [])
+        for phase in phases:
+            if phase.get("has_rm_files"):
+                phase_name = f"phase_{phase['phase_number']}_{phase['phase_name']}"
+                rm_dir = testdata_dir / "phases" / phase_name / "rm_files"
+                if rm_dir.exists():
+                    rm_files.extend(rm_dir.glob("*.rm"))
+                break
 
+        if not rm_files:
+            rm_files = list(testdata_dir.rglob("*.rm"))
+
+        if not rm_files:
+            pytest.skip("No .rm files found")
+
+        # Test each .rm file
+        for rm_file in rm_files:
             # Read annotations and text blocks
             annotations = read_annotations(rm_file)
             rm_text_blocks, text_origin_y = extract_text_blocks_from_rm(rm_file)

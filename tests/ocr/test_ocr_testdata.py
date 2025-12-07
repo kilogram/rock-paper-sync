@@ -20,8 +20,8 @@ from rock_paper_sync.ocr.paragraph_mapper import SpatialOverlapMapper
 from rock_paper_sync.ocr.protocol import BoundingBox
 from rock_paper_sync.parser import parse_content
 
-# Test data paths
-TESTDATA_DIR = Path(__file__).parent / "testdata" / "record_replay" / "ocr_handwriting"
+# Test data paths - use record_replay testdata
+TESTDATA_DIR = Path(__file__).parent.parent / "record_replay" / "testdata" / "ocr_handwriting"
 MANIFEST_PATH = TESTDATA_DIR / "manifest.json"
 
 
@@ -35,13 +35,23 @@ def testdata_manifest():
 
 @pytest.fixture
 def rm_files(testdata_manifest):
-    """Get list of .rm files from testdata."""
+    """Get list of .rm files from testdata (phases-based structure)."""
     files = []
-    rm_files_dir = TESTDATA_DIR / "rm_files"
-    for filename in testdata_manifest["rm_files"]:
-        path = rm_files_dir / filename
-        if path.exists():
-            files.append(path)
+
+    # Find the phase with .rm files (typically phase_1 or later)
+    phases = testdata_manifest.get("phases", [])
+    for phase in phases:
+        if phase.get("has_rm_files"):
+            phase_name = f"phase_{phase['phase_number']}_{phase['phase_name']}"
+            rm_files_dir = TESTDATA_DIR / "phases" / phase_name / "rm_files"
+            if rm_files_dir.exists():
+                files.extend(rm_files_dir.glob("*.rm"))
+            break  # Use first phase with rm files
+
+    # Fallback: search for any .rm files
+    if not files:
+        files = list(TESTDATA_DIR.rglob("*.rm"))
+
     if not files:
         pytest.skip("No .rm files found in testdata")
     return files
@@ -50,7 +60,11 @@ def rm_files(testdata_manifest):
 @pytest.fixture
 def markdown_content(testdata_manifest):
     """Load source markdown content."""
-    md_path = TESTDATA_DIR / "markdown" / testdata_manifest["source_document"]
+    source_doc = testdata_manifest.get("source_document", "source.md")
+    # Try root first (phases structure), then markdown/ subdirectory
+    md_path = TESTDATA_DIR / source_doc
+    if not md_path.exists():
+        md_path = TESTDATA_DIR / "markdown" / source_doc
     if not md_path.exists():
         pytest.skip("Source markdown not found")
     return md_path.read_text()

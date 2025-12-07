@@ -1284,14 +1284,18 @@ class TestOCRVaultIntegration:
         from rock_paper_sync.ocr.markers import AnnotationInfo
         from rock_paper_sync.ocr.protocol import OCRResult
 
-        # Load real testdata
-        testdata_dir = Path(__file__).parent / "testdata" / "record_replay" / "ocr_handwriting"
+        # Load real testdata - use record_replay testdata
+        testdata_dir = (
+            Path(__file__).parent.parent / "record_replay" / "testdata" / "ocr_handwriting"
+        )
         if not testdata_dir.exists():
             pytest.skip("OCR testdata not available")
 
-        rm_file_1 = testdata_dir / "rm_files" / "6152275d-bbe8-491c-975f-acdec21f60ec.rm"
-        if not rm_file_1.exists():
+        # Find .rm files in phases structure
+        rm_files = list(testdata_dir.rglob("*.rm"))
+        if not rm_files:
             pytest.skip("Real .rm file testdata not available")
+        rm_file_1 = rm_files[0]
 
         # Create vault file
         vault_dir = sample_config_with_ocr.sync.vaults[0].path
