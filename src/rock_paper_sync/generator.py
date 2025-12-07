@@ -243,14 +243,18 @@ class PageAnnotationContext:
 
     Attributes:
         annotations: All annotation blocks routed to this page
+        tree_nodes: List of (TreeNodeBlock, stroke_y) tuples for cross-page strokes
         source_rm_path: Original .rm file path (for roundtrip preservation)
         exclude_ids: Annotation IDs that moved OUT of this page (exclude from roundtrip)
+        exclude_tree_node_ids: TreeNodeBlock node_ids that moved OUT (exclude from roundtrip)
         has_same_page: True if any annotations stayed on their original page
     """
 
     annotations: list = field(default_factory=list)
+    tree_nodes: list = field(default_factory=list)  # List of (TreeNodeBlock, stroke_y) tuples
     source_rm_path: Path | None = None
     exclude_ids: set = field(default_factory=set)
+    exclude_tree_node_ids: set = field(default_factory=set)
     has_same_page: bool = False
 
 
@@ -569,7 +573,7 @@ class RemarkableGenerator:
         # PHASE 2: Collect ALL annotations from ALL old pages
         # =================================================================
 
-        # Structure: list of (annotation_block, source_page_idx, source_page_data)
+        # Structure: list of (annotation_block, source_page_idx, source_page_data, tree_nodes_by_id)
         all_annotations: list[tuple] = []
 
         for page_idx, page_data in enumerate(old_page_data):
@@ -581,6 +585,15 @@ class RemarkableGenerator:
                 with open(rm_file_path, "rb") as f:
                     existing_blocks = list(rmscene.read_blocks(f))
 
+                # Build TreeNodeBlock lookup by node_id for stroke anchor injection
+                tree_nodes_by_id = {}
+                for block in existing_blocks:
+                    if type(block).__name__ == "TreeNodeBlock":
+                        if hasattr(block, "group") and block.group:
+                            node_id = block.group.node_id
+                            if node_id:
+                                tree_nodes_by_id[node_id] = block
+
                 annotation_blocks = [
                     block
                     for block in existing_blocks
@@ -588,10 +601,13 @@ class RemarkableGenerator:
                 ]
 
                 for anno_block in annotation_blocks:
-                    all_annotations.append((anno_block, page_idx, page_data, existing_blocks))
+                    all_annotations.append(
+                        (anno_block, page_idx, page_data, existing_blocks, tree_nodes_by_id)
+                    )
 
                 logger.debug(
-                    f"Page {page_idx}: Collected {len(annotation_blocks)} annotation blocks"
+                    f"Page {page_idx}: Collected {len(annotation_blocks)} annotation blocks, "
+                    f"{len(tree_nodes_by_id)} TreeNodeBlocks"
                 )
 
             except Exception as e:
@@ -611,7 +627,18 @@ class RemarkableGenerator:
         contexts = [PageAnnotationContext() for _ in pages]
         new_text_origin_y = self.geometry.text_pos_y
 
-        for anno_block, source_page_idx, page_data, existing_blocks in all_annotations:
+        # Track TreeNodeBlocks: key = (source_page_idx, node_id), value = sets of strokes
+        # Used to determine if a TreeNodeBlock can be excluded (only if ALL strokes moved)
+        tree_node_cross_page_strokes: dict[tuple[int, Any], set] = {}  # strokes that moved
+        tree_node_same_page_strokes: dict[tuple[int, Any], set] = {}  # strokes that stayed
+
+        for (
+            anno_block,
+            source_page_idx,
+            page_data,
+            existing_blocks,
+            tree_nodes_by_id,
+        ) in all_annotations:
             try:
                 old_text_blocks = page_data["text_blocks"]
                 old_text_origin_y = page_data["text_origin_y"]
@@ -695,6 +722,63 @@ class RemarkableGenerator:
                     # Track that this annotation moved OUT of source page
                     if hasattr(anno_block, "item") and hasattr(anno_block.item, "item_id"):
                         contexts[source_page_idx].exclude_ids.add(anno_block.item.item_id)
+
+                    # For strokes (SceneLineItemBlock), also route the parent TreeNodeBlock
+                    # The TreeNodeBlock contains the anchor_id needed for stroke positioning
+                    if "Line" in type(anno_block).__name__:
+                        parent_id = getattr(anno_block, "parent_id", None)
+                        if parent_id and parent_id in tree_nodes_by_id:
+                            tree_node = tree_nodes_by_id[parent_id]
+                            node_id = tree_node.group.node_id if tree_node.group else None
+                            # Check if this TreeNodeBlock is already added
+                            existing_node_ids = [
+                                tn.group.node_id
+                                for tn, _ in ctx.tree_nodes
+                                if hasattr(tn, "group") and tn.group
+                            ]
+                            if parent_id not in existing_node_ids:
+                                # Calculate character offset for target text block
+                                # This offset points to where in the target page's RootTextBlock
+                                # the stroke should anchor to
+                                target_char_offset = 0
+                                target_page = pages[target_page_idx]
+                                if (
+                                    nearest_old_idx is not None
+                                    and nearest_old_idx in doc_position_map
+                                ):
+                                    # Find page-local index of target text block
+                                    target_doc_idx = doc_position_map[nearest_old_idx]
+                                    target_block = all_new_text_blocks[target_doc_idx]
+                                    # Calculate page-local index
+                                    page_start_idx = sum(
+                                        len(pages[i].text_blocks) for i in range(target_page_idx)
+                                    )
+                                    target_page_local_idx = target_doc_idx - page_start_idx
+                                    # Sum char lengths of blocks before this one
+                                    for i in range(target_page_local_idx):
+                                        if i < len(target_page.text_blocks):
+                                            target_char_offset += (
+                                                len(target_page.text_blocks[i].content) + 1
+                                            )  # +1 for newline
+                                else:
+                                    # No mapping - default to last text block on page
+                                    for tb in target_page.text_blocks[:-1]:
+                                        target_char_offset += len(tb.content) + 1
+
+                                # Store TreeNodeBlock with target char offset for reanchoring
+                                ctx.tree_nodes.append((tree_node, target_char_offset))
+                            # Track this stroke moved cross-page (defer exclusion decision)
+                            if node_id:
+                                key = (source_page_idx, node_id)
+                                if key not in tree_node_cross_page_strokes:
+                                    tree_node_cross_page_strokes[key] = set()
+                                stroke_id = id(anno_block)  # Use object id as unique identifier
+                                tree_node_cross_page_strokes[key].add(stroke_id)
+                            logger.debug(
+                                f"TreeNodeBlock {parent_id} moving with stroke to page {target_page_idx} "
+                                f"(target_char_offset={target_char_offset})"
+                            )
+
                     logger.debug(
                         f"Annotation moving from page {source_page_idx} to page {target_page_idx}"
                     )
@@ -703,11 +787,41 @@ class RemarkableGenerator:
                     ctx.source_rm_path = rm_file_path
                     ctx.has_same_page = True
 
+                    # Track same-page strokes for TreeNodeBlock exclusion decision
+                    if "Line" in type(anno_block).__name__:
+                        parent_id = getattr(anno_block, "parent_id", None)
+                        if parent_id and parent_id in tree_nodes_by_id:
+                            tree_node = tree_nodes_by_id[parent_id]
+                            node_id = tree_node.group.node_id if tree_node.group else None
+                            if node_id:
+                                key = (source_page_idx, node_id)
+                                if key not in tree_node_same_page_strokes:
+                                    tree_node_same_page_strokes[key] = set()
+                                stroke_id = id(anno_block)
+                                tree_node_same_page_strokes[key].add(stroke_id)
+
             except Exception as e:
                 logger.warning(f"Failed to route annotation: {e}")
                 # Fallback: keep on source page
                 target_page_idx = min(source_page_idx, len(pages) - 1)
                 contexts[target_page_idx].annotations.append(anno_block)
+
+        # Compute TreeNodeBlock exclusions: only exclude if ALL strokes using it moved out
+        for key, cross_strokes in tree_node_cross_page_strokes.items():
+            page_idx, node_id = key
+            same_strokes = tree_node_same_page_strokes.get(key, set())
+            if not same_strokes:
+                # No strokes stayed on this page - safe to exclude the TreeNodeBlock
+                contexts[page_idx].exclude_tree_node_ids.add(node_id)
+                logger.debug(
+                    f"Page {page_idx}: TreeNodeBlock {node_id} can be excluded "
+                    f"({len(cross_strokes)} strokes moved, 0 stayed)"
+                )
+            else:
+                logger.debug(
+                    f"Page {page_idx}: TreeNodeBlock {node_id} KEPT "
+                    f"({len(cross_strokes)} strokes moved, {len(same_strokes)} stayed)"
+                )
 
         # =================================================================
         # PHASE 4: Assign contexts to pages
@@ -1175,6 +1289,58 @@ class RemarkableGenerator:
 
         return new_block
 
+    def _reanchor_tree_node_for_cross_page(
+        self,
+        tree_node,
+        target_char_offset: int,
+        target_page: "RemarkablePage",
+    ):
+        """Recalculate TreeNodeBlock anchor_id for cross-page stroke movement.
+
+        When a stroke moves to a different page, its TreeNodeBlock anchor_id
+        needs to point to text on the NEW page, not the old page. This method
+        sets the anchor to the pre-calculated character offset.
+
+        The anchor_id.value is CrdtId(part1, part2) where:
+        - part1: Author/origin ID (typically 1)
+        - part2: Character offset into the RootTextBlock text (NOT combined with CRDT base)
+
+        Args:
+            tree_node: Original TreeNodeBlock
+            target_char_offset: Pre-calculated character offset for target page
+            target_page: Target page to anchor to
+
+        Returns:
+            New TreeNodeBlock with recalculated anchor_id
+        """
+        if not hasattr(tree_node, "group") or not tree_node.group:
+            return tree_node
+
+        g = tree_node.group
+        if not hasattr(g, "anchor_id") or not g.anchor_id or not g.anchor_id.value:
+            return tree_node
+
+        # Create new anchor_id with the pre-calculated offset
+        # The anchor's part2 is simply the character offset into the RootTextBlock text,
+        # NOT combined with crdt_base_id (that's for CRDT sequence items, not text anchors)
+        old_anchor = g.anchor_id
+        new_anchor_value = CrdtId(old_anchor.value.part1, target_char_offset)
+        new_anchor_lww = LwwValue(timestamp=old_anchor.timestamp, value=new_anchor_value)
+
+        # Create new Group with updated anchor_id
+        new_group = replace(g, anchor_id=new_anchor_lww)
+
+        # Create new TreeNodeBlock with updated group
+        new_block = replace(tree_node, group=new_group)
+
+        old_offset = old_anchor.value.part2
+        logger.debug(
+            f"Reanchored cross-page TreeNodeBlock {g.node_id}: "
+            f"anchor_id {old_offset} -> {target_char_offset}"
+        )
+
+        return new_block
+
     def paginate_content(self, blocks: list[ContentBlock]) -> list[list[ContentBlock]]:
         """Split content blocks into pages based on line count.
 
@@ -1614,6 +1780,21 @@ class RemarkableGenerator:
 
             # Update TreeNodeBlock anchor_ids to track text content
             elif block_type == "TreeNodeBlock":
+                # Skip TreeNodeBlocks that moved to other pages
+                node_id = block.group.node_id if hasattr(block, "group") and block.group else None
+                if node_id and node_id in ctx.exclude_tree_node_ids:
+                    logger.debug(f"Excluding TreeNodeBlock {node_id} (moved to another page)")
+                    continue
+
+                # Also skip if this TreeNodeBlock will be injected as cross-page
+                # (to avoid duplicates with different anchor values)
+                cross_page_node_ids = {tn.group.node_id for tn, _ in ctx.tree_nodes if tn.group}
+                if node_id and node_id in cross_page_node_ids:
+                    logger.debug(
+                        f"Skipping TreeNodeBlock {node_id} (will be injected as cross-page)"
+                    )
+                    continue
+
                 if anchor_offset_delta != 0:
                     modified_block = self._update_tree_node_anchor(block, anchor_offset_delta)
                     modified_blocks.append(modified_block)
@@ -1623,6 +1804,16 @@ class RemarkableGenerator:
             # Keep all other blocks (scene tree, groups, etc.) unchanged
             else:
                 modified_blocks.append(block)
+
+        # Inject cross-page TreeNodeBlocks FIRST (strokes reference them via parent_id)
+        # Reanchor them to point to correct text positions on this page
+        if ctx.tree_nodes:
+            for tree_node, target_char_offset in ctx.tree_nodes:
+                reanchored_node = self._reanchor_tree_node_for_cross_page(
+                    tree_node, target_char_offset, page
+                )
+                modified_blocks.append(reanchored_node)
+            logger.info(f"Injected {len(ctx.tree_nodes)} cross-page TreeNodeBlocks (reanchored)")
 
         # Inject cross-page annotations that couldn't be matched by item_id
         if cross_page_to_inject:

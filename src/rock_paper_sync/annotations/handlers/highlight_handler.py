@@ -572,6 +572,30 @@ class HighlightHandler:
         )
         logger.debug(f"  Delta: ({x_delta:.1f}, {y_delta:.1f})")
 
+        # REFLOW DETECTION: Check if content significantly changed
+        # When text content changes significantly (large char_offset delta), the original
+        # "device offset from model" is no longer valid because it was specific to the
+        # old page layout. In this case, place highlight at model position directly
+        # instead of preserving the old device offset.
+        offset_change = abs(new_offset - old_offset)
+        SIGNIFICANT_OFFSET_CHANGE = 100  # characters
+
+        if offset_change > SIGNIFICANT_OFFSET_CHANGE:
+            # Significant content reflow - use model position directly
+            # Calculate old device offset (how much device drew away from model)
+            old_device_x_offset = old_x - old_x_model
+            old_device_y_offset = old_y - old_y_model
+
+            logger.debug(
+                f"  Significant reflow detected (offset_change={offset_change}), "
+                f"old device offset=({old_device_x_offset:.1f}, {old_device_y_offset:.1f})"
+            )
+
+            # Don't preserve the old device offset - place at new model position
+            # Keep only minor X adjustments (device-specific rendering quirks)
+            x_delta = new_x_model - old_x + min(old_device_x_offset, 10.0)
+            y_delta = new_y_model - old_y  # Place at model Y position
+
         # REFLOW DETECTION: Check if highlight now spans different number of lines
         old_rect_count = len(glyph_value.rectangles)
         new_end_offset = new_offset + len(highlight_text)
