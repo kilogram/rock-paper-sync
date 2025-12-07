@@ -113,6 +113,7 @@ class ContentBlock:
         formatting: List of inline formatting ranges
         children: Nested content blocks (for lists or quotes)
         page_y_start: Y-coordinate where this block starts on the page (optional, set during pagination)
+        page_index: Which page this block is on (optional, set during pagination)
     """
 
     type: BlockType
@@ -121,6 +122,7 @@ class ContentBlock:
     formatting: list[TextFormat] = field(default_factory=list)
     children: list["ContentBlock"] = field(default_factory=list)
     page_y_start: float | None = None  # Set during pagination for annotation mapping
+    page_index: int | None = None  # Set during pagination for cross-page annotation tracking
 
 
 @dataclass

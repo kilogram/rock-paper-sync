@@ -196,6 +196,7 @@ class TextBlock:
         y_end: Ending Y coordinate
         block_type: Type of block (heading, paragraph, list_item, etc.)
         markdown_line: Optional line number in original markdown
+        page_index: Which page this block is on (for cross-page annotation tracking)
     """
 
     content: str
@@ -203,6 +204,7 @@ class TextBlock:
     y_end: float
     block_type: str
     markdown_line: int | None = None
+    page_index: int = 0  # For cross-page annotation tracking
 
     def contains_y(self, y: float) -> bool:
         """Check if a Y coordinate falls within this text block."""

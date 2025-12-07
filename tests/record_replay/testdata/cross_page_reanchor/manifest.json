@@ -1,0 +1,87 @@
+{
+  "test_id": "cross_page_reanchor",
+  "created_at": "2025-12-07T00:46:51.014433",
+  "doc_uuid": "e259163c-02c7-4106-af13-8ee7c4d93583",
+  "page_uuids": [
+    "335e18b5-9c13-4e09-8059-6725a16cfe53",
+    "3787b786-0141-4be2-a166-4151c6664383",
+    "76a573ea-97f7-4234-af89-828a40995f7b"
+  ],
+  "description": "",
+  "annotations_count": 3,
+  "source_document": "source.md",
+  "phases": [
+    {
+      "phase_number": 0,
+      "phase_name": "initial",
+      "action": "setup",
+      "vault_files": [
+        "document.md"
+      ],
+      "device_state": {
+        "doc_uuid": null,
+        "page_uuids": [],
+        "rm_files_count": 0,
+        "has_annotations": false
+      },
+      "has_rm_files": false
+    },
+    {
+      "phase_number": 1,
+      "phase_name": "post_upload",
+      "action": "upload",
+      "vault_files": [
+        "document.md"
+      ],
+      "device_state": {
+        "doc_uuid": "e259163c-02c7-4106-af13-8ee7c4d93583",
+        "page_uuids": [
+          "335e18b5-9c13-4e09-8059-6725a16cfe53",
+          "3787b786-0141-4be2-a166-4151c6664383",
+          "76a573ea-97f7-4234-af89-828a40995f7b"
+        ],
+        "rm_files_count": 3,
+        "has_annotations": true
+      },
+      "has_rm_files": true
+    },
+    {
+      "phase_number": 2,
+      "phase_name": "phase_2",
+      "action": "annotation_download",
+      "vault_files": [
+        "document.md"
+      ],
+      "device_state": {
+        "doc_uuid": "e259163c-02c7-4106-af13-8ee7c4d93583",
+        "page_uuids": [
+          "335e18b5-9c13-4e09-8059-6725a16cfe53",
+          "3787b786-0141-4be2-a166-4151c6664383",
+          "76a573ea-97f7-4234-af89-828a40995f7b"
+        ],
+        "rm_files_count": 3,
+        "has_annotations": true
+      },
+      "has_rm_files": true
+    },
+    {
+      "phase_number": 3,
+      "phase_name": "post_insert",
+      "action": "sync_modified",
+      "vault_files": [
+        "document.md"
+      ],
+      "device_state": {
+        "doc_uuid": "e259163c-02c7-4106-af13-8ee7c4d93583",
+        "page_uuids": [
+          "335e18b5-9c13-4e09-8059-6725a16cfe53",
+          "3787b786-0141-4be2-a166-4151c6664383",
+          "76a573ea-97f7-4234-af89-828a40995f7b"
+        ],
+        "rm_files_count": 3,
+        "has_annotations": true
+      },
+      "has_rm_files": true
+    }
+  ]
+}

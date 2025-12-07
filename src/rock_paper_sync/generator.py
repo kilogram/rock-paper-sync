@@ -456,14 +456,14 @@ class RemarkableGenerator:
     def _preserve_annotations(
         self, pages: list[RemarkablePage], existing_rm_files: list[Path | None]
     ) -> None:
-        """Preserve annotations from existing .rm files with position adjustment.
+        """Preserve annotations from existing .rm files with cross-page position adjustment.
 
-        This method:
-        1. Reads annotation blocks from existing .rm files (as rmscene objects)
-        2. Extracts old text blocks to understand original layout
-        3. Matches old text blocks to new text blocks based on content
-        4. Adjusts annotation Y-coordinates in place based on text repositioning
-        5. Stores modified annotation blocks for writing
+        This method supports annotations following their content across page boundaries:
+        1. Collects ALL annotations from ALL old pages
+        2. Builds document-level text block mappings with page_index tracking
+        3. Matches annotations to paragraphs using content-based mapping
+        4. Routes each annotation to its NEW page based on where its paragraph moved
+        5. Adjusts coordinates for the target page
 
         This avoids conversion bugs by modifying rmscene blocks directly.
 
@@ -473,168 +473,276 @@ class RemarkableGenerator:
         """
         from .annotations import calculate_position_mapping
 
-        # Extract FULL DOCUMENT text from all old .rm files for content anchoring
-        old_full_text_parts = []
-        for rm_file_path in existing_rm_files:
+        # =================================================================
+        # PHASE 1: Build document-level text block lists with page_index
+        # =================================================================
+
+        # Extract old text blocks from all pages, tracking page_index
+        all_old_text_blocks: list[TextBlock] = []
+        old_page_data: list[dict] = []  # Per-page metadata (rm_file_path, blocks, origin_y, etc.)
+
+        for page_idx, rm_file_path in enumerate(existing_rm_files):
             if rm_file_path and Path(rm_file_path).exists():
-                _, _, page_text = self._extract_text_blocks_from_rm(rm_file_path)
-                old_full_text_parts.append(page_text)
-        old_full_text = "\n\n".join(old_full_text_parts)  # Join pages with double newline
+                text_blocks, text_origin_y, page_text = self._extract_text_blocks_from_rm(
+                    rm_file_path
+                )
+                # Set page_index on each text block
+                for tb in text_blocks:
+                    tb.page_index = page_idx
+                all_old_text_blocks.extend(text_blocks)
+                old_page_data.append(
+                    {
+                        "rm_file_path": rm_file_path,
+                        "text_blocks": text_blocks,
+                        "text_origin_y": text_origin_y,
+                        "page_text": page_text,
+                    }
+                )
+            else:
+                old_page_data.append(None)
 
-        # Compute FULL DOCUMENT text from all new pages
-        new_full_text_parts = []
+        # Build combined new text blocks list (page_index already set during generation)
+        all_new_text_blocks: list[TextBlock] = []
         for page in pages:
-            page_text = "\n".join(block.content for block in page.text_blocks)
-            new_full_text_parts.append(page_text)
-        new_full_text = "\n\n".join(new_full_text_parts)  # Join pages with double newline
+            all_new_text_blocks.extend(page.text_blocks)
 
-        logger.debug(
-            f"Full document text: old={len(old_full_text)} chars, new={len(new_full_text)} chars"
+        # Build full document text for content anchoring
+        old_full_text = "\n\n".join(d["page_text"] for d in old_page_data if d is not None)
+        new_full_text = "\n\n".join(
+            "\n".join(block.content for block in page.text_blocks) for page in pages
         )
 
-        for i, (page, rm_file_path) in enumerate(zip(pages, existing_rm_files)):
-            if rm_file_path is None or not Path(rm_file_path).exists():
-                logger.debug(f"Page {i}: No existing .rm file to preserve annotations from")
+        logger.debug(
+            f"Document-level: {len(all_old_text_blocks)} old blocks, "
+            f"{len(all_new_text_blocks)} new blocks"
+        )
+
+        if not all_old_text_blocks or not all_new_text_blocks:
+            logger.warning("No text blocks to map, skipping annotation preservation")
+            return
+
+        # Compute document-level position mapping (old block idx -> new block idx)
+        doc_position_map = calculate_position_mapping(all_old_text_blocks, all_new_text_blocks)
+
+        # =================================================================
+        # PHASE 2: Collect ALL annotations from ALL old pages
+        # =================================================================
+
+        # Structure: list of (annotation_block, source_page_idx, source_page_data)
+        all_annotations: list[tuple] = []
+
+        for page_idx, page_data in enumerate(old_page_data):
+            if page_data is None:
                 continue
 
+            rm_file_path = page_data["rm_file_path"]
             try:
-                # Read all blocks from existing file using rmscene
                 with open(rm_file_path, "rb") as f:
                     existing_blocks = list(rmscene.read_blocks(f))
 
-                # Extract annotation blocks (Lines and Glyphs)
                 annotation_blocks = [
                     block
                     for block in existing_blocks
                     if "Line" in type(block).__name__ or "Glyph" in type(block).__name__
                 ]
 
-                if not annotation_blocks:
-                    logger.debug(f"Page {i}: No annotation blocks found in {rm_file_path}")
-                    continue
-
-                # Extract old text blocks for spatial positioning (per-page)
-                old_text_blocks, old_text_origin_y, _ = self._extract_text_blocks_from_rm(
-                    rm_file_path
-                )
-                new_text_blocks = page.text_blocks
-                new_text_origin_y = (
-                    self.geometry.text_pos_y
-                )  # New documents use self.geometry.text_pos_y constant
-
-                # Use FULL DOCUMENT text for content anchoring (not per-page)
-                old_text = old_full_text
-                new_text = new_full_text
-
-                if not old_text_blocks or not new_text_blocks:
-                    # No text to match - keep annotations at original positions
-                    logger.warning(
-                        f"Page {i}: Cannot calculate position mapping (old={len(old_text_blocks)}, new={len(new_text_blocks)})"
-                    )
-                    page.annotation_blocks = annotation_blocks
-                    continue
+                for anno_block in annotation_blocks:
+                    all_annotations.append((anno_block, page_idx, page_data, existing_blocks))
 
                 logger.debug(
-                    f"Page {i}: Text origins - old={old_text_origin_y:.1f}, new={new_text_origin_y:.1f}"
-                )
-
-                # Calculate mapping between old and new text positions
-                position_map = calculate_position_mapping(old_text_blocks, new_text_blocks)
-
-                # Get CRDT base ID for updating highlight anchors (firmware 3.6+)
-                crdt_base_id = get_crdt_base_id_from_rm(rm_file_path)
-
-                # Adjust annotation blocks based on text repositioning
-                # - Glyph blocks (highlights): content anchoring with delta-based X/Y
-                # - Line blocks (strokes): cluster by proximity, anchor to paragraph
-                adjusted_blocks = []
-
-                # Separate highlights from strokes
-                glyph_blocks = [b for b in annotation_blocks if "Glyph" in type(b).__name__]
-                stroke_blocks = [b for b in annotation_blocks if "Line" in type(b).__name__]
-
-                # Process highlights individually (content anchoring)
-                for block in glyph_blocks:
-                    try:
-                        adjusted_block = self._adjust_annotation_block_position(
-                            block,
-                            old_text,
-                            new_text,
-                            old_text_blocks,
-                            new_text_blocks,
-                            position_map,
-                            old_text_origin_y,
-                            new_text_origin_y,
-                            crdt_base_id,
-                        )
-                        adjusted_blocks.append(adjusted_block)
-                    except Exception as e:
-                        logger.warning(f"Failed to adjust highlight block: {e}")
-                        adjusted_blocks.append(block)
-
-                # Process strokes by cluster (context-aware anchoring)
-                if stroke_blocks:
-                    # Create ParentAnchorResolver from the existing blocks for per-parent
-                    # coordinate transformation. This ensures strokes with different parent_ids
-                    # are positioned correctly in absolute coordinate space.
-                    anchor_resolver = ParentAnchorResolver.from_blocks(existing_blocks)
-
-                    stroke_clusters = self._cluster_stroke_blocks(stroke_blocks, anchor_resolver)
-
-                    # Separate implicit paragraphs (below all text) from regular clusters
-                    # Implicit paragraphs should all move together as one unit
-                    implicit_clusters = []
-                    regular_clusters = []
-
-                    for cluster in stroke_clusters:
-                        # Calculate cluster center to check if implicit
-                        centers = []
-                        for block in cluster:
-                            center = self._get_stroke_center(block, anchor_resolver)
-                            if center:
-                                centers.append(center[1])
-                        if centers:
-                            cluster_center_y = sum(centers) / len(centers)
-                            if self._is_implicit_paragraph(cluster_center_y, old_text_blocks):
-                                implicit_clusters.append(cluster)
-                            else:
-                                regular_clusters.append(cluster)
-                        else:
-                            regular_clusters.append(cluster)
-
-                    # Merge all implicit paragraph clusters into one
-                    if implicit_clusters:
-                        merged_implicit = []
-                        for cluster in implicit_clusters:
-                            merged_implicit.extend(cluster)
-                        if merged_implicit:
-                            regular_clusters.append(merged_implicit)
-                            logger.debug(
-                                f"Merged {len(implicit_clusters)} implicit paragraph cluster(s) "
-                                f"into 1 ({len(merged_implicit)} strokes)"
-                            )
-
-                    # With anchor_id updates in _generate_rm_file_roundtrip(), strokes
-                    # are automatically positioned correctly because their TreeNodeBlock
-                    # anchor_ids now point to the correct text offsets.
-                    # We do NOT need to apply Y deltas to native coordinates.
-                    # See docs/STROKE_ANCHORING.md for details.
-                    for cluster in regular_clusters:
-                        adjusted_blocks.extend(cluster)
-                        logger.debug(
-                            f"Preserved {len(cluster)} stroke(s) in cluster (anchor_ids will be updated)"
-                        )
-
-                # Store the adjusted rmscene blocks AND original file path
-                page.annotation_blocks = adjusted_blocks
-                page.original_rm_path = rm_file_path
-
-                logger.info(
-                    f"Page {i}: Preserved and adjusted {len(adjusted_blocks)} annotation blocks from {rm_file_path}"
+                    f"Page {page_idx}: Collected {len(annotation_blocks)} annotation blocks"
                 )
 
             except Exception as e:
-                logger.warning(f"Page {i}: Failed to preserve annotations from {rm_file_path}: {e}")
+                logger.warning(f"Page {page_idx}: Failed to read annotations: {e}")
+
+        if not all_annotations:
+            logger.debug("No annotations found in any old page")
+            return
+
+        logger.info(f"Collected {len(all_annotations)} total annotations for cross-page routing")
+
+        # =================================================================
+        # PHASE 3: Route annotations to their target pages
+        # =================================================================
+
+        # Initialize per-page annotation collections
+        # Track same-page vs cross-page annotations separately
+        # Same-page: can use roundtrip (preserve scene tree)
+        # Cross-page: need special handling (inject into target page)
+        same_page_annotations: dict[int, list] = {i: [] for i in range(len(pages))}
+        cross_page_annotations: dict[int, list] = {i: [] for i in range(len(pages))}
+        page_rm_paths: dict[int, Path] = {}  # Source page for same-page only
+        # Track item_ids that moved OUT of each page (to exclude from roundtrip)
+        moved_out_ids: dict[int, set] = {i: set() for i in range(len(pages))}
+
+        new_text_origin_y = self.geometry.text_pos_y
+
+        for anno_block, source_page_idx, page_data, existing_blocks in all_annotations:
+            try:
+                old_text_blocks = page_data["text_blocks"]
+                old_text_origin_y = page_data["text_origin_y"]
+                rm_file_path = page_data["rm_file_path"]
+
+                # Find which old text block this annotation belongs to
+                anno_center_y = get_annotation_center_y(anno_block, old_text_origin_y)
+                if anno_center_y is None:
+                    # Can't determine position - keep on same page
+                    target_page_idx = min(source_page_idx, len(pages) - 1)
+                    same_page_annotations[target_page_idx].append(anno_block)
+                    page_rm_paths[target_page_idx] = rm_file_path
+                    continue
+
+                # Find nearest old text block (document-level index)
+                nearest_old_idx = None
+                min_distance = float("inf")
+                doc_offset = sum(
+                    len(old_page_data[i]["text_blocks"]) if old_page_data[i] else 0
+                    for i in range(source_page_idx)
+                )
+
+                for local_idx, tb in enumerate(old_text_blocks):
+                    block_center_y = (tb.y_start + tb.y_end) / 2
+                    distance = abs(anno_center_y - block_center_y)
+                    if distance < min_distance:
+                        min_distance = distance
+                        nearest_old_idx = doc_offset + local_idx
+
+                # Look up the new text block via document-level mapping
+                if nearest_old_idx is not None and nearest_old_idx in doc_position_map:
+                    new_block_idx = doc_position_map[nearest_old_idx]
+                    new_text_block = all_new_text_blocks[new_block_idx]
+                    target_page_idx = new_text_block.page_index
+                else:
+                    # No mapping found - attach to nearest surviving page
+                    target_page_idx = self._find_nearest_page_with_content(source_page_idx, pages)
+
+                # Clamp to valid page range
+                target_page_idx = max(0, min(target_page_idx, len(pages) - 1))
+
+                # Log cross-page movement
+                if source_page_idx != target_page_idx:
+                    logger.debug(
+                        f"Annotation moving from page {source_page_idx} to page {target_page_idx}"
+                    )
+
+                # Get CRDT base ID
+                crdt_base_id = get_crdt_base_id_from_rm(rm_file_path)
+
+                # Adjust annotation position
+                if "Glyph" in type(anno_block).__name__:
+                    adjusted_block = self._adjust_glyph_with_content_anchoring(
+                        anno_block,
+                        old_full_text,
+                        new_full_text,
+                        (self.geometry.text_pos_x, old_text_origin_y),
+                        (self.geometry.text_pos_x, new_text_origin_y),
+                        crdt_base_id,
+                    )
+                else:
+                    # Strokes: keep as-is, anchor_ids will be updated in roundtrip
+                    adjusted_block = anno_block
+
+                # Separate same-page vs cross-page annotations
+                is_cross_page = source_page_idx != target_page_idx
+                if is_cross_page:
+                    cross_page_annotations[target_page_idx].append(adjusted_block)
+                    # Track that this annotation moved OUT of source page
+                    # So it will be excluded from source page's roundtrip
+                    if hasattr(anno_block, "item") and hasattr(anno_block.item, "item_id"):
+                        moved_out_ids[source_page_idx].add(anno_block.item.item_id)
+                    logger.debug(
+                        f"Cross-page: annotation from page {source_page_idx} -> {target_page_idx}"
+                    )
+                else:
+                    same_page_annotations[target_page_idx].append(adjusted_block)
+                    page_rm_paths[target_page_idx] = rm_file_path
+
+            except Exception as e:
+                logger.warning(f"Failed to route annotation: {e}")
+                # Fallback: keep on source page as same-page
+                target_page_idx = min(source_page_idx, len(pages) - 1)
+                same_page_annotations[target_page_idx].append(anno_block)
+
+        # =================================================================
+        # PHASE 4: Assign annotations to pages
+        # =================================================================
+
+        for page_idx, page in enumerate(pages):
+            same_page = same_page_annotations.get(page_idx, [])
+            cross_page = cross_page_annotations.get(page_idx, [])
+            page_moved_out = moved_out_ids.get(page_idx, set())
+
+            # Store IDs that moved OUT of this page (to exclude from roundtrip)
+            if page_moved_out:
+                page.exclude_annotation_ids = page_moved_out
+                logger.debug(f"Page {page_idx}: {len(page_moved_out)} annotations moved out")
+
+            if same_page or cross_page:
+                # Combine annotations, but track if we have cross-page ones
+                all_page_annos = same_page + cross_page
+                page.annotation_blocks = all_page_annos
+
+                # Only use roundtrip if we have same-page annotations AND a source file
+                # Cross-page annotations need injection approach
+                if same_page and page_idx in page_rm_paths:
+                    page.original_rm_path = page_rm_paths[page_idx]
+                    logger.info(
+                        f"Page {page_idx}: {len(same_page)} same-page + "
+                        f"{len(cross_page)} cross-page annotations (roundtrip)"
+                    )
+                elif page_idx < len(existing_rm_files) and existing_rm_files[page_idx]:
+                    # Use target page's existing .rm file for injection
+                    page.original_rm_path = existing_rm_files[page_idx]
+                    logger.info(
+                        f"Page {page_idx}: {len(cross_page)} cross-page annotations "
+                        f"(inject into existing)"
+                    )
+                else:
+                    # No existing file - annotations will be added to fresh .rm
+                    # Note: This requires special handling in generate_rm_file
+                    page.cross_page_annotations = cross_page
+                    logger.info(
+                        f"Page {page_idx}: {len(cross_page)} cross-page annotations "
+                        f"(inject into new)"
+                    )
+            elif (
+                page_moved_out and page_idx < len(existing_rm_files) and existing_rm_files[page_idx]
+            ):
+                # No annotations staying on this page, but some moved out
+                # Need to roundtrip to remove them
+                page.original_rm_path = existing_rm_files[page_idx]
+                page.annotation_blocks = []  # Empty - all moved out
+                logger.info(f"Page {page_idx}: All annotations moved out, updating file")
+
+    def _find_nearest_page_with_content(
+        self, source_page_idx: int, pages: list[RemarkablePage]
+    ) -> int:
+        """Find nearest page that has text content when original page is gone.
+
+        Args:
+            source_page_idx: Original page index
+            pages: List of new pages
+
+        Returns:
+            Index of nearest page with content
+        """
+        if not pages:
+            return 0
+
+        # Search outward from source_page_idx
+        for offset in range(len(pages)):
+            # Try forward
+            if source_page_idx + offset < len(pages):
+                if pages[source_page_idx + offset].text_blocks:
+                    return source_page_idx + offset
+            # Try backward
+            if source_page_idx - offset >= 0:
+                if pages[source_page_idx - offset].text_blocks:
+                    return source_page_idx - offset
+
+        # Fallback to first page
+        return 0
 
     def _extract_text_blocks_from_rm(
         self, rm_file_path: Path
@@ -1488,6 +1596,7 @@ class RemarkableGenerator:
         for block in blocks:
             block_lines = self.estimate_block_lines(block)
             block.page_y_start = y_position  # Set Y position for annotation mapping
+            block.page_index = len(pages)  # Track which page this block is on
 
             # Check if header should start new page (avoid orphan headers)
             if block.type == BlockType.HEADER and current_page:
@@ -1498,6 +1607,7 @@ class RemarkableGenerator:
                     current_lines = 0
                     y_position = float(self.geometry.text_pos_y)
                     block.page_y_start = y_position
+                    block.page_index = len(pages)  # Update to new page
 
             # Check if block fits on current page
             if current_lines + block_lines > self.geometry.lines_per_page:
@@ -1550,6 +1660,7 @@ class RemarkableGenerator:
                             level=block.level,
                             text=chunk_text,
                             formatting=block.formatting if i == 0 else [],
+                            page_index=len(pages),  # Track which page this chunk is on
                         )
                         current_page.append(chunk_block)
                         current_lines += chunk_lines
@@ -1562,6 +1673,7 @@ class RemarkableGenerator:
                     current_lines = block_lines
                     y_position = float(self.geometry.text_pos_y) + block_lines * self.line_height
                     block.page_y_start = float(self.geometry.text_pos_y)
+                    block.page_index = len(pages)  # Update to new page
             else:
                 current_page.append(block)
                 current_lines += block_lines
@@ -1714,6 +1826,7 @@ class RemarkableGenerator:
                     y_start=y_start,
                     y_end=y_end,
                     block_type=block.type.name.lower(),
+                    page_index=block.page_index if block.page_index is not None else 0,
                 )
             )
 
@@ -1801,11 +1914,30 @@ class RemarkableGenerator:
                 if hasattr(block, "item") and hasattr(block.item, "item_id"):
                     original_annotation_ids.add(block.item.item_id)
 
+        # Get IDs of annotations that moved OUT of this page (should be excluded)
+        exclude_ids = getattr(page, "exclude_annotation_ids", set())
+        if exclude_ids:
+            logger.debug(f"Excluding {len(exclude_ids)} annotations that moved to other pages")
+
         # Build index of adjusted annotations by item_id
+        # Also track which are from the same file (can be matched) vs cross-page (must inject)
         adjusted_by_id = {}
+        cross_page_to_inject = []
         for adj_block in page.annotation_blocks:
             if hasattr(adj_block, "item") and hasattr(adj_block.item, "item_id"):
-                adjusted_by_id[adj_block.item.item_id] = adj_block
+                item_id = adj_block.item.item_id
+                if item_id in original_annotation_ids:
+                    # Same file - can match by ID
+                    adjusted_by_id[item_id] = adj_block
+                else:
+                    # Cross-page - needs injection
+                    cross_page_to_inject.append(adj_block)
+            else:
+                # No item_id - inject as cross-page
+                cross_page_to_inject.append(adj_block)
+
+        if cross_page_to_inject:
+            logger.debug(f"Cross-page annotations to inject: {len(cross_page_to_inject)}")
 
         # Modify blocks in place
         modified_blocks = []
@@ -1850,6 +1982,10 @@ class RemarkableGenerator:
                 # Try to find adjusted version by item_id
                 if hasattr(block, "item") and hasattr(block.item, "item_id"):
                     item_id = block.item.item_id
+                    # Skip annotations that moved to other pages
+                    if item_id in exclude_ids:
+                        logger.debug(f"Excluding annotation {item_id} (moved to another page)")
+                        continue
                     if item_id in adjusted_by_id:
                         modified_blocks.append(adjusted_by_id[item_id])
                         annotation_count += 1
@@ -1883,6 +2019,13 @@ class RemarkableGenerator:
             # Keep all other blocks (scene tree, groups, etc.) unchanged
             else:
                 modified_blocks.append(block)
+
+        # Inject cross-page annotations that couldn't be matched by item_id
+        if cross_page_to_inject:
+            for inj_block in cross_page_to_inject:
+                modified_blocks.append(inj_block)
+                annotation_count += 1
+            logger.info(f"Injected {len(cross_page_to_inject)} cross-page annotations")
 
         # Serialize to binary
         buffer = io.BytesIO()
