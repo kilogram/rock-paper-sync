@@ -166,32 +166,13 @@ class DeviceTestCase(ABC):
 
     # Convenience methods for common operations
 
-    def sync(self, description: str = "Sync") -> tuple[int, str, str]:
-        """Run sync command and return result.
+    def sync(self, description: str = "Sync") -> None:
+        """Run sync command. Raises RuntimeError on failure."""
+        self.workspace.run_sync(description)
 
-        Args:
-            description: Description for logging
-
-        Returns:
-            Tuple of (return_code, stdout, stderr)
-        """
-        return self.workspace.run_sync(description)
-
-    def sync_and_assert_success(self, description: str = "Sync") -> str:
-        """Run sync and assert it succeeds.
-
-        Args:
-            description: Description for logging
-
-        Returns:
-            stdout from sync command
-
-        Raises:
-            AssertionError if sync fails
-        """
-        ret, out, err = self.sync(description)
-        assert ret == 0, f"Sync failed: {err}"
-        return out
+    def sync_and_assert_success(self, description: str = "Sync") -> None:
+        """Run sync and assert it succeeds. Raises on failure."""
+        self.workspace.run_sync(description)
 
     def assert_file_contains(self, path: Path, pattern: str, msg: str | None = None) -> None:
         """Assert file contains pattern.

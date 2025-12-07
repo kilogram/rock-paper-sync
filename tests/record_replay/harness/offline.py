@@ -224,10 +224,7 @@ class OfflineEmulator(DeviceInteractionManager):
         Raises:
             RuntimeError: If sync fails
         """
-        ret, out, err = self.workspace.run_sync("Upload document to rmfakecloud")
-
-        if ret != 0:
-            raise RuntimeError(f"Failed to upload document: {err}")
+        self.workspace.run_sync("Upload document to rmfakecloud")
 
         doc_uuid = self.workspace.get_document_uuid()
         if not doc_uuid:
@@ -292,10 +289,7 @@ class OfflineEmulator(DeviceInteractionManager):
         self._inject_rm_files(doc_uuid, rm_files)
 
         # Sync to download the injected annotations
-        ret, out, err = self.workspace.run_sync("Download injected annotations")
-
-        if ret != 0:
-            raise RuntimeError(f"Failed to sync after injection: {err}")
+        self.workspace.run_sync("Download injected annotations")
 
         # Advance to next phase in multi-phase mode
         if self._phases:
@@ -310,9 +304,7 @@ class OfflineEmulator(DeviceInteractionManager):
 
     def trigger_sync(self) -> None:
         """Run sync command."""
-        ret, out, err = self.workspace.run_sync("Sync")
-        if ret != 0:
-            raise RuntimeError(f"Sync failed: {err}")
+        self.workspace.run_sync("Sync")
 
     def capture_phase(self, phase_name: str, action: str = "capture") -> None:
         """No-op for offline mode.

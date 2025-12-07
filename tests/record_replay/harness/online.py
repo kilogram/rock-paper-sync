@@ -152,11 +152,7 @@ class OnlineDevice(DeviceInteractionManager):
         )
 
         # Run sync to upload document
-        ret, out, err = self.workspace.run_sync("Upload document")
-        if ret != 0:
-            self.bench.error(f"Upload failed: {err}")
-            self.bench.observe(f"Sync output: {out}")
-            raise RuntimeError(f"Failed to upload document: {err}")
+        self.workspace.run_sync("Upload document")
 
         doc_uuid = self.workspace.get_document_uuid()
         if not doc_uuid:
@@ -240,10 +236,7 @@ class OnlineDevice(DeviceInteractionManager):
 
             # Run sync
             sync_desc = f"Sync (attempt {attempt}/{max_attempts})"
-            ret, out, err = self.workspace.run_sync(sync_desc)
-            if ret != 0:
-                self.bench.error(f"Sync failed: {err}")
-                raise RuntimeError(f"Failed to sync annotations: {err}")
+            self.workspace.run_sync(sync_desc)
 
             # Check if annotations were downloaded
             state = self.get_document_state(doc_uuid)
@@ -281,9 +274,7 @@ class OnlineDevice(DeviceInteractionManager):
 
     def trigger_sync(self) -> None:
         """Run sync command."""
-        ret, out, err = self.workspace.run_sync("Sync")
-        if ret != 0:
-            raise RuntimeError(f"Sync failed: {err}")
+        self.workspace.run_sync("Sync")
 
     def capture_phase(self, phase_name: str, action: str = "capture") -> None:
         """Manually capture a phase at the current state.
@@ -455,9 +446,7 @@ class OnlineDevice(DeviceInteractionManager):
         self.bench.info("📌 GOLDEN CAPTURE: Uploading fresh document for ground truth")
 
         # Run sync to upload the golden document
-        ret, out, err = self.workspace.run_sync("Upload golden document")
-        if ret != 0:
-            raise RuntimeError(f"Failed to upload golden document: {err}")
+        self.workspace.run_sync("Upload golden document")
 
         # Get the golden document UUID (should be different from main doc)
         golden_uuid = self._get_golden_document_uuid()
@@ -485,9 +474,7 @@ class OnlineDevice(DeviceInteractionManager):
         max_attempts = 5
 
         for attempt in range(1, max_attempts + 1):
-            ret, out, err = self.workspace.run_sync(f"Golden sync (attempt {attempt})")
-            if ret != 0:
-                raise RuntimeError(f"Failed to sync golden annotations: {err}")
+            self.workspace.run_sync(f"Golden sync (attempt {attempt})")
 
             state = self.get_document_state(golden_uuid)
             if state.has_annotations:

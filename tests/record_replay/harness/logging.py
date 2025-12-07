@@ -171,26 +171,17 @@ class Bench:
 
         return run_cmd(cmd, self.repo_root, desc, timeout, capture)
 
-    def run_sync(
-        self,
-        config_file: Path,
-        desc: str = "Sync",
-        extra_args: list[str] | None = None,
-    ) -> tuple[int, str, str]:
-        """Run rock-paper-sync command."""
+    def run_sync(self, config_file: Path, desc: str = "Sync") -> None:
+        """Run rock-paper-sync sync in-process. Raises on failure."""
         from .command import run_sync
 
-        return run_sync(config_file, self.repo_root, desc, extra_args)
+        run_sync(config_file, desc)
 
-    def run_unsync(
-        self,
-        config_file: Path,
-        delete_from_cloud: bool = True,
-    ) -> tuple[int, str, str]:
-        """Run unsync command to cleanup."""
+    def run_unsync(self, config_file: Path, delete_from_cloud: bool = True) -> None:
+        """Run unsync in-process. Raises on failure."""
         from .command import run_unsync
 
-        return run_unsync(config_file, self.repo_root, delete_from_cloud)
+        run_unsync(config_file, delete_from_cloud)
 
     def prompt_user(self, *messages: str) -> None:
         """Display a formatted prompt and wait for user input.

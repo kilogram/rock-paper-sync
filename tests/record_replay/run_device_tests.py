@@ -441,9 +441,10 @@ def collect(
         workspace.setup_document(source_file)
 
         # Step 1: Initial sync (upload)
-        ret, out, err = workspace.run_sync("Upload document")
-        if ret != 0:
-            bench.error("Failed to upload document")
+        try:
+            workspace.run_sync("Upload document")
+        except RuntimeError as e:
+            bench.error(f"Failed to upload document: {e}")
             sys.exit(1)
 
         doc_uuid = workspace.get_document_uuid()
@@ -468,10 +469,10 @@ def collect(
             sys.exit(1)
 
     # Step 3: Sync to download annotations
-    ret, out, err = workspace.run_sync("Download annotations")
-    if ret != 0:
-        bench.error("Failed to download annotations")
-        bench.error(f"stderr: {err}")
+    try:
+        workspace.run_sync("Download annotations")
+    except RuntimeError as e:
+        bench.error(f"Failed to download annotations: {e}")
         sys.exit(1)
 
     doc_uuid = workspace.get_document_uuid()

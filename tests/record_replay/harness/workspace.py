@@ -199,16 +199,9 @@ exclude_patterns = [".state/**", "logs/**", ".cache/**"]
         shutil.copy(source, self.test_doc)
         self.bench.ok(f"Setup document from {source.name}")
 
-    def run_sync(self, desc: str = "Sync") -> tuple[int, str, str]:
-        """Run sync command.
-
-        Args:
-            desc: Description for logging
-
-        Returns:
-            Tuple of (return_code, stdout, stderr)
-        """
-        return self.bench.run_sync(self.config_file, desc)
+    def run_sync(self, desc: str = "Sync") -> None:
+        """Run sync command. Raises RuntimeError on failure."""
+        self.bench.run_sync(self.config_file, desc)
 
     def file_hash(self, path: Path) -> str:
         """Calculate SHA-256 hash of file.

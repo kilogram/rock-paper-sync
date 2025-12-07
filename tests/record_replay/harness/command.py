@@ -76,45 +76,104 @@ def run_cmd(
     return result.returncode, result.stdout, result.stderr
 
 
-def run_sync(
-    config_file: Path,
-    repo_root: Path,
-    desc: str = "Sync",
-    extra_args: list[str] | None = None,
-) -> tuple[int, str, str]:
-    """Run rock-paper-sync command.
+def run_sync(config_file: Path, desc: str = "Sync") -> None:
+    """Run rock-paper-sync sync in-process for test coverage.
 
     Args:
         config_file: Path to config file
-        repo_root: Path to repository root
         desc: Description for logging
-        extra_args: Additional arguments
 
-    Returns:
-        Tuple of (return_code, stdout, stderr)
+    Raises:
+        RuntimeError: If sync fails
     """
-    cmd = ["uv", "run", "rock-paper-sync", "--config", str(config_file), "sync"]
-    if extra_args:
-        cmd.extend(extra_args)
-    return run_cmd(cmd, repo_root, desc)
+    from rock_paper_sync.config import load_config
+    from rock_paper_sync.converter import SyncEngine
+    from rock_paper_sync.state import StateManager
+
+    print(f"\n{Colors.BOLD}> {desc} (in-process){Colors.END}")
+    start = time.time()
+
+    try:
+        config = load_config(config_file)
+        state = StateManager(config.sync.state_database)
+        engine = SyncEngine(config, state)
+
+        results = engine.sync_all_changed()
+
+        uploaded = sum(1 for r in results if r.success and not r.skipped)
+        skipped = sum(1 for r in results if r.success and r.skipped)
+        failed = [r for r in results if not r.success]
+
+        msg = f"Synced {uploaded}/{len(results)} file(s)"
+        if skipped:
+            msg += f", {skipped} unchanged"
+        print(f"  {msg}")
+
+        for result in results:
+            if result.success and not result.skipped:
+                print(f"  ✓ {result.path.name} ({result.page_count} page(s))")
+
+        state.close()
+
+        duration = time.time() - start
+        if failed:
+            errors = "; ".join(f"{r.path.name}: {r.error}" for r in failed)
+            print_error(f"Sync failed: {desc} ({duration:.1f}s)")
+            raise RuntimeError(errors)
+
+        print_ok(f"Done: {desc} ({duration:.1f}s)")
+
+    except RuntimeError:
+        raise
+    except Exception as e:
+        duration = time.time() - start
+        print_error(f"Sync failed: {desc} ({duration:.1f}s)")
+        print(f"  {Colors.RED}{e}{Colors.END}")
+        raise RuntimeError(str(e)) from e
 
 
-def run_unsync(
-    config_file: Path,
-    repo_root: Path,
-    delete_from_cloud: bool = True,
-) -> tuple[int, str, str]:
-    """Run unsync command to cleanup.
+def run_unsync(config_file: Path, delete_from_cloud: bool = True) -> None:
+    """Run unsync command in-process.
 
     Args:
         config_file: Path to config file
-        repo_root: Path to repository root
         delete_from_cloud: Whether to delete from cloud
 
-    Returns:
-        Tuple of (return_code, stdout, stderr)
+    Raises:
+        RuntimeError: If unsync fails
     """
-    cmd = ["uv", "run", "rock-paper-sync", "--config", str(config_file), "unsync", "-y"]
-    if delete_from_cloud:
-        cmd.append("--delete-from-cloud")
-    return run_cmd(cmd, repo_root, "Unsync from cloud", timeout=30)
+    from rock_paper_sync.config import load_config
+    from rock_paper_sync.converter import SyncEngine
+    from rock_paper_sync.state import StateManager
+
+    print(f"\n{Colors.BOLD}> Unsync from cloud (in-process){Colors.END}")
+    start = time.time()
+
+    try:
+        config = load_config(config_file)
+        state = StateManager(config.sync.state_database)
+        engine = SyncEngine(config, state)
+
+        print(f"  Unsyncing all {len(config.sync.vaults)} vault(s)...")
+
+        total_removed = 0
+        total_deleted = 0
+
+        for vault_config in config.sync.vaults:
+            removed, deleted = engine.unsync_vault(
+                vault_config.name, delete_from_cloud=delete_from_cloud
+            )
+            total_removed += removed
+            total_deleted += deleted
+
+        print(f"  Total: {total_removed} files removed, {total_deleted} deleted from cloud")
+        state.close()
+
+        duration = time.time() - start
+        print_ok(f"Done: Unsync from cloud ({duration:.1f}s)")
+
+    except Exception as e:
+        duration = time.time() - start
+        print_error(f"Unsync failed ({duration:.1f}s)")
+        print(f"  {Colors.RED}{e}{Colors.END}")
+        raise RuntimeError(str(e)) from e
