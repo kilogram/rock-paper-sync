@@ -305,5 +305,5 @@ class LocalOCRService:
     def __enter__(self) -> "LocalOCRService":
         return self
 
-    def __exit__(self, *args) -> None:
+    def __exit__(self, *_args) -> None:
         self.close()

@@ -116,6 +116,10 @@ exclude_lines = [
 include = ["src"]
 exclude = ["tools/"]
 
+[tool.vulture]
+paths = ["src/rock_paper_sync"]
+min_confidence = 80
+
 [dependency-groups]
 dev = [
     "fonttools>=4.61.0",

@@ -378,7 +378,7 @@ def associate_annotations_with_content(
     return mapping
 
 
-def preserve_strokes_in_scene(strokes: list[Stroke], scene_blocks: list, parent_id=None) -> list:
+def preserve_strokes_in_scene(strokes: list[Stroke], _scene_blocks: list, _parent_id=None) -> list:
     """Convert Stroke objects back to rmscene SceneLineItemBlock objects.
 
     This allows us to preserve strokes when regenerating a document by converting

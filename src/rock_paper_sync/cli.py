@@ -319,7 +319,7 @@ def watch(ctx: click.Context, vault: str | None) -> None:  # pragma: no cover
         watchers.append(watcher)
 
     # Set up graceful shutdown
-    def shutdown(signum: int, frame: object) -> None:
+    def shutdown(_signum: int, _frame: object) -> None:
         """Handle shutdown signals."""
         click.echo("\nShutting down...")
         for w in watchers:

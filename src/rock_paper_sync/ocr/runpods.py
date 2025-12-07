@@ -395,5 +395,5 @@ class RunpodsOCRService:
     def __enter__(self) -> "RunpodsOCRService":
         return self
 
-    def __exit__(self, *args) -> None:
+    def __exit__(self, *_args) -> None:
         self.close()
