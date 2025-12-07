@@ -68,7 +68,6 @@ def rmfakecloud_config(tmp_path: Path, rmfakecloud: str):
         ),
         cloud=CloudConfig(base_url=rmfakecloud),
         layout=LayoutConfig(
-            lines_per_page=45,
             margin_top=50,
             margin_bottom=50,
             margin_left=50,

@@ -505,12 +505,12 @@ exclude_patterns = [".obsidian/**", "archive/**"]
 debounce_seconds = 5
 
 [layout]
-lines_per_page = 28
+# Lines per page is calculated automatically from device geometry
 margin_top = 50
 margin_bottom = 50
 margin_left = 50
 margin_right = 50
-allow_paragraph_splitting = false  # true = allow paragraphs to split across pages for better utilization
+allow_paragraph_splitting = false  # true = allow paragraphs to split across pages
 
 [logging]
 level = "info"

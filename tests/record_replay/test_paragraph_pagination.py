@@ -104,38 +104,21 @@ class PaginationGoldens:
         return len(errors) == 0, errors
 
 
-# Test document content - deterministic
-LONG_PARAGRAPH = "The quick brown fox jumps over the lazy dog. " * 50
+# Test document content - deterministic, long enough to span multiple pages
+LONG_PARAGRAPH = "The quick brown fox jumps over the lazy dog. " * 100
 
 
-# Test configs - use default margins
+# Test configs - test allow_paragraph_splitting behavior
+# (lines_per_page is now calculated from device geometry, not configurable)
 CONFIGS = {
-    "short_no_split": LayoutConfig(
-        lines_per_page=10,
+    "no_split": LayoutConfig(
         margin_top=50,
         margin_bottom=50,
         margin_left=50,
         margin_right=50,
         allow_paragraph_splitting=False,
     ),
-    "short_with_split": LayoutConfig(
-        lines_per_page=10,
-        margin_top=50,
-        margin_bottom=50,
-        margin_left=50,
-        margin_right=50,
-        allow_paragraph_splitting=True,
-    ),
-    "normal_no_split": LayoutConfig(
-        lines_per_page=26,
-        margin_top=50,
-        margin_bottom=50,
-        margin_left=50,
-        margin_right=50,
-        allow_paragraph_splitting=False,
-    ),
-    "normal_with_split": LayoutConfig(
-        lines_per_page=26,
+    "with_split": LayoutConfig(
         margin_top=50,
         margin_bottom=50,
         margin_left=50,
@@ -176,11 +159,16 @@ def test_paragraph_pagination(config_name, device, workspace, fixtures_dir):
     goldens = PaginationGoldens(testdata_dir)
     config = CONFIGS[config_name]
 
+    from rock_paper_sync.layout.constants import LINES_PER_PAGE
+
     print(f"\n{'='*60}")
     print(f"Config: {config_name}")
-    print(f"  lines_per_page={config.lines_per_page}")
+    print(f"  lines_per_page={LINES_PER_PAGE} (calculated from device geometry)")
     print(f"  allow_paragraph_splitting={config.allow_paragraph_splitting}")
     print(f"{'='*60}")
+
+    # Configure workspace to use our layout settings
+    workspace.set_layout_config(allow_paragraph_splitting=config.allow_paragraph_splitting)
 
     # Write test document to workspace.test_doc (the standard location)
     workspace.test_doc.write_text(f"# Pagination Test ({config_name})\n\n{LONG_PARAGRAPH}\n")

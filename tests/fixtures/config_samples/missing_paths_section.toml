@@ -10,7 +10,6 @@ exclude_patterns = []
 base_url = "http://localhost:3000"
 
 [layout]
-lines_per_page = 28
 margin_top = 50
 margin_bottom = 50
 margin_left = 50

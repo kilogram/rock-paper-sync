@@ -1,31 +1,33 @@
 # Test fixture configuration for record/replay tests
 #
-# This config is copied to the workspace directory during test setup.
-# Environment variables are used for dynamic values:
+# This config uses Python format() placeholders for dynamic values.
+# Placeholders are expanded by conftest.py before writing to workspace.
 #
-# Set by conftest.py:
-# - RPS_TEST_WORKSPACE: absolute path to workspace directory
-# - RPS_CLOUD_BASE_URL: cloud base URL (from user's actual config for online tests,
-#                       or localhost:3001 for offline tests)
+# Required placeholders (set by conftest.py):
+#   {workspace}  - absolute path to workspace directory
+#   {cloud_url}  - cloud base URL
+#
+# Optional placeholders (with defaults):
+#   {allow_paragraph_splitting} - allow paragraph splitting (default: false)
 
 [cloud]
-base_url = "$RPS_CLOUD_BASE_URL"
+base_url = "{cloud_url}"
 
 [paths]
-state_database = "$RPS_TEST_WORKSPACE/.state/state.db"
-cache_dir = "$RPS_TEST_WORKSPACE/.cache"
+state_database = "{workspace}/.state/state.db"
+cache_dir = "{workspace}/.cache"
 
 [logging]
 level = "debug"
-file = "$RPS_TEST_WORKSPACE/logs/sync.log"
+file = "{workspace}/logs/sync.log"
 
 [layout]
-lines_per_page = 28
+# Lines per page is calculated automatically from device geometry
 margin_top = 50
 margin_bottom = 50
 margin_left = 50
 margin_right = 50
-allow_paragraph_splitting = false
+allow_paragraph_splitting = {allow_paragraph_splitting}
 
 [sync]
 debounce_seconds = 5
@@ -37,10 +39,9 @@ confidence_threshold = 0.5
 
 # Test vault pointing to the workspace directory
 # Note: vault name must be 'device-bench' to match WorkspaceManager expectations
-# Uses environment variable for dynamic path
 [[vaults]]
 name = "device-bench"
-path = "$RPS_TEST_WORKSPACE"
+path = "{workspace}"
 remarkable_folder = "TestRecording"
 include_patterns = ["**/*.md"]
 exclude_patterns = [".state/**", "logs/**", ".cache/**", "config.toml"]

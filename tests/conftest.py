@@ -119,9 +119,7 @@ def sample_config(temp_vault: Path, temp_state_db: Path, tmp_path: Path):
             debounce_seconds=1,
         ),
         cloud=CloudConfig(base_url="http://localhost:3000"),
-        layout=LayoutConfig(
-            lines_per_page=45, margin_top=50, margin_bottom=50, margin_left=50, margin_right=50
-        ),
+        layout=LayoutConfig(margin_top=50, margin_bottom=50, margin_left=50, margin_right=50),
         log_level="debug",
         log_file=temp_state_db.parent / "test.log",
         ocr=OCRConfig(),
@@ -166,9 +164,7 @@ def multi_vault_config(temp_vault: Path, temp_vault2: Path, temp_state_db: Path,
             debounce_seconds=1,
         ),
         cloud=CloudConfig(base_url="http://localhost:3000"),
-        layout=LayoutConfig(
-            lines_per_page=45, margin_top=50, margin_bottom=50, margin_left=50, margin_right=50
-        ),
+        layout=LayoutConfig(margin_top=50, margin_bottom=50, margin_left=50, margin_right=50),
         log_level="debug",
         log_file=temp_state_db.parent / "test.log",
         ocr=OCRConfig(),
@@ -271,7 +267,6 @@ debounce_seconds = 5
 base_url = "http://localhost:3000"
 
 [layout]
-lines_per_page = 45
 margin_top = 50
 margin_bottom = 50
 margin_left = 50
@@ -314,7 +309,6 @@ debounce_seconds = 5
 base_url = "http://localhost:3000"
 
 [layout]
-lines_per_page = 45
 margin_top = 50
 margin_bottom = 50
 margin_left = 50
@@ -420,9 +414,7 @@ def sample_config_with_ocr(temp_vault: Path, temp_state_db: Path, tmp_path: Path
             debounce_seconds=1,
         ),
         cloud=CloudConfig(base_url="http://localhost:3000"),
-        layout=LayoutConfig(
-            lines_per_page=45, margin_top=50, margin_bottom=50, margin_left=50, margin_right=50
-        ),
+        layout=LayoutConfig(margin_top=50, margin_bottom=50, margin_left=50, margin_right=50),
         log_level="debug",
         log_file=temp_state_db.parent / "test.log",
         ocr=OCRConfig(
@@ -693,7 +685,6 @@ def integration_config(temp_vault: Path, temp_state_db: Path, tmp_path: Path):
         sync=sync_config,
         cloud=CloudConfig(base_url="http://localhost:3000"),
         layout=LayoutConfig(
-            lines_per_page=45,
             margin_top=50,
             margin_bottom=50,
             margin_left=50,

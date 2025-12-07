@@ -347,23 +347,20 @@ if p.exists():
         except FileNotFoundError as e:
             bench.warn(f"Test credentials not found: {e}")
 
-        # Copy test config.toml to workspace
+        # Copy test config.toml to workspace using format() templating
         if test_config_file.exists():
-            # Set environment variables for config template expansion
-            os.environ["RPS_TEST_WORKSPACE"] = str(workspace_dir.resolve())
-            os.environ["RPS_CLOUD_BASE_URL"] = (
-                rmfakecloud  # Use dynamically allocated rmfakecloud URL
-            )
-
-            # Read fixture config template
-            fixture_config_content = test_config_file.read_text()
-
-            # Expand environment variables in the config
-            expanded_config = os.path.expandvars(fixture_config_content)
-
-            # Write to workspace
+            config_template = test_config_file.read_text()
+            config_context = {
+                "workspace": str(workspace_dir.resolve()),
+                "cloud_url": rmfakecloud,
+                "allow_paragraph_splitting": "false",
+            }
+            expanded_config = config_template.format(**config_context)
             workspace_config = workspace_dir / "config.toml"
             workspace_config.write_text(expanded_config)
+            # Store template info in workspace for reconfiguration
+            ws._config_template = config_template
+            ws._config_context = config_context
             bench.ok(f"Using test config at {workspace_config}")
 
     elif device_mode == "online":
@@ -380,21 +377,20 @@ if p.exists():
 
         bench.ok(f"Using real device credentials from {creds_path}")
 
-        # Generate test config with real cloud URL (from workspace.cloud_url) but isolated test vault
+        # Generate test config with real cloud URL but isolated test vault
         if test_config_file.exists():
-            # Set environment variable for config template expansion
-            os.environ["RPS_TEST_WORKSPACE"] = str(workspace_dir.resolve())
-            os.environ["RPS_CLOUD_BASE_URL"] = cloud_url  # Use cloud_url set earlier
-
-            # Read fixture config template
-            fixture_config_content = test_config_file.read_text()
-
-            # Expand environment variables in the config
-            expanded_config = os.path.expandvars(fixture_config_content)
-
-            # Write to workspace
+            config_template = test_config_file.read_text()
+            config_context = {
+                "workspace": str(workspace_dir.resolve()),
+                "cloud_url": cloud_url,
+                "allow_paragraph_splitting": "false",
+            }
+            expanded_config = config_template.format(**config_context)
             workspace_config = workspace_dir / "config.toml"
             workspace_config.write_text(expanded_config)
+            # Store template info in workspace for reconfiguration
+            ws._config_template = config_template
+            ws._config_context = config_context
             bench.ok(f"Using test vault config at {workspace_config}")
         else:
             bench.warn(

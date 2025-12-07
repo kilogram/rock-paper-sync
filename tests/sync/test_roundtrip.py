@@ -71,9 +71,7 @@ Another paragraph here.
         md_doc = parse_markdown_file(md_file)
 
         # Generate .rm file using our generator
-        layout = LayoutConfig(
-            lines_per_page=45, margin_top=50, margin_bottom=50, margin_left=50, margin_right=50
-        )
+        layout = LayoutConfig(margin_top=50, margin_bottom=50, margin_left=50, margin_right=50)
         generator = RemarkableGenerator(layout)
         rm_doc = generator.generate_document(md_doc)
 
@@ -110,7 +108,7 @@ class TestRoundtripMultiPage:
         # Parse and generate
         md_doc = parse_markdown_file(md_file)
         layout = LayoutConfig(
-            lines_per_page=10,  # Force multiple pages
+            # Force multiple pages
             margin_top=50,
             margin_bottom=50,
             margin_left=50,
@@ -146,9 +144,7 @@ class TestRoundtripMultiPage:
 
         # Parse and generate
         md_doc = parse_markdown_file(md_file)
-        layout = LayoutConfig(
-            lines_per_page=45, margin_top=50, margin_bottom=50, margin_left=50, margin_right=50
-        )
+        layout = LayoutConfig(margin_top=50, margin_bottom=50, margin_left=50, margin_right=50)
         generator = RemarkableGenerator(layout)
         rm_doc = generator.generate_document(md_doc)
 
@@ -213,9 +209,7 @@ This has [links](https://example.com) in it.
         assert any(fmt.style == FormatStyle.LINK for fmt in link_block.formatting)
 
         # Generate .rm file
-        layout = LayoutConfig(
-            lines_per_page=45, margin_top=50, margin_bottom=50, margin_left=50, margin_right=50
-        )
+        layout = LayoutConfig(margin_top=50, margin_bottom=50, margin_left=50, margin_right=50)
         generator = RemarkableGenerator(layout)
         rm_doc = generator.generate_document(md_doc)
 
@@ -301,9 +295,7 @@ That's all folks!
         assert BlockType.HORIZONTAL_RULE in block_types
 
         # Generate .rm file
-        layout = LayoutConfig(
-            lines_per_page=45, margin_top=50, margin_bottom=50, margin_left=50, margin_right=50
-        )
+        layout = LayoutConfig(margin_top=50, margin_bottom=50, margin_left=50, margin_right=50)
         generator = RemarkableGenerator(layout)
         rm_doc = generator.generate_document(md_doc)
 
@@ -333,9 +325,7 @@ And math: ∑ ∫ ∂ √ ∞
 
         # Parse and generate
         md_doc = parse_markdown_file(md_file)
-        layout = LayoutConfig(
-            lines_per_page=45, margin_top=50, margin_bottom=50, margin_left=50, margin_right=50
-        )
+        layout = LayoutConfig(margin_top=50, margin_bottom=50, margin_left=50, margin_right=50)
         generator = RemarkableGenerator(layout)
         rm_doc = generator.generate_document(md_doc)
 
@@ -369,9 +359,7 @@ class TestRoundtripMetadata:
 
         # Parse and generate
         md_doc = parse_markdown_file(md_file)
-        layout = LayoutConfig(
-            lines_per_page=45, margin_top=50, margin_bottom=50, margin_left=50, margin_right=50
-        )
+        layout = LayoutConfig(margin_top=50, margin_bottom=50, margin_left=50, margin_right=50)
         generator = RemarkableGenerator(layout)
         rm_doc = generator.generate_document(md_doc)
 
@@ -407,9 +395,7 @@ title: My Awesome Document
         md_doc = parse_markdown_file(md_file)
         assert md_doc.title == "My Awesome Document"
 
-        layout = LayoutConfig(
-            lines_per_page=45, margin_top=50, margin_bottom=50, margin_left=50, margin_right=50
-        )
+        layout = LayoutConfig(margin_top=50, margin_bottom=50, margin_left=50, margin_right=50)
         generator = RemarkableGenerator(layout)
         rm_doc = generator.generate_document(md_doc)
 
@@ -424,9 +410,7 @@ class TestDocumentUpdates:
         """Test that updating a document preserves its UUID."""
         from datetime import datetime
 
-        layout = LayoutConfig(
-            lines_per_page=45, margin_top=50, margin_bottom=50, margin_left=50, margin_right=50
-        )
+        layout = LayoutConfig(margin_top=50, margin_bottom=50, margin_left=50, margin_right=50)
         generator = RemarkableGenerator(layout)
 
         # Create initial document
@@ -471,9 +455,7 @@ class TestDocumentUpdates:
         """Test updating a document that changes page count."""
         from datetime import datetime
 
-        layout = LayoutConfig(
-            lines_per_page=5, margin_top=50, margin_bottom=50, margin_left=50, margin_right=50
-        )
+        layout = LayoutConfig(margin_top=50, margin_bottom=50, margin_left=50, margin_right=50)
         generator = RemarkableGenerator(layout)
 
         # Short document (1 page)
@@ -491,9 +473,9 @@ class TestDocumentUpdates:
         assert len(rm_short.pages) == 1
         assert rm_short.uuid == "fixed-uuid"
 
-        # Long document (multiple pages)
+        # Long document (multiple pages) - need more than LINES_PER_PAGE (28) paragraphs
         long_content = [
-            ContentBlock(BlockType.PARAGRAPH, 0, f"Paragraph {i}", []) for i in range(20)
+            ContentBlock(BlockType.PARAGRAPH, 0, f"Paragraph {i}", []) for i in range(40)
         ]
         md_long = MarkdownDocument(
             path=tmp_path / "test.md",
@@ -512,9 +494,7 @@ class TestDocumentUpdates:
         """Test round-trip with content updates."""
         from datetime import datetime
 
-        layout = LayoutConfig(
-            lines_per_page=45, margin_top=50, margin_bottom=50, margin_left=50, margin_right=50
-        )
+        layout = LayoutConfig(margin_top=50, margin_bottom=50, margin_left=50, margin_right=50)
         generator = RemarkableGenerator(layout)
 
         # Version 1
@@ -571,9 +551,7 @@ class TestDocumentUpdates:
 
         from rock_paper_sync.metadata import generate_document_metadata
 
-        layout = LayoutConfig(
-            lines_per_page=45, margin_top=50, margin_bottom=50, margin_left=50, margin_right=50
-        )
+        layout = LayoutConfig(margin_top=50, margin_bottom=50, margin_left=50, margin_right=50)
         generator = RemarkableGenerator(layout)
 
         md_doc = MarkdownDocument(

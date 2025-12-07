@@ -31,7 +31,6 @@ from rock_paper_sync.parser import (
 def layout_config() -> LayoutConfig:
     """Standard layout configuration for testing."""
     return LayoutConfig(
-        lines_per_page=45,
         margin_top=50,
         margin_bottom=50,
         margin_left=50,
@@ -180,10 +179,12 @@ class TestPagination:
 
     def test_header_near_bottom_starts_new_page(self, generator: RemarkableGenerator) -> None:
         """Headers near page bottom should start new page."""
+        from rock_paper_sync.layout.constants import LINES_PER_PAGE
+
         blocks = []
 
-        # Fill almost a full page
-        for i in range(40):
+        # Fill almost a full page (leave room for ~2 lines)
+        for i in range(LINES_PER_PAGE - 2):
             blocks.append(
                 ContentBlock(
                     type=BlockType.PARAGRAPH,
@@ -704,9 +705,8 @@ class TestParagraphSplitting:
 
     @pytest.fixture
     def splitting_config(self) -> LayoutConfig:
-        """Layout config with paragraph splitting enabled and small page."""
+        """Layout config with paragraph splitting enabled."""
         return LayoutConfig(
-            lines_per_page=10,  # Small page to force splits
             margin_top=50,
             margin_bottom=50,
             margin_left=50,
@@ -858,9 +858,9 @@ class TestParagraphSplitting:
         # First paragraph: short
         para1 = "This is a short paragraph."
 
-        # Second paragraph: long (will split)
+        # Second paragraph: long (will split) - needs to span more than one page
         words = "Long text that wraps many times. "
-        para2 = words * 30
+        para2 = words * 60  # ~2040 chars = ~40 lines > LINES_PER_PAGE
 
         # Third paragraph: short
         para3 = "Another short one."
@@ -887,7 +887,7 @@ class TestParagraphSplitting:
     ) -> None:
         """Generated .rm files should be valid even with split paragraphs."""
         words = "Content that spans pages. "
-        long_text = words * 40
+        long_text = words * 80  # ~2080 chars = ~40 lines > LINES_PER_PAGE
 
         # Create markdown file and parse it to get proper MarkdownDocument
         md_file = tmp_path / "split_test.md"

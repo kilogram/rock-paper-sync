@@ -9,7 +9,6 @@ exclude_patterns = []
 debounce_seconds = 5
 
 [layout]
-lines_per_page = 28
 margin_top = 50
 margin_bottom = 50
 margin_left = 50

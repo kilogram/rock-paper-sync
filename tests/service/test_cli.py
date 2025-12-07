@@ -58,7 +58,6 @@ debounce_seconds = 1
 base_url = "http://localhost:3000"
 
 [layout]
-lines_per_page = 45
 margin_top = 50
 margin_bottom = 50
 margin_left = 50
@@ -340,7 +339,6 @@ exclude_patterns = []
 debounce_seconds = 1
 
 [layout]
-lines_per_page = 45
 margin_top = 50
 margin_bottom = 50
 margin_left = 50

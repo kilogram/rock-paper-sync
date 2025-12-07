@@ -188,7 +188,6 @@ class TestTextBlockExtraction:
 def make_layout_config():
     """Create a default LayoutConfig for testing."""
     return LayoutConfig(
-        lines_per_page=45,
         margin_top=50,
         margin_bottom=50,
         margin_left=50,

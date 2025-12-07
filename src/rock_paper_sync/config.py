@@ -48,21 +48,22 @@ class SyncConfig:
 class LayoutConfig:
     """Page layout configuration.
 
+    Lines per page is calculated from page geometry by the layout engine.
+    Margins are configurable with sane defaults.
+
     Attributes:
-        lines_per_page: Maximum lines per page
-        margin_top: Top margin in pixels (used for text positioning)
-        margin_bottom: Bottom margin in pixels (used for text positioning)
-        margin_left: Left margin in pixels (used for text positioning)
-        margin_right: Right margin in pixels (used for text positioning)
+        margin_top: Top margin in pixels
+        margin_bottom: Bottom margin in pixels
+        margin_left: Left margin in pixels
+        margin_right: Right margin in pixels
         allow_paragraph_splitting: Whether to allow paragraphs to split across pages
-                                   (True = better page utilization, False = atomic paragraphs, default: False)
+                                   (True = better page utilization, False = atomic paragraphs)
     """
 
-    lines_per_page: int
-    margin_top: int
-    margin_bottom: int
-    margin_left: int
-    margin_right: int
+    margin_top: int = 50
+    margin_bottom: int = 50
+    margin_left: int = 50
+    margin_right: int = 50
     allow_paragraph_splitting: bool = False
 
 
@@ -212,12 +213,8 @@ def load_config(config_path: Path) -> AppConfig:
         sync = config_dict.get("sync", {})
         debounce_seconds = sync.get("debounce_seconds", 5) if sync else 5
 
-        # Extract layout section
+        # Layout section is optional - all settings have defaults
         layout = config_dict.get("layout", {})
-        if not layout:
-            raise ConfigError("Missing required [layout] section in config")
-
-        lines_per_page = layout.get("lines_per_page", 28)
         margin_top = layout.get("margin_top", 50)
         margin_bottom = layout.get("margin_bottom", 50)
         margin_left = layout.get("margin_left", 50)
@@ -243,7 +240,6 @@ def load_config(config_path: Path) -> AppConfig:
         )
 
         layout_config = LayoutConfig(
-            lines_per_page=lines_per_page,
             margin_top=margin_top,
             margin_bottom=margin_bottom,
             margin_left=margin_left,
@@ -404,9 +400,6 @@ def validate_config(config: AppConfig) -> None:
     # Validate numeric values are positive
     if config.sync.debounce_seconds < 0:
         raise ConfigError(f"debounce_seconds must be positive, got: {config.sync.debounce_seconds}")
-
-    if config.layout.lines_per_page <= 0:
-        raise ConfigError(f"lines_per_page must be positive, got: {config.layout.lines_per_page}")
 
     for margin_name in ["margin_top", "margin_bottom", "margin_left", "margin_right"]:
         margin_value = getattr(config.layout, margin_name)

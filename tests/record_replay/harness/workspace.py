@@ -97,7 +97,7 @@ level = "debug"
 file = "{self.log_dir}/sync.log"
 
 [layout]
-lines_per_page = 28
+# Lines per page is calculated from device geometry
 
 [ocr]
 enabled = false
@@ -112,6 +112,38 @@ include_patterns = ["**/*.md"]
 exclude_patterns = [".state/**", "logs/**", ".cache/**"]
 """
         self.config_file.write_text(config)
+
+    def set_layout_config(self, allow_paragraph_splitting: bool = False) -> None:
+        """Update layout settings in the config file.
+
+        This uses the config template stored by conftest.py to regenerate
+        the config with updated layout settings.
+
+        Args:
+            allow_paragraph_splitting: Whether paragraphs can split across pages
+        """
+        if not hasattr(self, "_config_template") or not hasattr(self, "_config_context"):
+            # Fallback: just rewrite the config with a simple substitution
+            if self.config_file.exists():
+                content = self.config_file.read_text()
+                # Replace the allow_paragraph_splitting line
+                import re
+
+                content = re.sub(
+                    r"allow_paragraph_splitting\s*=\s*(true|false)",
+                    f"allow_paragraph_splitting = {str(allow_paragraph_splitting).lower()}",
+                    content,
+                )
+                self.config_file.write_text(content)
+            return
+
+        # Update context and regenerate config from template
+        self._config_context["allow_paragraph_splitting"] = str(allow_paragraph_splitting).lower()
+        expanded_config = self._config_template.format(**self._config_context)
+        self.config_file.write_text(expanded_config)
+        self.bench.ok(
+            f"Updated layout config: allow_paragraph_splitting={allow_paragraph_splitting}"
+        )
 
     def reset(self) -> None:
         """Reset workspace state (unsync and clear state)."""

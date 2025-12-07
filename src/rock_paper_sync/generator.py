@@ -43,6 +43,7 @@ from .layout import WordWrapLayoutEngine
 from .layout.constants import (
     CHAR_WIDTH,
     LINE_HEIGHT,
+    LINES_PER_PAGE,
     PAGE_HEIGHT,
     PAGE_WIDTH,
     TEXT_POS_X,
@@ -1489,7 +1490,7 @@ class RemarkableGenerator:
 
             # Check if header should start new page (avoid orphan headers)
             if block.type == BlockType.HEADER and current_page:
-                remaining_space = self.layout.lines_per_page - current_lines
+                remaining_space = LINES_PER_PAGE - current_lines
                 if remaining_space < 10:  # Less than 10 lines remaining
                     pages.append(current_page)
                     current_page = []
@@ -1498,19 +1499,17 @@ class RemarkableGenerator:
                     block.page_y_start = y_position
 
             # Check if block fits on current page
-            if current_lines + block_lines > self.layout.lines_per_page:
+            if current_lines + block_lines > LINES_PER_PAGE:
                 # Block doesn't fit on current page
                 is_paragraph = block.type == BlockType.PARAGRAPH
-                is_oversized = block_lines > self.layout.lines_per_page
+                is_oversized = block_lines > LINES_PER_PAGE
                 should_split = is_paragraph and (
                     self.layout.allow_paragraph_splitting or is_oversized
                 )
 
                 if should_split:
                     # Split paragraph using layout engine
-                    chunks = self.layout_engine.split_for_pages(
-                        block.text, self.layout.lines_per_page
-                    )
+                    chunks = self.layout_engine.split_for_pages(block.text, LINES_PER_PAGE)
 
                     for i, chunk_text in enumerate(chunks):
                         chunk_lines = len(
@@ -1518,7 +1517,7 @@ class RemarkableGenerator:
                         )
 
                         # Start new page if needed (except for first chunk which may fit)
-                        if i > 0 or current_lines + chunk_lines > self.layout.lines_per_page:
+                        if i > 0 or current_lines + chunk_lines > LINES_PER_PAGE:
                             if current_page:
                                 pages.append(current_page)
                             current_page = []
@@ -1553,7 +1552,7 @@ class RemarkableGenerator:
 
         logger.info(
             f"Paginated {len(blocks)} blocks into {len(pages)} page(s), "
-            f"target lines per page: {self.layout.lines_per_page}"
+            f"target lines per page: {LINES_PER_PAGE}"
         )
         for i, page_blocks in enumerate(pages, 1):
             total_lines = sum(self.estimate_block_lines(block) for block in page_blocks)

@@ -701,7 +701,6 @@ include_patterns = ["**/*.md"]
 base_url = "http://localhost:3000"
 
 [layout]
-lines_per_page = 45
 
 [logging]
 level = "info"

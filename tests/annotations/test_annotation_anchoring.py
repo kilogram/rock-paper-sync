@@ -420,7 +420,6 @@ class TestGeneratorAnchorAdjustment:
         from rock_paper_sync.generator import RemarkableGenerator
 
         layout_config = LayoutConfig(
-            lines_per_page=45,
             margin_top=50,
             margin_bottom=50,
             margin_left=50,

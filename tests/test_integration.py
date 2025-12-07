@@ -48,7 +48,6 @@ def integration_env(tmp_path: Path):
         ),
         cloud=CloudConfig(base_url="http://localhost:3000"),
         layout=LayoutConfig(
-            lines_per_page=45,
             margin_top=50,
             margin_bottom=50,
             margin_left=50,
@@ -334,9 +333,10 @@ class TestComplexMarkdownScenarios:
         assert len(doc.content) > 100  # 1 header + 50 section headers + 100 paragraphs
 
         # Estimate pages needed (rough calculation)
-        config = integration_env["config"]
+        from rock_paper_sync.layout.constants import LINES_PER_PAGE
+
         total_blocks = len(doc.content)
-        estimated_pages = max(1, total_blocks // config.layout.lines_per_page)
+        estimated_pages = max(1, total_blocks // LINES_PER_PAGE)
 
         assert estimated_pages >= 3  # Should need multiple pages
 

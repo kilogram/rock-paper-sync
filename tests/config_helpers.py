@@ -39,7 +39,6 @@ def make_app_config(
     vaults: list[VaultConfig] | None = None,
     state_database: Path | None = None,
     debounce_seconds: float = 1.0,
-    lines_per_page: int = 45,
     margin_top: int = 50,
     margin_bottom: int = 50,
     margin_left: int = 50,
@@ -48,6 +47,7 @@ def make_app_config(
     log_file: Path | None = None,
     base_url: str = "http://localhost:3000",
     ocr_enabled: bool = False,
+    allow_paragraph_splitting: bool = False,
     **layout_overrides,
 ) -> AppConfig:
     """Create an AppConfig with sensible defaults.
@@ -59,12 +59,12 @@ def make_app_config(
         vaults: List of vault configs (defaults to single test vault)
         state_database: Path to state DB (defaults to tmp_path/state.db)
         debounce_seconds: Sync debounce delay
-        lines_per_page: Lines per page in layout
         margin_*: Page margins
         log_level: Logging level
         log_file: Log file path (defaults to tmp_path/test.log)
         base_url: Cloud API URL
         ocr_enabled: Whether OCR is enabled
+        allow_paragraph_splitting: Whether paragraphs can split across pages
         **layout_overrides: Additional layout overrides
 
     Returns:
@@ -91,11 +91,11 @@ def make_app_config(
         ),
         cloud=CloudConfig(base_url=base_url),
         layout=LayoutConfig(
-            lines_per_page=lines_per_page,
             margin_top=margin_top,
             margin_bottom=margin_bottom,
             margin_left=margin_left,
             margin_right=margin_right,
+            allow_paragraph_splitting=allow_paragraph_splitting,
         ),
         log_level=log_level,
         log_file=log_file or tmp_path / "test.log",

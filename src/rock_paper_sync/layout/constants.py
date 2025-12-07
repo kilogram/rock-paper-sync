@@ -77,10 +77,14 @@ class LayoutConstants:
     # Pagination
     # ==========================================================================
 
-    #: Default lines per page
-    #: Based on: (PAGE_HEIGHT - TEXT_POS_Y - bottom_margin) / LINE_HEIGHT
-    #: Conservative value with safety margin
-    DEFAULT_LINES_PER_PAGE: Final[int] = 26
+    #: Bottom margin in pixels (space below last line of text)
+    BOTTOM_MARGIN: Final[float] = 100.0
+
+    #: Available height for text content
+    _TEXT_AREA_HEIGHT: Final[float] = PAGE_HEIGHT - TEXT_POS_Y - BOTTOM_MARGIN  # 1678.0
+
+    #: Calculated lines per page (with 1 line safety margin)
+    LINES_PER_PAGE: Final[int] = int(_TEXT_AREA_HEIGHT / LINE_HEIGHT) - 1  # 28
 
     # ==========================================================================
     # Coordinate Transformation
@@ -122,7 +126,8 @@ TEXT_POS_Y = LayoutConstants.TEXT_POS_Y
 LINE_HEIGHT = LayoutConstants.LINE_HEIGHT
 CHAR_WIDTH = LayoutConstants.CHAR_WIDTH
 CHARS_PER_LINE = LayoutConstants.CHARS_PER_LINE
-DEFAULT_LINES_PER_PAGE = LayoutConstants.DEFAULT_LINES_PER_PAGE
+BOTTOM_MARGIN = LayoutConstants.BOTTOM_MARGIN
+LINES_PER_PAGE = LayoutConstants.LINES_PER_PAGE
 ROOT_LAYER_ID = LayoutConstants.ROOT_LAYER_ID
 NEGATIVE_Y_OFFSET = LayoutConstants.NEGATIVE_Y_OFFSET
 BASELINE_OFFSET = LayoutConstants.BASELINE_OFFSET

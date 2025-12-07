@@ -72,7 +72,7 @@ class TestLoadConfig:
         # Check default values
         assert vault.include_patterns == ["**/*.md"]
         assert config.sync.debounce_seconds == 5
-        assert config.layout.lines_per_page == 45
+        assert config.layout.margin_top == 50  # Lines per page is now calculated, not configured
         assert config.log_level == "info"
 
     def test_load_missing_file(self, tmp_path: Path) -> None:
@@ -118,7 +118,6 @@ include_patterns = ["**/*.md"]
 base_url = "http://localhost:3000"
 
 [layout]
-lines_per_page = 45
 margin_top = 50
 margin_bottom = 50
 margin_left = 50
@@ -159,7 +158,6 @@ class TestValidateConfig:
             ),
             cloud=CloudConfig(base_url="http://localhost:3000"),
             layout=LayoutConfig(
-                lines_per_page=45,
                 margin_top=50,
                 margin_bottom=50,
                 margin_left=50,
@@ -199,7 +197,6 @@ class TestValidateConfig:
             ),
             cloud=CloudConfig(base_url="http://localhost:3000"),
             layout=LayoutConfig(
-                lines_per_page=45,
                 margin_top=50,
                 margin_bottom=50,
                 margin_left=50,
@@ -241,13 +238,6 @@ class TestValidateConfig:
         config = make_app_config(tmp_path, debounce_seconds=-1)
 
         with pytest.raises(ConfigError, match="debounce_seconds must be positive"):
-            validate_config(config)
-
-    def test_validate_negative_lines_per_page(self, tmp_path: Path) -> None:
-        """Test that non-positive lines_per_page fails validation."""
-        config = make_app_config(tmp_path, lines_per_page=0)
-
-        with pytest.raises(ConfigError, match="lines_per_page must be positive"):
             validate_config(config)
 
     @pytest.mark.parametrize(
