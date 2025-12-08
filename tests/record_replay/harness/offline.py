@@ -3,10 +3,14 @@
 Replays pre-recorded testdata by injecting .rm files into rmfakecloud,
 simulating device annotation sync without requiring a real reMarkable.
 
-Multi-Phase Support:
-    - Loads phases from testdata (initial, post_sync, final)
-    - Restores vault state at each phase
-    - Advances through phases as sync operations complete
+Trip-Based Format (New):
+    - Loads trips from testdata (1, 2, ..., golden)
+    - Restores vault state at each trip
+    - Injects annotations from trip data
+
+Legacy Phase Format (Still Supported):
+    - Loads phases from testdata (initial, post_upload, ...)
+    - Skips diagnostic phases during replay
 """
 
 import shutil
@@ -14,7 +18,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .protocol import DeviceInteractionManager, DocumentState, derive_test_id
-from .testdata import PhaseData, TestdataStore
+from .testdata import PhaseData, TestdataStore, TripData
 
 if TYPE_CHECKING:
     from .logging import Bench
@@ -27,6 +31,8 @@ class OfflineEmulator(DeviceInteractionManager):
     Replays pre-recorded .rm files by injecting them into rmfakecloud
     as if a device had synced them. This enables running device tests
     without a physical reMarkable.
+
+    Supports both trip-based format (new) and legacy phase format.
 
     Requirements:
     - rmfakecloud running (e.g., docker run -p 3000:3000 ddvk/rmfakecloud)
@@ -69,12 +75,19 @@ class OfflineEmulator(DeviceInteractionManager):
         self.bench = bench
         self._current_test_id: str | None = None
 
-        # Multi-phase support (only format supported)
+        # Trip-based format (new)
+        self._trips: list[TripData] = []
+        self._current_trip_idx: int = 0
+        self._is_trip_format: bool = False
+
+        # Legacy phase format
         self._current_phase: int = 0
         self._phases: list[PhaseData] = []
 
     def load_test(self, test_id: str) -> None:
-        """Load multi-phase test data.
+        """Load test data (trip-based or legacy phase format).
+
+        Automatically detects format and loads appropriately.
 
         Args:
             test_id: Test identifier to load
@@ -83,16 +96,29 @@ class OfflineEmulator(DeviceInteractionManager):
             FileNotFoundError: If test not found
         """
         self._current_test_id = test_id
-        self._current_phase = 0
 
-        # Load multi-phase data (only format supported)
-        self._phases = self.testdata_store.load_phases(test_id)
+        # Try trip-based format first (new)
+        if self.testdata_store.is_trip_format(test_id):
+            self._is_trip_format = True
+            self._trips = self.testdata_store.load_trips(test_id)
+            self._current_trip_idx = 0
 
-        self.bench.ok(f"Loaded test artifacts: {test_id} ({len(self._phases)} phases)")
+            self.bench.ok(f"Loaded test artifacts: {test_id} ({len(self._trips)} trips)")
 
-        # Restore initial vault state from phase 0
-        if self._phases:
-            self._restore_phase(0)
+            # Restore initial vault state from trip 1
+            if self._trips:
+                self._restore_trip(0)
+        else:
+            # Fall back to legacy phase format
+            self._is_trip_format = False
+            self._current_phase = 0
+            self._phases = self.testdata_store.load_phases(test_id)
+
+            self.bench.ok(f"Loaded test artifacts: {test_id} ({len(self._phases)} phases)")
+
+            # Restore initial vault state from phase 0
+            if self._phases:
+                self._restore_phase(0)
 
     def start_test(self, test_id: str, description: str = "") -> None:
         """Begin test with the specified test_id.
@@ -148,6 +174,37 @@ class OfflineEmulator(DeviceInteractionManager):
         """
         # No observation needed in offline mode
         pass
+
+    def compare_with_golden(
+        self,
+        doc_uuid: str,
+        markdown_path: Path,
+        observation: str,
+        golden_prompt: str,
+    ) -> tuple[DocumentState, DocumentState]:
+        """Load re-anchored and golden states from testdata.
+
+        In offline mode, both states are loaded from pre-recorded testdata.
+
+        Args:
+            doc_uuid: Document UUID to get re-anchored state for
+            markdown_path: Ignored (used only for online recording)
+            observation: Ignored (used only for online user prompt)
+            golden_prompt: Ignored (used only for online user prompt)
+
+        Returns:
+            Tuple of (reanchored_state, golden_state)
+
+        Raises:
+            FileNotFoundError: If no golden data exists in testdata
+        """
+        # Get current re-anchored state from cloud
+        reanchored_state = self.get_document_state(doc_uuid)
+
+        # Load golden state from testdata
+        golden_state = self.upload_golden_document(markdown_path, golden_prompt)
+
+        return reanchored_state, golden_state
 
     def cleanup(self) -> None:
         """Cleanup after test (silent for offline tests).
@@ -207,13 +264,65 @@ class OfflineEmulator(DeviceInteractionManager):
             phase = self._phases[self._current_phase]
             self.bench.observe(f"Advanced to phase {self._current_phase}: {phase.phase_name}")
 
+    def _restore_trip(self, trip_idx: int) -> None:
+        """Restore vault to a specific trip state.
+
+        Clears the workspace and restores files from the trip's vault directory.
+
+        Args:
+            trip_idx: Index into self._trips list
+
+        Raises:
+            ValueError: If trip not found
+        """
+        if trip_idx >= len(self._trips):
+            raise ValueError(f"Trip index {trip_idx} not found (have {len(self._trips)} trips)")
+
+        trip = self._trips[trip_idx]
+        if not trip.vault_path or not trip.vault_path.exists():
+            self.bench.warn(f"Trip {trip.trip_name} vault not found")
+            return
+
+        # Clear workspace (preserve .state, .cache, logs, config, .test_config)
+        workspace_dir = self.workspace.workspace_dir
+        for item in workspace_dir.iterdir():
+            if item.name not in [".state", ".cache", "logs", "config.toml", ".test_config"]:
+                if item.is_file():
+                    item.unlink()
+                elif item.is_dir():
+                    shutil.rmtree(item)
+
+        # Restore vault from trip
+        for item in trip.vault_path.iterdir():
+            if item.is_file():
+                shutil.copy(item, workspace_dir / item.name)
+            elif item.is_dir():
+                shutil.copytree(item, workspace_dir / item.name)
+
+        self.bench.ok(f"Restored vault to trip {trip.trip_name}")
+
+    def _advance_trip(self) -> None:
+        """Advance to next trip.
+
+        Moves to the next trip and restores its vault state if available.
+        """
+        self._current_trip_idx += 1
+        if self._current_trip_idx < len(self._trips):
+            trip = self._trips[self._current_trip_idx]
+            # Skip golden trip in normal advancement
+            if trip.is_golden:
+                self.bench.observe("Skipping golden trip in normal advancement")
+                return
+            self.bench.observe(f"Advanced to trip {trip.trip_name}")
+            # Restore vault if this trip has one
+            if trip.vault_path and trip.vault_path.exists():
+                self._restore_trip(self._current_trip_idx)
+
     def upload_document(self, markdown_path: Path) -> str:
         """Upload document via normal sync.
 
-        Advances through phases to match online mode:
-        - Skips phase_0 (initial) - pre-sync state
-        - Skips phase_1 (post_upload) - uploaded rm files
-        This aligns with the online harness which captures both phases.
+        For trip-based format: Just uploads, no phase skipping needed.
+        For legacy phase format: Advances past phase_0 and phase_1.
 
         Args:
             markdown_path: Path to markdown file
@@ -232,16 +341,18 @@ class OfflineEmulator(DeviceInteractionManager):
 
         self.bench.ok(f"Uploaded document to rmfakecloud: {doc_uuid}")
 
-        # Advance past phase_0 (initial) and phase_1 (post_upload)
-        # to match online mode which captures both phases during upload
-        if self._phases:
-            # Check if we have both initial and post_upload phases
-            if len(self._phases) > 1 and self._phases[1].phase_name == "post_upload":
-                self._advance_phase()  # Skip phase_0 -> phase_1
-                self._advance_phase()  # Skip phase_1 -> phase_2
-            else:
-                # Legacy format: just advance once
-                self._advance_phase()
+        if self._is_trip_format:
+            # Trip format: no phase skipping needed
+            # First trip's vault was already restored in load_test()
+            pass
+        else:
+            # Legacy phase format: advance past phase_0 (initial) and phase_1 (post_upload)
+            if self._phases:
+                if len(self._phases) > 1 and self._phases[1].phase_name == "post_upload":
+                    self._advance_phase()  # Skip phase_0 -> phase_1
+                    self._advance_phase()  # Skip phase_1 -> phase_2
+                else:
+                    self._advance_phase()
 
         return doc_uuid
 
@@ -251,9 +362,6 @@ class OfflineEmulator(DeviceInteractionManager):
         Instead of waiting for user input, this injects the pre-recorded
         .rm files from testdata into rmfakecloud, then syncs to download
         them as if they came from a real device.
-
-        In multi-phase mode, uses .rm files from the current or next phase.
-        Advances to next phase after injection and sync.
 
         Args:
             doc_uuid: Document UUID
@@ -265,23 +373,39 @@ class OfflineEmulator(DeviceInteractionManager):
         Raises:
             RuntimeError: If no test loaded or injection fails
         """
-        if not self._phases:
-            raise RuntimeError("No test loaded - call load_test() or start_test() first")
-
-        # Find phase with rm_files starting from current phase
         rm_files: dict[str, bytes] = {}
-        for phase in self._phases[self._current_phase :]:
-            if phase.rm_files:
-                rm_files = phase.rm_files
-                self.bench.observe(
-                    f"Using .rm files from phase {phase.phase_number}: {phase.phase_name}"
-                )
-                break
+
+        if self._is_trip_format:
+            # Trip-based format: get annotations from current trip
+            if not self._trips:
+                raise RuntimeError("No test loaded - call load_test() or start_test() first")
+
+            # Find current trip with annotations
+            if self._current_trip_idx < len(self._trips):
+                trip = self._trips[self._current_trip_idx]
+                if trip.has_annotations and trip.annotations:
+                    rm_files = trip.annotations.rm_files
+                    self.bench.observe(f"Using annotations from trip {trip.trip_name}")
+        else:
+            # Legacy phase format
+            if not self._phases:
+                raise RuntimeError("No test loaded - call load_test() or start_test() first")
+
+            # Find phase with rm_files starting from current phase
+            for phase in self._phases[self._current_phase :]:
+                if phase.rm_files:
+                    rm_files = phase.rm_files
+                    self.bench.observe(
+                        f"Using .rm files from phase {phase.phase_number}: {phase.phase_name}"
+                    )
+                    break
 
         if not rm_files:
             self.bench.warn("No .rm files found - skipping injection")
-            # Still advance phase
-            if self._phases:
+            # Still advance
+            if self._is_trip_format:
+                self._advance_trip()
+            else:
                 self._advance_phase()
             return self.get_document_state(doc_uuid)
 
@@ -291,8 +415,10 @@ class OfflineEmulator(DeviceInteractionManager):
         # Sync to download the injected annotations
         self.workspace.run_sync("Download injected annotations")
 
-        # Advance to next phase in multi-phase mode
-        if self._phases:
+        # Advance to next trip/phase
+        if self._is_trip_format:
+            self._advance_trip()
+        else:
             self._advance_phase()
 
         state = self.get_document_state(doc_uuid)
@@ -320,9 +446,9 @@ class OfflineEmulator(DeviceInteractionManager):
         pass
 
     def upload_golden_document(self, markdown_path: Path, prompt: str) -> DocumentState:
-        """Load pre-recorded golden phase for device-native ground truth.
+        """Load pre-recorded golden data for device-native ground truth.
 
-        In offline mode, this loads the golden_native phase from testdata
+        In offline mode, this loads the golden trip/phase from testdata
         that was recorded during online capture.
 
         Args:
@@ -330,47 +456,77 @@ class OfflineEmulator(DeviceInteractionManager):
             prompt: Ignored (used only for online user prompt)
 
         Returns:
-            DocumentState with device-native annotations from golden phase
+            DocumentState with device-native annotations from golden data
 
         Raises:
-            FileNotFoundError: If no golden_native phase exists in testdata
+            FileNotFoundError: If no golden data exists in testdata
         """
-        if not self._phases:
-            raise RuntimeError("No test loaded - call load_test() or start_test() first")
+        if self._is_trip_format:
+            # Trip-based format: find golden trip
+            if not self._trips:
+                raise RuntimeError("No test loaded - call load_test() or start_test() first")
 
-        # Find golden_native phase
-        golden_phase = None
-        for phase in self._phases:
-            if phase.phase_name == "golden_native":
-                golden_phase = phase
-                break
+            golden_trip = None
+            for trip in self._trips:
+                if trip.is_golden:
+                    golden_trip = trip
+                    break
 
-        if golden_phase is None:
-            raise FileNotFoundError(
-                f"No golden_native phase in testdata for test '{self._current_test_id}'. "
-                "Re-run with --online -s to record golden ground truth."
+            if golden_trip is None:
+                raise FileNotFoundError(
+                    f"No golden trip in testdata for test '{self._current_test_id}'. "
+                    "Re-run with --online -s to record golden ground truth."
+                )
+
+            if not golden_trip.annotations:
+                raise RuntimeError("Golden trip has no annotations")
+
+            self.bench.ok(
+                f"Loaded golden trip: {len(golden_trip.annotations.rm_files)} .rm file(s)"
             )
 
-        # Get golden document UUID from device_state
-        golden_uuid = (
-            golden_phase.device_state.get("doc_uuid") if golden_phase.device_state else None
-        )
-        if not golden_uuid:
-            raise RuntimeError("Golden phase has no doc_uuid in device_state")
+            return DocumentState(
+                doc_uuid=golden_trip.annotations.doc_uuid,
+                page_uuids=golden_trip.annotations.page_uuids,
+                rm_files=golden_trip.annotations.rm_files,
+                has_annotations=len(golden_trip.annotations.rm_files) > 0,
+            )
+        else:
+            # Legacy phase format: find golden_native phase
+            if not self._phases:
+                raise RuntimeError("No test loaded - call load_test() or start_test() first")
 
-        page_uuids = golden_phase.device_state.get("page_uuids", [])
-        rm_files = golden_phase.rm_files or {}
+            golden_phase = None
+            for phase in self._phases:
+                if phase.phase_name == "golden_native":
+                    golden_phase = phase
+                    break
 
-        self.bench.ok(
-            f"Loaded golden phase: {len(rm_files)} .rm file(s) " f"(doc_uuid: {golden_uuid[:8]})"
-        )
+            if golden_phase is None:
+                raise FileNotFoundError(
+                    f"No golden_native phase in testdata for test '{self._current_test_id}'. "
+                    "Re-run with --online -s to record golden ground truth."
+                )
 
-        return DocumentState(
-            doc_uuid=golden_uuid,
-            page_uuids=page_uuids,
-            rm_files=rm_files,
-            has_annotations=len(rm_files) > 0,
-        )
+            golden_uuid = (
+                golden_phase.device_state.get("doc_uuid") if golden_phase.device_state else None
+            )
+            if not golden_uuid:
+                raise RuntimeError("Golden phase has no doc_uuid in device_state")
+
+            page_uuids = golden_phase.device_state.get("page_uuids", [])
+            rm_files = golden_phase.rm_files or {}
+
+            self.bench.ok(
+                f"Loaded golden phase: {len(rm_files)} .rm file(s) (doc_uuid: {golden_uuid[:8]})"
+            )
+
+            return DocumentState(
+                doc_uuid=golden_uuid,
+                page_uuids=page_uuids,
+                rm_files=rm_files,
+                has_annotations=len(rm_files) > 0,
+            )
 
     def get_document_state(self, doc_uuid: str) -> DocumentState:
         """Get current document state by downloading fresh from cloud.

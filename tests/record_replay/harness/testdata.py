@@ -3,24 +3,30 @@
 Manages test artifacts (source markdown, .rm files, manifests) that enable
 offline replay of device tests without a physical reMarkable device.
 
-Directory Structure (Multi-Phase):
-    fixtures/testdata/
-    └── {test_id}/
-        ├── manifest.json       # Enhanced with phases array
-        ├── phases/             # Multi-phase structure
-        │   ├── phase_0_initial/
-        │   │   ├── vault_snapshot/
-        │   │   └── phase_info.json
-        │   ├── phase_1_post_sync/
-        │   │   ├── vault_snapshot/
-        │   │   ├── device_state.json
-        │   │   ├── rm_files/
-        │   │   └── phase_info.json
-        │   └── phase_2_final/
-        │       ├── vault_snapshot/
-        │       └── phase_info.json
-        └── goldens/            # Co-located golden references
-            └── final_vault/
+Directory Structure (Trip-Based - New Format):
+    testdata/{test_id}/
+    ├── manifest.json           # Test metadata with trips array
+    ├── trips/
+    │   ├── 1/                  # Trip 1 (first human interaction)
+    │   │   ├── vault/          # Vault state to restore for replay
+    │   │   ├── annotations/    # User annotations (for replay)
+    │   │   │   ├── rm_files/
+    │   │   │   └── metadata.json
+    │   │   └── _diagnostic/    # Debug-only data (underscore = internal)
+    │   │       └── uploaded_rm/
+    │   ├── 2/                  # Trip 2 (after modification)
+    │   │   ├── vault/
+    │   │   └── annotations/
+    │   └── golden/             # Device-native ground truth
+    │       └── annotations/
+    └── source.md               # Original fixture (for reference)
+
+Legacy Directory Structure (Phase-Based - Still Supported):
+    testdata/{test_id}/
+    └── phases/
+        ├── phase_0_initial/
+        ├── phase_1_post_upload/
+        └── phase_2_*/
 """
 
 import json
@@ -48,7 +54,7 @@ class PhaseData:
 
 @dataclass
 class PhaseInfo:
-    """Metadata stored in phase_info.json for each phase."""
+    """Metadata stored in phase_info.json for each phase (legacy format)."""
 
     phase_number: int
     phase_name: str
@@ -81,6 +87,112 @@ class PhaseInfo:
             description=data.get("description", ""),
             vault_hash=data.get("vault_hash", ""),
             device_state=data.get("device_state"),
+        )
+
+
+# =========================================================================
+# Trip-Based Data Structures (New Format)
+# =========================================================================
+
+
+@dataclass
+class TripAnnotations:
+    """Annotation data captured during a trip.
+
+    Contains everything needed to replay user annotations in offline mode.
+    """
+
+    rm_files: dict[str, bytes]  # page_uuid -> .rm data
+    doc_uuid: str
+    page_uuids: list[str]
+    timestamp: str = ""  # ISO format
+
+    def to_metadata(self) -> dict:
+        """Serialize to metadata.json format."""
+        return {
+            "doc_uuid": self.doc_uuid,
+            "page_uuids": self.page_uuids,
+            "rm_files_count": len(self.rm_files),
+            "has_annotations": len(self.rm_files) > 0,
+            "timestamp": self.timestamp,
+        }
+
+    @classmethod
+    def from_dir(cls, annotations_dir: Path) -> "TripAnnotations":
+        """Load from annotations/ directory."""
+        rm_files: dict[str, bytes] = {}
+        rm_dir = annotations_dir / "rm_files"
+        if rm_dir.exists():
+            for rm_file in rm_dir.glob("*.rm"):
+                rm_files[rm_file.stem] = rm_file.read_bytes()
+
+        metadata_file = annotations_dir / "metadata.json"
+        if metadata_file.exists():
+            metadata = json.loads(metadata_file.read_text())
+            return cls(
+                rm_files=rm_files,
+                doc_uuid=metadata.get("doc_uuid", ""),
+                page_uuids=metadata.get("page_uuids", []),
+                timestamp=metadata.get("timestamp", ""),
+            )
+        else:
+            return cls(
+                rm_files=rm_files,
+                doc_uuid="",
+                page_uuids=list(rm_files.keys()),
+                timestamp="",
+            )
+
+
+@dataclass
+class TripData:
+    """Complete data for a single trip (human interaction cycle).
+
+    A trip represents one cycle of: upload/sync -> user annotates -> sync down.
+    Trip numbers are 1-indexed (human-readable).
+    """
+
+    trip_number: int  # 1-indexed (or 0 for "golden")
+    trip_name: str  # "1", "2", or "golden"
+    vault_path: Path | None  # Path to vault/ directory (for replay)
+    annotations: TripAnnotations | None  # User annotations
+    diagnostic_path: Path | None = None  # Path to _diagnostic/ (debug only)
+    is_golden: bool = False
+
+    @property
+    def has_annotations(self) -> bool:
+        """Check if this trip has annotation data."""
+        return self.annotations is not None and len(self.annotations.rm_files) > 0
+
+    @classmethod
+    def from_dir(cls, trip_dir: Path, trip_name: str) -> "TripData":
+        """Load trip data from directory."""
+        is_golden = trip_name == "golden"
+        trip_number = 0 if is_golden else int(trip_name)
+
+        # Load vault path
+        vault_path = trip_dir / "vault"
+        if not vault_path.exists():
+            vault_path = None
+
+        # Load annotations
+        annotations_dir = trip_dir / "annotations"
+        annotations = None
+        if annotations_dir.exists():
+            annotations = TripAnnotations.from_dir(annotations_dir)
+
+        # Check for diagnostic path
+        diagnostic_path = trip_dir / "_diagnostic"
+        if not diagnostic_path.exists():
+            diagnostic_path = None
+
+        return cls(
+            trip_number=trip_number,
+            trip_name=trip_name,
+            vault_path=vault_path,
+            annotations=annotations,
+            diagnostic_path=diagnostic_path,
+            is_golden=is_golden,
         )
 
 
@@ -848,3 +960,268 @@ class TestdataStore:
                 return data.get("validation")
 
         return None
+
+    # =========================================================================
+    # Trip-Based Methods (New Format)
+    # =========================================================================
+
+    def has_trips(self, test_id: str) -> bool:
+        """Check if test uses trip-based format.
+
+        Args:
+            test_id: Test identifier
+
+        Returns:
+            True if test has trips/ directory
+        """
+        try:
+            test_dir = self._find_test_dir(test_id)
+            return (test_dir / "trips").exists()
+        except FileNotFoundError:
+            return False
+
+    def load_trips(self, test_id: str) -> list[TripData]:
+        """Load all trips for a test artifact.
+
+        Args:
+            test_id: Test identifier
+
+        Returns:
+            List of TripData objects sorted by trip_number (golden last)
+
+        Raises:
+            FileNotFoundError: If test not found or has no trips
+        """
+        test_dir = self._find_test_dir(test_id)
+        trips_dir = test_dir / "trips"
+
+        if not trips_dir.exists():
+            raise FileNotFoundError(
+                f"No trips directory found for test '{test_id}'. " f"Expected at {trips_dir}"
+            )
+
+        trips: list[TripData] = []
+        for trip_dir in sorted(trips_dir.iterdir()):
+            if not trip_dir.is_dir():
+                continue
+
+            trip_name = trip_dir.name
+            # Skip directories starting with underscore (internal)
+            if trip_name.startswith("_"):
+                continue
+
+            trips.append(TripData.from_dir(trip_dir, trip_name))
+
+        # Sort: numbered trips first (by number), then golden
+        def sort_key(t: TripData) -> tuple[int, str]:
+            if t.is_golden:
+                return (999, "golden")
+            return (t.trip_number, t.trip_name)
+
+        return sorted(trips, key=sort_key)
+
+    def get_trip(self, test_id: str, trip_number: int) -> TripData | None:
+        """Get a specific trip by number.
+
+        Args:
+            test_id: Test identifier
+            trip_number: Trip number (1-indexed)
+
+        Returns:
+            TripData or None if not found
+        """
+        trips = self.load_trips(test_id)
+        for trip in trips:
+            if trip.trip_number == trip_number:
+                return trip
+        return None
+
+    def get_golden(self, test_id: str) -> TripData | None:
+        """Get golden trip data.
+
+        Args:
+            test_id: Test identifier
+
+        Returns:
+            Golden TripData or None if not found
+        """
+        trips = self.load_trips(test_id)
+        for trip in trips:
+            if trip.is_golden:
+                return trip
+        return None
+
+    def save_trip_vault(
+        self,
+        test_id: str,
+        trip_number: int,
+        vault_dir: Path,
+    ) -> Path:
+        """Save vault state for a trip.
+
+        Args:
+            test_id: Test identifier
+            trip_number: Trip number (1-indexed)
+            vault_dir: Path to vault directory to snapshot
+
+        Returns:
+            Path to saved vault directory
+        """
+        test_dir = self.base_dir / test_id
+        trip_dir = test_dir / "trips" / str(trip_number)
+        vault_dest = trip_dir / "vault"
+
+        vault_dest.parent.mkdir(parents=True, exist_ok=True)
+        if vault_dest.exists():
+            shutil.rmtree(vault_dest)
+
+        shutil.copytree(
+            vault_dir,
+            vault_dest,
+            ignore=shutil.ignore_patterns(
+                ".state", ".cache", "logs", "*.db", "config.toml", ".test_config"
+            ),
+        )
+
+        return vault_dest
+
+    def save_trip_annotations(
+        self,
+        test_id: str,
+        trip_number: int,
+        rm_files: dict[str, bytes],
+        doc_uuid: str,
+        page_uuids: list[str],
+    ) -> Path:
+        """Save annotation data for a trip.
+
+        Args:
+            test_id: Test identifier
+            trip_number: Trip number (1-indexed), or 0 for golden
+            rm_files: Dict of page_uuid -> .rm bytes
+            doc_uuid: Document UUID
+            page_uuids: List of page UUIDs
+
+        Returns:
+            Path to annotations directory
+        """
+        test_dir = self.base_dir / test_id
+        trip_name = "golden" if trip_number == 0 else str(trip_number)
+        annotations_dir = test_dir / "trips" / trip_name / "annotations"
+        rm_dir = annotations_dir / "rm_files"
+
+        rm_dir.mkdir(parents=True, exist_ok=True)
+
+        # Save .rm files
+        for page_uuid, rm_bytes in rm_files.items():
+            (rm_dir / f"{page_uuid}.rm").write_bytes(rm_bytes)
+
+        # Save metadata
+        metadata = {
+            "doc_uuid": doc_uuid,
+            "page_uuids": page_uuids,
+            "rm_files_count": len(rm_files),
+            "has_annotations": len(rm_files) > 0,
+            "timestamp": datetime.now().isoformat(),
+        }
+        (annotations_dir / "metadata.json").write_text(json.dumps(metadata, indent=2))
+
+        return annotations_dir
+
+    def save_trip_diagnostic(
+        self,
+        test_id: str,
+        trip_number: int,
+        diagnostic_name: str,
+        rm_files: dict[str, bytes],
+    ) -> Path:
+        """Save diagnostic data for a trip.
+
+        Diagnostic data is for debugging only and not used in replay.
+        Stored in _diagnostic/{diagnostic_name}/ directory.
+
+        Args:
+            test_id: Test identifier
+            trip_number: Trip number (1-indexed)
+            diagnostic_name: Name for this diagnostic (e.g., "uploaded_rm")
+            rm_files: Dict of page_uuid -> .rm bytes
+
+        Returns:
+            Path to diagnostic directory
+        """
+        test_dir = self.base_dir / test_id
+        diag_dir = test_dir / "trips" / str(trip_number) / "_diagnostic" / diagnostic_name
+        rm_dir = diag_dir / "rm_files"
+
+        rm_dir.mkdir(parents=True, exist_ok=True)
+
+        for page_uuid, rm_bytes in rm_files.items():
+            (rm_dir / f"{page_uuid}.rm").write_bytes(rm_bytes)
+
+        # Save metadata
+        metadata = {
+            "rm_files_count": len(rm_files),
+            "timestamp": datetime.now().isoformat(),
+            "purpose": "diagnostic_only",
+        }
+        (diag_dir / "metadata.json").write_text(json.dumps(metadata, indent=2))
+
+        return diag_dir
+
+    def save_trip_manifest(
+        self,
+        test_id: str,
+        description: str = "",
+        doc_uuid: str = "",
+        trips_recorded: list[int] | None = None,
+        has_golden: bool = False,
+    ) -> Path:
+        """Save manifest for trip-based test.
+
+        Args:
+            test_id: Test identifier
+            description: Test description
+            doc_uuid: Main document UUID
+            trips_recorded: List of trip numbers that were recorded
+            has_golden: Whether golden data was captured
+
+        Returns:
+            Path to manifest file
+        """
+        test_dir = self.base_dir / test_id
+        test_dir.mkdir(parents=True, exist_ok=True)
+
+        manifest = {
+            "test_id": test_id,
+            "format": "trips",  # Distinguish from legacy "phases" format
+            "created_at": datetime.now().isoformat(),
+            "description": description,
+            "doc_uuid": doc_uuid,
+            "trips_recorded": trips_recorded or [],
+            "has_golden": has_golden,
+        }
+
+        manifest_path = test_dir / "manifest.json"
+        manifest_path.write_text(json.dumps(manifest, indent=2))
+
+        return manifest_path
+
+    def is_trip_format(self, test_id: str) -> bool:
+        """Check if test uses trip format (vs legacy phase format).
+
+        Args:
+            test_id: Test identifier
+
+        Returns:
+            True if trip format, False if legacy phase format
+        """
+        try:
+            test_dir = self._find_test_dir(test_id)
+            manifest_path = test_dir / "manifest.json"
+            if manifest_path.exists():
+                data = json.loads(manifest_path.read_text())
+                return data.get("format") == "trips"
+            # Check for trips directory existence
+            return (test_dir / "trips").exists()
+        except FileNotFoundError:
+            return False

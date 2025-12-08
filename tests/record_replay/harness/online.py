@@ -4,10 +4,21 @@ Records test artifacts by prompting user to perform actions on a physical
 reMarkable device or rmfakecloud simulation, then capturing the resulting
 annotations.
 
-Multi-Phase Support:
-    - Saves vault state at each phase (initial, post_sync, final)
-    - Prompts user between phases for new annotations
-    - Automatically captures .rm files and device state metadata
+Trip-Based Recording:
+    - Trip 1: Upload document → user annotates → capture annotations
+    - Trip 2+: Modify vault → sync → user annotates → capture
+    - Golden: Fresh upload for device-native ground truth comparison
+
+Directory Structure:
+    testdata/{test_id}/
+    ├── trips/
+    │   ├── 1/vault/           # Initial vault state
+    │   ├── 1/annotations/     # User annotations (for replay)
+    │   ├── 1/_diagnostic/     # Debug data (uploaded_rm, etc.)
+    │   ├── 2/vault/           # Modified vault state
+    │   ├── 2/annotations/
+    │   └── golden/annotations/
+    └── manifest.json
 
 Usage:
     device = OnlineDevice(workspace, testdata_store, bench)
@@ -17,18 +28,16 @@ Usage:
     # User sees prompt: "Please annotate document on device, then press Enter"
 
     state = device.wait_for_annotations(doc_uuid)
-    device.end_test("pen_colors", success=True)
+    device.end_test("pen_colors")
     # Testdata saved to tests/testdata/pen_colors/
 """
 
-import json
 import shutil
-from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .protocol import DeviceInteractionManager, DocumentState, derive_test_id
-from .testdata import PhaseData, TestdataStore
+from .testdata import TestdataStore
 
 if TYPE_CHECKING:
     from .logging import Bench
@@ -40,7 +49,7 @@ class OnlineDevice(DeviceInteractionManager):
 
     Prompts user to perform actions on a physical reMarkable device,
     captures the resulting annotations and vault state, and saves them
-    as replayable testdata.
+    as replayable testdata using trip-based format.
 
     Requirements:
     - Physical reMarkable device OR rmfakecloud simulation
@@ -55,7 +64,7 @@ class OnlineDevice(DeviceInteractionManager):
         # Displays: "Please annotate on device, then press Enter"
 
         state = device.wait_for_annotations(doc_uuid)
-        device.end_test("test_id", success=True)
+        device.end_test("test_id")
     """
 
     def __init__(
@@ -75,11 +84,13 @@ class OnlineDevice(DeviceInteractionManager):
         self.testdata_store = testdata_store
         self.bench = bench
 
-        # Recording state
+        # Recording state (trip-based)
         self._current_test_id: str | None = None
         self._current_description: str | None = None
-        self._current_phase: int = 0
-        self._phases: list[PhaseData] = []
+        self._current_trip: int = 1  # 1-indexed trip number
+        self._trips_recorded: list[int] = []
+        self._has_golden: bool = False
+        self._doc_uuid: str | None = None
 
     def start_test(self, test_id: str, description: str = "") -> None:
         """Begin recording a test.
@@ -94,8 +105,10 @@ class OnlineDevice(DeviceInteractionManager):
         """
         self._current_test_id = test_id
         self._current_description = description
-        self._current_phase = 0
-        self._phases = []
+        self._current_trip = 1
+        self._trips_recorded = []
+        self._has_golden = False
+        self._doc_uuid = None
 
         # Auto-cleanup existing testdata (git can restore if needed)
         test_dir = self.testdata_store.base_dir / test_id
@@ -103,8 +116,8 @@ class OnlineDevice(DeviceInteractionManager):
             shutil.rmtree(test_dir)
             self.bench.info(f"Cleaned up existing testdata: {test_id}")
 
-        # Create fresh testdata directory
-        test_dir.mkdir(parents=True, exist_ok=True)
+        # Create fresh testdata directory with trips structure
+        (test_dir / "trips").mkdir(parents=True, exist_ok=True)
 
         self.bench.ok(f"Started recording: {test_id}")
         if description:
@@ -128,11 +141,11 @@ class OnlineDevice(DeviceInteractionManager):
         return test_id
 
     def upload_document(self, markdown_path: Path) -> str:
-        """Upload document and capture initial phase.
+        """Upload document and capture Trip 1 vault state.
 
-        Captures two phases:
-        - phase_0 "initial": Vault state before sync (no rm files)
-        - phase_1 "post_upload": State after sync (rm files we uploaded)
+        Saves:
+        - Trip 1 vault: Initial vault state (for replay)
+        - Trip 1 diagnostic: .rm files we uploaded (debug only)
 
         Args:
             markdown_path: Path to markdown file
@@ -146,10 +159,13 @@ class OnlineDevice(DeviceInteractionManager):
         if not self._current_test_id:
             raise RuntimeError("No test started - call start_test() first")
 
-        # Save initial vault state (phase 0) - before any sync
-        self._capture_phase(
-            phase_num=0, phase_name="initial", action="setup", prompt="Initial vault state saved"
+        # Save Trip 1 vault state (before sync, for replay)
+        self.testdata_store.save_trip_vault(
+            self._current_test_id,
+            trip_number=1,
+            vault_dir=self.workspace.workspace_dir,
         )
+        self.bench.ok("Trip 1: Saved initial vault state")
 
         # Run sync to upload document
         self.workspace.run_sync("Upload document")
@@ -164,32 +180,28 @@ class OnlineDevice(DeviceInteractionManager):
                     self.bench.observe(f"  {item.relative_to(self.workspace.state_dir)}")
             raise RuntimeError("Document UUID not found after sync")
 
+        self._doc_uuid = doc_uuid
         self.bench.ok(f"Uploaded document: {doc_uuid}")
 
-        # Download fresh rm files from cloud to capture what we uploaded
+        # Download fresh rm files from cloud to capture what we uploaded (diagnostic)
         self._download_rm_files_to_cache(doc_uuid)
+        uploaded_rm = self._get_cached_rm_files_as_dict()
+        if uploaded_rm:
+            self.testdata_store.save_trip_diagnostic(
+                self._current_test_id,
+                trip_number=1,
+                diagnostic_name="uploaded_rm",
+                rm_files=uploaded_rm,
+            )
+            self.bench.observe(f"Trip 1: Saved diagnostic ({len(uploaded_rm)} uploaded .rm files)")
 
-        # Capture phase 1 - the rm files we just uploaded
-        self._capture_phase(
-            phase_num=1,
-            phase_name="post_upload",
-            action="upload",
-            prompt="Captured post-upload state (rm files we synced up)",
-        )
-
-        # Prompt user to wait for document to appear on device
-        self.bench.prompt_user(
-            "Document uploaded and syncing to your device...",
-            "Please wait for the document to appear on your device.",
-            "Then press Enter to continue...",
-        )
-
-        self._current_phase = 2
+        # Note: Removed redundant "Document uploaded and syncing..." prompt
+        # The user will be prompted in wait_for_annotations() with clear instructions
 
         return doc_uuid
 
     def wait_for_annotations(self, doc_uuid: str, timeout: float = 300.0) -> DocumentState:
-        """Wait for user to annotate on device, then capture phase.
+        """Wait for user to annotate on device, then capture trip annotations.
 
         Displays user prompt and waits for them to press Enter after
         completing annotations on the physical device. Then waits for the
@@ -210,17 +222,15 @@ class OnlineDevice(DeviceInteractionManager):
         if not self._current_test_id:
             raise RuntimeError("No test started - call start_test() first")
 
-        # Prompt user to annotate
-        phase_name = f"phase_{self._current_phase}"
+        # Prompt user to annotate with clear trip-based instruction
         self.bench.prompt_user(
-            f"Phase {self._current_phase}: {phase_name}",
+            f"Trip {self._current_trip}: Annotate document",
             f"Please annotate document on device (doc_uuid: {doc_uuid[:8]})",
-            "IMPORTANT: Make sure annotations are synced back to the device",
-            "Then press Enter to sync and capture annotations...",
+            "Make sure device syncs annotations back to cloud.",
+            "Press Enter when done annotating...",
         )
 
         # Run multiple syncs with small delays to allow device to sync annotations
-        # The reMarkable device syncs annotations back to cloud after user annotates
         annotations_found = False
         start_time = time.time()
         attempt = 0
@@ -242,7 +252,9 @@ class OnlineDevice(DeviceInteractionManager):
             state = self.get_document_state(doc_uuid)
             if state.has_annotations:
                 annotations_found = True
-                self.bench.ok(f"✓ Annotations found after {attempt} sync(s)")
+                self.bench.ok(
+                    f"Trip {self._current_trip}: Annotations found after {attempt} sync(s)"
+                )
                 break
 
             if attempt < max_attempts:
@@ -260,49 +272,46 @@ class OnlineDevice(DeviceInteractionManager):
             self.bench.warn("2. No annotations were actually made on the device")
             self.bench.warn("3. rmfakecloud may not support annotation syncing")
 
-        # Capture phase data
-        self._capture_phase(
-            phase_num=self._current_phase,
-            phase_name=phase_name,
-            action="annotation_download",
-            prompt=f"Annotations captured at phase {self._current_phase}",
+        # Get final state and save trip annotations
+        state = self.get_document_state(doc_uuid)
+        self.testdata_store.save_trip_annotations(
+            self._current_test_id,
+            trip_number=self._current_trip,
+            rm_files=state.rm_files,
+            doc_uuid=doc_uuid,
+            page_uuids=state.page_uuids,
         )
+        self._trips_recorded.append(self._current_trip)
+        self.bench.ok(f"Trip {self._current_trip}: Saved {len(state.rm_files)} annotation file(s)")
 
-        self._current_phase += 1
+        self._current_trip += 1
 
-        return self.get_document_state(doc_uuid)
+        return state
 
     def trigger_sync(self) -> None:
         """Run sync command."""
         self.workspace.run_sync("Sync")
 
     def capture_phase(self, phase_name: str, action: str = "capture") -> None:
-        """Manually capture a phase at the current state.
+        """Manually capture vault state for next trip.
 
-        Use this after trigger_sync() or any operation to capture the current
-        vault and device state as a named phase.
-
-        Downloads fresh rm files from cloud to ensure we capture what was synced.
+        Use this after modifying markdown to save the vault state before
+        the next annotation cycle.
 
         Args:
-            phase_name: Name for this phase (e.g., "post_modification")
-            action: Action description for the phase metadata
+            phase_name: Name for this capture (for logging)
+            action: Action description (for logging)
         """
         if not self._current_test_id:
             raise RuntimeError("No test started - call start_test() first")
 
-        # Download fresh rm files from cloud to capture current state
-        doc_uuid = self.workspace.get_document_uuid()
-        if doc_uuid:
-            self._download_rm_files_to_cache(doc_uuid)
-
-        self._capture_phase(
-            phase_num=self._current_phase,
-            phase_name=phase_name,
-            action=action,
-            prompt=f"Captured phase: {phase_name}",
+        # Save vault state for the current trip
+        self.testdata_store.save_trip_vault(
+            self._current_test_id,
+            trip_number=self._current_trip,
+            vault_dir=self.workspace.workspace_dir,
         )
-        self._current_phase += 1
+        self.bench.ok(f"Trip {self._current_trip}: Saved vault state ({phase_name})")
 
     def get_document_state(self, doc_uuid: str) -> DocumentState:
         """Get current document state by downloading fresh from cloud.
@@ -393,14 +402,25 @@ class OnlineDevice(DeviceInteractionManager):
         if not self._current_test_id:
             return
 
-        # Save manifest with all phases
-        self._save_manifest()
-        self.bench.ok(f"Recording complete: {test_id} " f"({len(self._phases)} phases)")
+        # Save manifest with trip information
+        self.testdata_store.save_trip_manifest(
+            self._current_test_id,
+            description=self._current_description or "",
+            doc_uuid=self._doc_uuid or "",
+            trips_recorded=self._trips_recorded,
+            has_golden=self._has_golden,
+        )
+
+        trips_str = ", ".join(str(t) for t in self._trips_recorded)
+        golden_str = " + golden" if self._has_golden else ""
+        self.bench.ok(f"Recording complete: {test_id} (trips: {trips_str}{golden_str})")
 
         self._current_test_id = None
         self._current_description = None
-        self._current_phase = 0
-        self._phases = []
+        self._current_trip = 1
+        self._trips_recorded = []
+        self._has_golden = False
+        self._doc_uuid = None
 
     def observe_result(self, message: str = "") -> None:
         """Pause for user to observe result on device.
@@ -421,11 +441,120 @@ class OnlineDevice(DeviceInteractionManager):
             "Press Enter when you're ready to continue...",
         )
 
+    def compare_with_golden(
+        self,
+        doc_uuid: str,
+        markdown_path: Path,
+        observation: str,
+        golden_prompt: str,
+    ) -> tuple[DocumentState, DocumentState]:
+        """Upload golden document and let user compare both side-by-side.
+
+        Creates a fresh golden document (different UUID) so user can flip
+        between the re-anchored document and device-native ground truth
+        on the device, comparing annotation positions visually.
+
+        Args:
+            doc_uuid: UUID of the re-anchored document to observe
+            markdown_path: Path to the (already modified) markdown document
+            observation: What to observe in the re-anchored document
+            golden_prompt: Instructions for annotating the golden document
+                (e.g., "Highlight 'target' and 'bottom' at their new positions")
+
+        Returns:
+            Tuple of (reanchored_state, golden_state)
+        """
+        import time
+
+        if not self._current_test_id:
+            raise RuntimeError("No test started - call start_test() first")
+
+        # Create golden document with "_golden" suffix
+        golden_path = markdown_path.parent / f"{markdown_path.stem}_golden.md"
+        golden_path.write_text(markdown_path.read_text())
+
+        self.bench.info("Uploading golden document for side-by-side comparison")
+
+        # Run sync to upload the golden document
+        self.workspace.run_sync("Upload golden document")
+
+        # Get the golden document UUID (should be different from main doc)
+        golden_uuid = self._get_golden_document_uuid()
+        if not golden_uuid:
+            raise RuntimeError("Golden document UUID not found after sync")
+
+        self.bench.ok(f"Golden document uploaded: {golden_uuid[:8]}...")
+
+        # Download fresh rm files from cloud
+        self._download_rm_files_to_cache(golden_uuid)
+
+        # Combined prompt: observe + annotate golden
+        self.bench.prompt_user(
+            "COMPARE & ANNOTATE GOLDEN",
+            "",
+            "Two documents are now on device:",
+            f"  • RE-ANCHORED: {doc_uuid[:8]}... (original document)",
+            f"  • GOLDEN:      {golden_uuid[:8]}... (fresh '_golden' document)",
+            "",
+            "OBSERVE the re-anchored document:",
+            f"  {observation}",
+            "",
+            "ANNOTATE the golden document:",
+            f"  {golden_prompt}",
+            "",
+            "Flip between documents to compare annotation positions.",
+            "Press Enter when golden annotations are synced...",
+        )
+
+        # Wait for golden annotations with multiple sync attempts
+        annotations_found = False
+        max_attempts = 5
+
+        for attempt in range(1, max_attempts + 1):
+            self.workspace.run_sync(f"Golden sync (attempt {attempt})")
+
+            state = self.get_document_state(golden_uuid)
+            if state.has_annotations:
+                annotations_found = True
+                self.bench.ok(f"Golden annotations found after {attempt} sync(s)")
+                break
+
+            if attempt < max_attempts:
+                self.bench.observe("No golden annotations yet, waiting 5s...")
+                time.sleep(5)
+
+        if not annotations_found:
+            self.bench.warn("No golden annotations captured - proceeding anyway")
+
+        # Get final states for both documents
+        reanchored_state = self.get_document_state(doc_uuid)
+        golden_state = self.get_document_state(golden_uuid)
+
+        # Save golden annotations
+        self.testdata_store.save_trip_annotations(
+            self._current_test_id,
+            trip_number=0,  # 0 = golden
+            rm_files=golden_state.rm_files,
+            doc_uuid=golden_uuid,
+            page_uuids=golden_state.page_uuids,
+        )
+        self._has_golden = True
+        self.bench.ok(f"Golden: Saved {len(golden_state.rm_files)} annotation file(s)")
+
+        # Clean up golden file from vault (but keep in testdata)
+        if golden_path.exists():
+            golden_path.unlink()
+
+        return reanchored_state, golden_state
+
     def upload_golden_document(self, markdown_path: Path, prompt: str) -> DocumentState:
         """Upload a fresh document for device-native ground truth capture.
 
         Creates a separate document (different UUID) for the user to annotate
         at the final text positions, enabling comparison with re-anchored output.
+
+        Note: Consider using compare_with_golden() instead for a combined
+        observe + golden workflow.
 
         Args:
             markdown_path: Path to the (already modified) markdown document
@@ -443,7 +572,7 @@ class OnlineDevice(DeviceInteractionManager):
         golden_path = markdown_path.parent / f"{markdown_path.stem}_golden.md"
         golden_path.write_text(markdown_path.read_text())
 
-        self.bench.info("📌 GOLDEN CAPTURE: Uploading fresh document for ground truth")
+        self.bench.info("GOLDEN: Uploading fresh document for ground truth")
 
         # Run sync to upload the golden document
         self.workspace.run_sync("Upload golden document")
@@ -453,20 +582,19 @@ class OnlineDevice(DeviceInteractionManager):
         if not golden_uuid:
             raise RuntimeError("Golden document UUID not found after sync")
 
-        self.bench.ok(f"Uploaded golden document: {golden_uuid}")
+        self.bench.ok(f"GOLDEN: Uploaded document: {golden_uuid}")
 
         # Download fresh rm files from cloud
         self._download_rm_files_to_cache(golden_uuid)
 
         # Prompt user to annotate with specific instructions
         self.bench.prompt_user(
-            "📌 GOLDEN CAPTURE",
-            f"Please annotate the GOLDEN document (uuid: {golden_uuid[:8]})",
+            "GOLDEN: Annotate for ground truth",
+            f"Annotate the GOLDEN document (uuid: {golden_uuid[:8]})",
             f"Instructions: {prompt}",
             "",
-            "IMPORTANT: Annotate the '_golden' document, not the original!",
-            "Make sure annotations sync back to cloud.",
-            "Then press Enter to capture ground truth...",
+            "IMPORTANT: Annotate '_golden' document, not the original!",
+            "Press Enter when annotations are synced...",
         )
 
         # Wait for annotations with multiple sync attempts
@@ -479,7 +607,7 @@ class OnlineDevice(DeviceInteractionManager):
             state = self.get_document_state(golden_uuid)
             if state.has_annotations:
                 annotations_found = True
-                self.bench.ok(f"✓ Golden annotations found after {attempt} sync(s)")
+                self.bench.ok(f"GOLDEN: Annotations found after {attempt} sync(s)")
                 break
 
             if attempt < max_attempts:
@@ -487,16 +615,25 @@ class OnlineDevice(DeviceInteractionManager):
                 time.sleep(5)
 
         if not annotations_found:
-            self.bench.warn("No golden annotations captured - proceeding anyway")
+            self.bench.warn("GOLDEN: No annotations captured - proceeding anyway")
 
-        # Capture as golden_native phase
-        self._capture_golden_phase(golden_uuid)
+        # Get final state and save as golden trip
+        state = self.get_document_state(golden_uuid)
+        self.testdata_store.save_trip_annotations(
+            self._current_test_id,
+            trip_number=0,  # 0 = golden
+            rm_files=state.rm_files,
+            doc_uuid=golden_uuid,
+            page_uuids=state.page_uuids,
+        )
+        self._has_golden = True
+        self.bench.ok(f"GOLDEN: Saved {len(state.rm_files)} annotation file(s)")
 
         # Clean up golden file from vault (but keep in testdata)
         if golden_path.exists():
             golden_path.unlink()
 
-        return self.get_document_state(golden_uuid)
+        return state
 
     def _get_golden_document_uuid(self) -> str | None:
         """Get UUID of the golden document from state.
@@ -517,74 +654,28 @@ class OnlineDevice(DeviceInteractionManager):
                 return entry.remarkable_uuid
         return None
 
-    def _capture_golden_phase(self, golden_uuid: str) -> None:
-        """Capture golden document state as a special phase.
-
-        Args:
-            golden_uuid: UUID of the golden document
-        """
-        if not self._current_test_id:
-            raise RuntimeError("No test started")
-
-        test_dir = self.testdata_store.base_dir / self._current_test_id
-        phase_name = "golden_native"
-        phase_dir = test_dir / "phases" / f"phase_{self._current_phase}_{phase_name}"
-        phase_dir.mkdir(parents=True, exist_ok=True)
-
-        # Get golden document state
-        state = self.get_document_state(golden_uuid)
-
-        # Save device state metadata
-        device_state = {
-            "doc_uuid": golden_uuid,
-            "page_uuids": state.page_uuids,
-            "rm_files_count": len(state.rm_files),
-            "has_annotations": state.has_annotations,
-            "is_golden": True,
-        }
-        (phase_dir / "device_state.json").write_text(json.dumps(device_state, indent=2))
-
-        # Save .rm files
-        if state.rm_files:
-            rm_dir = phase_dir / "rm_files"
-            rm_dir.mkdir(parents=True, exist_ok=True)
-            for page_uuid, rm_bytes in state.rm_files.items():
-                (rm_dir / f"{page_uuid}.rm").write_bytes(rm_bytes)
-
-        # Save phase metadata
-        phase_info = {
-            "phase_number": self._current_phase,
-            "phase_name": phase_name,
-            "timestamp": datetime.now().isoformat(),
-            "action": "device_native_capture",
-            "is_golden": True,
-        }
-        (phase_dir / "phase_info.json").write_text(json.dumps(phase_info, indent=2))
-
-        self.bench.ok(f"Captured golden phase: {phase_name}")
-        self._phases.append(
-            PhaseData(
-                phase_number=self._current_phase,
-                phase_name=phase_name,
-                vault_snapshot_path=phase_dir,  # No vault snapshot for golden
-                device_state=device_state,
-                phase_info=phase_info,
-            )
-        )
-        self._current_phase += 1
-
     def cleanup(self) -> None:
         """Cleanup after test with user confirmation.
 
-        Prompts user to confirm that documents have been removed from their device.
-        This is necessary in online mode because the user has a real device that
-        needs time to sync the unsync operation.
+        The unsync operation has already completed by the time this is called.
+        This prompt allows the user to inspect device state before finalizing.
         """
         self.bench.prompt_user(
-            "Unsyncing from cloud (this may take a moment)...",
-            "Please wait for the document to be removed from your device.",
-            "Then press Enter to complete cleanup...",
+            "Cleanup complete.",
+            "Inspect device state if needed.",
+            "Press Enter to finalize...",
         )
+
+    def _get_cached_rm_files_as_dict(self) -> dict[str, bytes]:
+        """Get cached rm files as a dict.
+
+        Returns:
+            Dict of page_uuid -> rm_bytes
+        """
+        rm_files: dict[str, bytes] = {}
+        for rm_path in self.workspace.get_cached_rm_files():
+            rm_files[rm_path.stem] = rm_path.read_bytes()
+        return rm_files
 
     def _download_rm_files_to_cache(self, doc_uuid: str) -> None:
         """Download rm files from cloud and save to cache directory.
@@ -614,132 +705,3 @@ class OnlineDevice(DeviceInteractionManager):
                 self.bench.observe(f"Downloaded {count} rm file(s) to cache")
         except Exception as e:
             self.bench.warn(f"Failed to download rm files to cache: {e}")
-
-    def _capture_phase(
-        self, phase_num: int, phase_name: str, action: str, prompt: str = ""
-    ) -> None:
-        """Capture vault state for a phase.
-
-        Saves:
-        - Vault snapshot (vault files state)
-        - Device state metadata (UUIDs, counts)
-        - .rm files (annotations)
-        - Phase metadata
-
-        Args:
-            phase_num: Phase number (0, 1, 2, ...)
-            phase_name: Phase name (e.g., "initial", "post_sync")
-            action: Action that triggered this phase
-            prompt: Logging prompt
-        """
-        if not self._current_test_id:
-            raise RuntimeError("No test started")
-
-        test_dir = self.testdata_store.base_dir / self._current_test_id
-        phase_dir = test_dir / "phases" / f"phase_{phase_num}_{phase_name}"
-        phase_dir.mkdir(parents=True, exist_ok=True)
-
-        # Save vault snapshot
-        vault_snapshot = phase_dir / "vault_snapshot"
-        vault_snapshot.mkdir(parents=True, exist_ok=True)
-
-        workspace_vault = self.workspace.workspace_dir
-        if workspace_vault.exists():
-            for item in workspace_vault.iterdir():
-                if item.name not in [".state", ".cache", "logs", "config.toml"]:
-                    if item.is_file():
-                        shutil.copy(item, vault_snapshot / item.name)
-                    elif item.is_dir():
-                        shutil.copytree(item, vault_snapshot / item.name)
-
-        # Save device state metadata
-        doc_uuid = self.workspace.get_document_uuid()
-        cached_files = self.workspace.get_cached_rm_files()
-        page_uuids = [f.stem for f in sorted(cached_files)]
-
-        device_state = {
-            "doc_uuid": doc_uuid,
-            "page_uuids": page_uuids,
-            "rm_files_count": len(cached_files),
-            "has_annotations": len(cached_files) > 0,
-        }
-
-        (phase_dir / "device_state.json").write_text(json.dumps(device_state, indent=2))
-
-        # Save .rm files
-        if cached_files:
-            rm_dir = phase_dir / "rm_files"
-            rm_dir.mkdir(parents=True, exist_ok=True)
-
-            for rm_path in cached_files:
-                shutil.copy(rm_path, rm_dir / rm_path.name)
-
-        # Save phase metadata
-        phase_info = {
-            "phase_number": phase_num,
-            "phase_name": phase_name,
-            "timestamp": datetime.now().isoformat(),  # Required by PhaseInfo
-            "action": action,
-            "vault_files": [f.name for f in (vault_snapshot).iterdir() if f.is_file()],
-        }
-
-        (phase_dir / "phase_info.json").write_text(json.dumps(phase_info, indent=2))
-
-        self.bench.ok(f"Captured phase {phase_num} ({phase_name}): {prompt}")
-        self._phases.append(
-            PhaseData(
-                phase_number=phase_num,
-                phase_name=phase_name,
-                vault_snapshot_path=vault_snapshot,
-                device_state=device_state,
-                phase_info=phase_info,
-            )
-        )
-
-    def _save_manifest(self) -> None:
-        """Save manifest with test metadata and phases."""
-        if not self._current_test_id:
-            return
-
-        test_dir = self.testdata_store.base_dir / self._current_test_id
-
-        # Prepare source markdown for legacy compatibility
-        source_md = self.workspace.test_doc.read_text()
-        (test_dir / "source.md").write_text(source_md)
-
-        # Get doc_uuid and page_uuids from the last phase with annotations
-        doc_uuid = None
-        page_uuids = []
-        for phase in reversed(self._phases):
-            if phase.device_state and phase.device_state.get("doc_uuid"):
-                doc_uuid = phase.device_state["doc_uuid"]
-                page_uuids = phase.device_state.get("page_uuids", [])
-                break
-
-        # Build manifest
-        manifest = {
-            "test_id": self._current_test_id,
-            "created_at": datetime.now().isoformat(),
-            "doc_uuid": doc_uuid or "",  # Required by TestManifest
-            "page_uuids": page_uuids,  # Required by TestManifest
-            "description": self._current_description or "",
-            "annotations_count": len(page_uuids),  # Count of annotated pages
-            "source_document": "source.md",
-            "phases": [
-                {
-                    "phase_number": p.phase_number,
-                    "phase_name": p.phase_name,
-                    "action": p.phase_info.get("action", ""),
-                    "vault_files": p.phase_info.get("vault_files", []),
-                    "device_state": p.device_state,
-                    "has_rm_files": bool(
-                        p.device_state and p.device_state.get("rm_files_count", 0) > 0
-                    ),
-                }
-                for p in self._phases
-            ],
-        }
-
-        (test_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
-
-        self.bench.ok(f"Saved manifest: {test_dir / 'manifest.json'}")

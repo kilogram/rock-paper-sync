@@ -86,7 +86,7 @@ def test_cross_page_reanchor(device, workspace, fixtures_dir):
     print("\n📝 Please add annotations:")
     print("   1. Highlight 'target' in the Third Section")
     print("   2. Highlight 'bottom' in the Third Section")
-    print("   3. Add a stroke/margin note near the end of the document")
+    print("   3. Add a margin note next to '___ADD MARGIN NOTE HERE___' in the Fourth Section")
 
     state = device.wait_for_annotations(doc_uuid)
     assert state.has_annotations, "Need annotations for cross-page test"
@@ -118,6 +118,8 @@ def test_cross_page_reanchor(device, workspace, fixtures_dir):
     # Check if already modified
     already_modified = "INSERTED CONTENT BLOCK" in original
     if not already_modified:
+        import re
+
         # Insert a large block of text after the title
         insert_text = """
 ## INSERTED CONTENT BLOCK
@@ -143,22 +145,22 @@ Neque porro quisquam est, qui dolorem ipsum quia dolor sit amet, consectetur,
 adipisci velit, sed quia non numquam eius modi tempora incidunt.
 
 """
-        # Insert after the title
-        if "# Cross-Page Annotation Re-Anchoring Test\n\n" in original:
-            modified = original.replace(
-                "# Cross-Page Annotation Re-Anchoring Test\n\n",
-                "# Cross-Page Annotation Re-Anchoring Test\n\n" + insert_text,
-            )
+        # Insert after the title, handling annotation markers
+        # Pattern matches title with optional annotation markers around it
+        title_pattern = (
+            r"((?:<!-- ANNOTATED:[^>]*-->\s*)?"  # Optional opening marker
+            r"# Cross-Page Annotation Re-Anchoring Test\s*"  # Title
+            r"(?:<!-- /ANNOTATED -->\s*)?)"  # Optional closing marker
+        )
+        modified = re.sub(title_pattern, r"\1\n" + insert_text, original)
+
+        if "INSERTED CONTENT BLOCK" in modified:
+            workspace.test_doc.write_text(modified)
+            print("\n✏️  Inserted large content block after title")
+            print("   This should push later paragraphs to new pages")
         else:
-            # Handle case with annotation markers
-            import re
-
-            title_pattern = r"(# Cross-Page Annotation Re-Anchoring Test\n\n)"
-            modified = re.sub(title_pattern, r"\1" + insert_text, original)
-
-        workspace.test_doc.write_text(modified)
-        print("\n✏️  Inserted large content block after title")
-        print("   This should push later paragraphs to new pages")
+            print("\n⚠️  WARNING: Failed to insert content block!")
+            print(f"   First 300 chars of document:\n{original[:300]}")
     else:
         print("\n📌 DEVICE-NATIVE CAPTURE MODE: Document already modified")
         modified = original
@@ -167,16 +169,22 @@ adipisci velit, sed quia non numquam eius modi tempora incidunt.
     device.trigger_sync()
     device.capture_phase("post_modification", action="sync_modified")
 
-    # Observe result
-    device.observe_result(
-        "Check that annotations have followed their content:\n"
-        "1. 'target' and 'bottom' highlights should still be on their paragraphs\n"
-        "2. Any margin notes should still be next to their paragraphs\n"
-        "3. Annotations may now be on different pages than before"
+    # Compare with golden - both documents on device for side-by-side comparison
+    after_state, golden_state = device.compare_with_golden(
+        doc_uuid=doc_uuid,
+        markdown_path=workspace.test_doc,
+        observation=(
+            "Check that annotations have followed their content:\n"
+            "  1. 'target' highlight should be on 'target' in Third Section\n"
+            "  2. 'bottom' highlight should be on 'bottom' in Third Section\n"
+            "  3. Margin note should be next to '___ADD MARGIN NOTE HERE___'\n"
+            "  NOTE: 'bottom' may be ~1 line lower than expected (known issue)"
+        ),
+        golden_prompt=(
+            "Highlight 'target' and 'bottom' at their current positions.\n"
+            "  Add margin note next to '___ADD MARGIN NOTE HERE___'."
+        ),
     )
-
-    # Get state AFTER modification
-    after_state = device.get_document_state(doc_uuid)
     after_total = total_annotation_count(after_state.rm_files)
     after_per_page = count_annotations_per_page(after_state.rm_files)
     after_page_count = len(after_state.rm_files)
@@ -245,22 +253,14 @@ adipisci velit, sed quia non numquam eius modi tempora incidunt.
         else:
             print("\n⚠️  No cross-page movement detected (may need more inserted content)")
 
-    # Optional: Golden comparison
-    try:
-        from tests.record_replay.harness.comparison import (
-            assert_highlights_match,
-            print_highlight_comparison,
-        )
+    # Golden comparison (golden_state already captured in compare_with_golden)
+    if golden_state.has_annotations:
+        try:
+            from tests.record_replay.harness.comparison import (
+                assert_highlights_match,
+                print_highlight_comparison,
+            )
 
-        golden_state = device.upload_golden_document(
-            workspace.test_doc,
-            prompt=(
-                "Add highlights on 'target' and 'bottom' (same words as before)\n"
-                "These should now be on their paragraphs in the modified document"
-            ),
-        )
-
-        if golden_state.has_annotations:
             print("\n📌 GOLDEN COMPARISON: Re-anchored vs Device-Native")
             print_highlight_comparison(after_state.rm_files, golden_state.rm_files)
 
@@ -272,55 +272,9 @@ adipisci velit, sed quia non numquam eius modi tempora incidunt.
             )
             print("✅ All highlight positions match within 10px tolerance!")
 
-    except (FileNotFoundError, ImportError):
-        print("\n⚠️  No golden testdata - skipping ground truth comparison")
-        print("   Re-run with --online -s to record golden ground truth")
-
-    device.end_test(test_id)
-
-
-@pytest.mark.device
-def test_cross_page_annotation_count_preserved(device, workspace, fixtures_dir):
-    """Simpler test: verify annotation count is preserved across page changes.
-
-    This is a regression test for the core requirement that annotations
-    are not lost when pagination changes.
-    """
-    fixture_doc = fixtures_dir / "test_cross_page_reanchor.md"
-    workspace.test_doc.write_text(fixture_doc.read_text())
-
-    try:
-        test_id = device.start_test_for_fixture(fixture_doc)
-    except FileNotFoundError:
-        pytest.skip("No testdata. Run with --online -s to record.")
-
-    doc_uuid = device.upload_document(workspace.test_doc)
-    print("\n📝 Please add at least 3 annotations across multiple pages")
-
-    state = device.wait_for_annotations(doc_uuid)
-    initial_count = total_annotation_count(state.rm_files)
-    assert initial_count >= 1, "Need at least 1 annotation"
-    print(f"\n📊 Initial: {initial_count} annotation(s)")
-
-    # Add content at beginning
-    original = workspace.test_doc.read_text()
-    if "EXTRA CONTENT" not in original:
-        modified = original.replace(
-            "# Cross-Page",
-            "# Cross-Page\n\nEXTRA CONTENT: This pushes everything down.\n\n## More Extra\n\nEven more text to shift pages.\n\n",
-        )
-        workspace.test_doc.write_text(modified)
-
-    device.trigger_sync()
-    device.capture_phase("post_insert", action="sync_modified")
-
-    after_state = device.get_document_state(doc_uuid)
-    after_count = total_annotation_count(after_state.rm_files)
-    print(f"📊 After: {after_count} annotation(s)")
-
-    assert (
-        after_count == initial_count
-    ), f"Annotation count changed: {initial_count} -> {after_count}"
-    print("✅ Annotation count preserved!")
+        except ImportError:
+            print("\n⚠️  Comparison module not available")
+    else:
+        print("\n⚠️  No golden annotations captured - skipping comparison")
 
     device.end_test(test_id)

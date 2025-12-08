@@ -1,9 +1,0 @@
-{
-  "phase_number": 3,
-  "phase_name": "post_insert",
-  "timestamp": "2025-12-07T00:46:50.926415",
-  "action": "sync_modified",
-  "vault_files": [
-    "document.md"
-  ]
-}

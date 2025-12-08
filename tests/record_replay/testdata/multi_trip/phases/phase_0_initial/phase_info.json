@@ -1,9 +1,0 @@
-{
-  "phase_number": 0,
-  "phase_name": "initial",
-  "timestamp": "2025-12-07T17:47:26.317652",
-  "action": "setup",
-  "vault_files": [
-    "document.md"
-  ]
-}

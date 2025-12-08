@@ -223,6 +223,39 @@ class DeviceInteractionProtocol(Protocol):
         """
         ...
 
+    def compare_with_golden(
+        self,
+        doc_uuid: str,
+        markdown_path: Path,
+        observation: str,
+        golden_prompt: str,
+    ) -> tuple[DocumentState, DocumentState]:
+        """Upload golden document and compare side-by-side with re-anchored document.
+
+        Combines observe_result and upload_golden_document into a single step,
+        allowing the user to flip between both documents on the device to
+        compare annotation positions visually.
+
+        In online mode:
+        1. Uploads fresh golden document (separate UUID)
+        2. Prompts user to observe re-anchored doc and annotate golden doc
+        3. Captures both states for comparison
+
+        In offline mode:
+        1. Loads pre-recorded re-anchored state from testdata
+        2. Loads pre-recorded golden state from testdata
+
+        Args:
+            doc_uuid: UUID of the re-anchored document to observe
+            markdown_path: Path to the (already modified) markdown document
+            observation: What to observe in the re-anchored document
+            golden_prompt: Instructions for annotating the golden document
+
+        Returns:
+            Tuple of (reanchored_state, golden_state)
+        """
+        ...
+
     def capture_phase(self, phase_name: str, action: str = "capture") -> None:
         """Manually capture a phase at the current state.
 

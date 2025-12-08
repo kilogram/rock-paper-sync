@@ -195,11 +195,11 @@ class Bench:
         Raises:
             KeyboardInterrupt: If user presses Ctrl+C
         """
-        # Display separator and messages
-        self.info(f"\n{'='*70}")
+        # Display separator and messages (use print directly for separators to avoid indent)
+        print(f"\n{'='*70}")
         for msg in messages:
             self.info(msg)
-        self.info(f"{'='*70}\n")
+        print(f"{'='*70}")
 
         # Wait for user input
         try:
