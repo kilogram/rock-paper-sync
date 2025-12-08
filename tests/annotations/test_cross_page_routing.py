@@ -91,9 +91,9 @@ class TestCrossPageAnnotationRouting:
 
         pages = [page0, page1]
 
-        # Call _preserve_annotations with same .rm file for page 0
+        # Call the annotation preserver with same .rm file for page 0
         # The annotations should stay on page 0
-        generator._preserve_annotations(pages, [annotated_rm_file, None])
+        generator._annotation_preserver.preserve(pages, [annotated_rm_file, None])
 
         # Check that page 0 has annotation context with annotations
         assert page0.annotation_context is not None, "Page 0 should have annotation_context"
@@ -174,7 +174,7 @@ class TestCrossPageAnnotationRouting:
             mock_blocks_to_text.return_value = old_text_blocks
 
             # Call preserve_annotations
-            generator._preserve_annotations(pages, [annotated_rm_file, None])
+            generator._annotation_preserver.preserve(pages, [annotated_rm_file, None])
 
         # The annotations from page 0's .rm file should be routed somewhere
         # (either staying on page 0 or moving based on content matching)
@@ -210,7 +210,7 @@ class TestCrossPageAnnotationRouting:
             patch.object(generator._stroke_handler, "get_position", return_value=None),
         ):
             # Use real annotated file - should not raise even with None position
-            generator._preserve_annotations(pages, [annotated_rm_file])
+            generator._annotation_preserver.preserve(pages, [annotated_rm_file])
 
         # Verify annotation_context was set and annotations stayed on same page
         assert page0.annotation_context is not None, "Page should have annotation_context"
@@ -254,7 +254,7 @@ class TestCrossPageAnnotationRouting:
 
         pages = [page0, page1]
 
-        generator._preserve_annotations(pages, [annotated_rm_file, None])
+        generator._annotation_preserver.preserve(pages, [annotated_rm_file, None])
 
         # Check if exclude_ids was set in page0's annotation_context
         # (annotations that moved OUT of page 0 to another page)
@@ -277,7 +277,7 @@ class TestCrossPageEdgeCases:
         pages = [page0]
 
         # Should not raise
-        generator._preserve_annotations(pages, [])
+        generator._annotation_preserver.preserve(pages, [])
 
     def test_all_none_rm_files(self, generator: RemarkableGenerator):
         """Should handle all None rm files gracefully."""
@@ -298,7 +298,7 @@ class TestCrossPageEdgeCases:
         pages = [page0]
 
         # Should not raise - no annotations to preserve
-        generator._preserve_annotations(pages, [None, None])
+        generator._annotation_preserver.preserve(pages, [None, None])
 
     def test_fewer_rm_files_than_pages(self, generator: RemarkableGenerator):
         """Should handle having fewer rm files than pages."""
@@ -317,7 +317,7 @@ class TestCrossPageEdgeCases:
         pages = [page0, page1]
 
         # Only one rm file for two pages - should not raise
-        generator._preserve_annotations(pages, [None])
+        generator._annotation_preserver.preserve(pages, [None])
 
     def test_more_rm_files_than_pages(
         self, generator: RemarkableGenerator, annotated_rm_file: Path
@@ -334,7 +334,7 @@ class TestCrossPageEdgeCases:
         pages = [page0]  # Only one page now
 
         # Two rm files for one page - annotations from page 1 should route to page 0
-        generator._preserve_annotations(pages, [annotated_rm_file, annotated_rm_file])
+        generator._annotation_preserver.preserve(pages, [annotated_rm_file, annotated_rm_file])
 
         # Should complete without error
         assert True

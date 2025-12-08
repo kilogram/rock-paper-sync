@@ -159,3 +159,7 @@ tests/testdata/device_measurements/*.jpg
 # OCR diagnostic and test output files
 tests/device_bench/fixtures/testdata/ocr_handwriting/diagnostic_output/
 tests/device_bench/fixtures/testdata/ocr_handwriting/transformation_tests/
+
+# Debug output (not committed - for local debugging only)
+debug_output/
+tools/rmlib/debug_output/

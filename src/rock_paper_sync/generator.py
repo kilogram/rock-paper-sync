@@ -33,6 +33,7 @@ from .annotations import (
 )
 from .annotations.handlers.highlight_handler import HighlightHandler
 from .annotations.handlers.stroke_handler import StrokeHandler
+from .annotations.preserver import AnnotationPreserver
 from .config import LayoutConfig as AppLayoutConfig
 from .coordinate_transformer import (
     END_OF_DOC_ANCHOR_MARKER,
@@ -379,6 +380,14 @@ class RemarkableGenerator:
         self._highlight_handler = HighlightHandler()
         self._stroke_handler = StrokeHandler()
 
+        # Initialize annotation preserver for cross-page annotation handling
+        self._annotation_preserver = AnnotationPreserver(
+            geometry=self.geometry,
+            layout_engine=self.layout_engine,
+            highlight_handler=self._highlight_handler,
+            stroke_handler=self._stroke_handler,
+        )
+
         logger.info(
             "RemarkableGenerator initialized with rmscene integration and Phase 1 annotation anchoring"
         )
@@ -489,7 +498,9 @@ class RemarkableGenerator:
 
         # Preserve annotations from existing .rm files if provided
         if existing_rm_files:
-            self._preserve_annotations(pages, existing_rm_files)
+            # Match .rm files to new pages by content (fixes page reordering bug)
+            matched_rm_files = self._match_rm_files_to_pages(existing_rm_files, pages)
+            self._annotation_preserver.preserve(pages, matched_rm_files)
 
         logger.debug(
             f"Generated document {doc_uuid} with {len(pages)} page(s) "
@@ -504,384 +515,96 @@ class RemarkableGenerator:
             modified_time=timestamp,
         )
 
-    def _preserve_annotations(
-        self, pages: list[RemarkablePage], existing_rm_files: list[Path | None]
-    ) -> None:
-        """Preserve annotations from existing .rm files with cross-page position adjustment.
+    def _match_rm_files_to_pages(
+        self, existing_rm_files: list[Path | None], pages: list[RemarkablePage]
+    ) -> list[Path | None]:
+        """Match existing .rm files to new pages by content similarity.
 
-        This method supports annotations following their content across page boundaries:
-        1. Collects ALL annotations from ALL old pages
-        2. Builds document-level text block mappings with page_index tracking
-        3. Matches annotations to paragraphs using content-based mapping
-        4. Routes each annotation to its NEW page based on where its paragraph moved
-        5. Adjusts coordinates for the target page
+        This fixes the cross-page anchor bug where .rm files are passed in
+        OLD document order (sorted by UUID) but need to be matched to NEW
+        document pages by content.
 
-        This avoids conversion bugs by modifying rmscene blocks directly.
+        Uses Jaccard similarity on word sets to find the best match for each
+        new page. Each .rm file can only be used once (greedy matching).
 
         Args:
-            pages: List of newly generated pages with new text layout
-            existing_rm_files: List of paths to existing .rm files (or None)
-        """
-        from .annotations import calculate_position_mapping
-
-        # =================================================================
-        # PHASE 1: Build document-level text block lists with page_index
-        # =================================================================
-
-        # Extract old text blocks from all pages, tracking page_index
-        all_old_text_blocks: list[TextBlock] = []
-        old_page_data: list[dict] = []  # Per-page metadata (rm_file_path, blocks, origin_y, etc.)
-
-        for page_idx, rm_file_path in enumerate(existing_rm_files):
-            if rm_file_path and Path(rm_file_path).exists():
-                text_blocks, text_origin_y, page_text = self._extract_text_blocks_from_rm(
-                    rm_file_path
-                )
-                # Set page_index on each text block
-                for tb in text_blocks:
-                    tb.page_index = page_idx
-                all_old_text_blocks.extend(text_blocks)
-                old_page_data.append(
-                    {
-                        "rm_file_path": rm_file_path,
-                        "text_blocks": text_blocks,
-                        "text_origin_y": text_origin_y,
-                        "page_text": page_text,
-                    }
-                )
-            else:
-                old_page_data.append(None)
-
-        # Build combined new text blocks list (page_index already set during generation)
-        all_new_text_blocks: list[TextBlock] = []
-        for page in pages:
-            all_new_text_blocks.extend(page.text_blocks)
-
-        logger.debug(
-            f"Document-level: {len(all_old_text_blocks)} old blocks, "
-            f"{len(all_new_text_blocks)} new blocks"
-        )
-
-        if not all_old_text_blocks or not all_new_text_blocks:
-            logger.warning("No text blocks to map, skipping annotation preservation")
-            return
-
-        # Compute document-level position mapping (old block idx -> new block idx)
-        doc_position_map = calculate_position_mapping(all_old_text_blocks, all_new_text_blocks)
-
-        # =================================================================
-        # PHASE 2: Collect ALL annotations from ALL old pages
-        # =================================================================
-
-        # Structure: list of (annotation_block, source_page_idx, source_page_data, tree_nodes_by_id)
-        all_annotations: list[tuple] = []
-
-        for page_idx, page_data in enumerate(old_page_data):
-            if page_data is None:
-                continue
-
-            rm_file_path = page_data["rm_file_path"]
-            try:
-                with open(rm_file_path, "rb") as f:
-                    existing_blocks = list(rmscene.read_blocks(f))
-
-                # Build TreeNodeBlock lookup by node_id for stroke anchor injection
-                tree_nodes_by_id = {}
-                for block in existing_blocks:
-                    if type(block).__name__ == "TreeNodeBlock":
-                        if hasattr(block, "group") and block.group:
-                            node_id = block.group.node_id
-                            if node_id:
-                                tree_nodes_by_id[node_id] = block
-
-                annotation_blocks = [
-                    block
-                    for block in existing_blocks
-                    if "Line" in type(block).__name__ or "Glyph" in type(block).__name__
-                ]
-
-                for anno_block in annotation_blocks:
-                    all_annotations.append(
-                        (anno_block, page_idx, page_data, existing_blocks, tree_nodes_by_id)
-                    )
-
-                logger.debug(
-                    f"Page {page_idx}: Collected {len(annotation_blocks)} annotation blocks, "
-                    f"{len(tree_nodes_by_id)} TreeNodeBlocks"
-                )
-
-            except Exception as e:
-                logger.warning(f"Page {page_idx}: Failed to read annotations: {e}")
-
-        if not all_annotations:
-            logger.debug("No annotations found in any old page")
-            return
-
-        logger.info(f"Collected {len(all_annotations)} total annotations for cross-page routing")
-
-        # =================================================================
-        # PHASE 3: Route annotations to target pages using unified contexts
-        # =================================================================
-
-        # Initialize one context per page (replaces 4 parallel dicts)
-        contexts = [PageAnnotationContext() for _ in pages]
-        new_text_origin_y = self.geometry.text_pos_y
-
-        # Track TreeNodeBlocks: key = (source_page_idx, node_id), value = sets of strokes
-        # Used to determine if a TreeNodeBlock can be excluded (only if ALL strokes moved)
-        tree_node_cross_page_strokes: dict[tuple[int, Any], set] = {}  # strokes that moved
-        tree_node_same_page_strokes: dict[tuple[int, Any], set] = {}  # strokes that stayed
-
-        for (
-            anno_block,
-            source_page_idx,
-            page_data,
-            existing_blocks,
-            tree_nodes_by_id,
-        ) in all_annotations:
-            try:
-                old_text_blocks = page_data["text_blocks"]
-                old_text_origin_y = page_data["text_origin_y"]
-                rm_file_path = page_data["rm_file_path"]
-
-                # Find which old text block this annotation belongs to
-                # Use handler's get_position() for type-specific coordinate transformation
-                handler = self._get_handler_for_block(anno_block)
-                if handler:
-                    position = handler.get_position(anno_block, old_text_origin_y)
-                    anno_center_y = position[1] if position else None
-                else:
-                    anno_center_y = None
-                if anno_center_y is None:
-                    # Can't determine position - keep on same page
-                    target_page_idx = min(source_page_idx, len(pages) - 1)
-                    ctx = contexts[target_page_idx]
-                    ctx.annotations.append(anno_block)
-                    ctx.source_rm_path = rm_file_path
-                    ctx.has_same_page = True
-                    continue
-
-                # Find nearest old text block (document-level index)
-                nearest_old_idx = None
-                min_distance = float("inf")
-                doc_offset = sum(
-                    len(old_page_data[i]["text_blocks"]) if old_page_data[i] else 0
-                    for i in range(source_page_idx)
-                )
-
-                for local_idx, tb in enumerate(old_text_blocks):
-                    block_center_y = (tb.y_start + tb.y_end) / 2
-                    distance = abs(anno_center_y - block_center_y)
-                    if distance < min_distance:
-                        min_distance = distance
-                        nearest_old_idx = doc_offset + local_idx
-
-                # Look up the new text block via document-level mapping
-                if nearest_old_idx is not None and nearest_old_idx in doc_position_map:
-                    new_block_idx = doc_position_map[nearest_old_idx]
-                    new_text_block = all_new_text_blocks[new_block_idx]
-                    target_page_idx = new_text_block.page_index
-                else:
-                    # No mapping found - attach to nearest surviving page
-                    target_page_idx = self._find_nearest_page_with_content(source_page_idx, pages)
-
-                # Clamp to valid page range
-                target_page_idx = max(0, min(target_page_idx, len(pages) - 1))
-
-                # Get CRDT base ID for position adjustment
-                crdt_base_id = get_crdt_base_id_from_rm(rm_file_path)
-
-                # Adjust annotation position via handler
-                handler = self._get_handler_for_block(anno_block)
-                if handler:
-                    # Get page-local text for position calculations
-                    old_page_text = page_data["page_text"]
-                    new_page_text = "\n".join(
-                        block.content for block in pages[target_page_idx].text_blocks
-                    )
-
-                    adjusted_block = handler.relocate(
-                        anno_block,
-                        old_page_text,  # Use page-local text, not full document
-                        new_page_text,  # Use target page text
-                        (self.geometry.text_pos_x, old_text_origin_y),
-                        (self.geometry.text_pos_x, new_text_origin_y),
-                        self.layout_engine,
-                        self.geometry,
-                        crdt_base_id,
-                    )
-                else:
-                    adjusted_block = anno_block
-
-                # Route to target page context
-                ctx = contexts[target_page_idx]
-                ctx.annotations.append(adjusted_block)
-
-                is_cross_page = source_page_idx != target_page_idx
-                if is_cross_page:
-                    # Track that this annotation moved OUT of source page
-                    if hasattr(anno_block, "item") and hasattr(anno_block.item, "item_id"):
-                        contexts[source_page_idx].exclude_ids.add(anno_block.item.item_id)
-
-                    # For strokes (SceneLineItemBlock), also route the parent TreeNodeBlock
-                    # The TreeNodeBlock contains the anchor_id needed for stroke positioning
-                    if "Line" in type(anno_block).__name__:
-                        parent_id = getattr(anno_block, "parent_id", None)
-                        if parent_id and parent_id in tree_nodes_by_id:
-                            tree_node = tree_nodes_by_id[parent_id]
-                            node_id = tree_node.group.node_id if tree_node.group else None
-                            # Check if this TreeNodeBlock is already added
-                            existing_node_ids = [
-                                tn.group.node_id
-                                for tn, _ in ctx.tree_nodes
-                                if hasattr(tn, "group") and tn.group
-                            ]
-                            if parent_id not in existing_node_ids:
-                                # Calculate character offset for target text block
-                                # This offset points to where in the target page's RootTextBlock
-                                # the stroke should anchor to
-                                target_char_offset = 0
-                                target_page = pages[target_page_idx]
-                                if (
-                                    nearest_old_idx is not None
-                                    and nearest_old_idx in doc_position_map
-                                ):
-                                    # Find page-local index of target text block
-                                    target_doc_idx = doc_position_map[nearest_old_idx]
-                                    target_block = all_new_text_blocks[target_doc_idx]
-                                    # Calculate page-local index
-                                    page_start_idx = sum(
-                                        len(pages[i].text_blocks) for i in range(target_page_idx)
-                                    )
-                                    target_page_local_idx = target_doc_idx - page_start_idx
-                                    # Sum char lengths of blocks before this one
-                                    for i in range(target_page_local_idx):
-                                        if i < len(target_page.text_blocks):
-                                            target_char_offset += (
-                                                len(target_page.text_blocks[i].content) + 1
-                                            )  # +1 for newline
-                                else:
-                                    # No mapping - default to last text block on page
-                                    for tb in target_page.text_blocks[:-1]:
-                                        target_char_offset += len(tb.content) + 1
-
-                                # Store TreeNodeBlock with target char offset for reanchoring
-                                ctx.tree_nodes.append((tree_node, target_char_offset))
-                            # Track this stroke moved cross-page (defer exclusion decision)
-                            if node_id:
-                                key = (source_page_idx, node_id)
-                                if key not in tree_node_cross_page_strokes:
-                                    tree_node_cross_page_strokes[key] = set()
-                                stroke_id = id(anno_block)  # Use object id as unique identifier
-                                tree_node_cross_page_strokes[key].add(stroke_id)
-                            logger.debug(
-                                f"TreeNodeBlock {parent_id} moving with stroke to page {target_page_idx} "
-                                f"(target_char_offset={target_char_offset})"
-                            )
-
-                    logger.debug(
-                        f"Annotation moving from page {source_page_idx} to page {target_page_idx}"
-                    )
-                else:
-                    # Same page - use roundtrip with source file
-                    ctx.source_rm_path = rm_file_path
-                    ctx.has_same_page = True
-
-                    # Track same-page strokes for TreeNodeBlock exclusion decision
-                    if "Line" in type(anno_block).__name__:
-                        parent_id = getattr(anno_block, "parent_id", None)
-                        if parent_id and parent_id in tree_nodes_by_id:
-                            tree_node = tree_nodes_by_id[parent_id]
-                            node_id = tree_node.group.node_id if tree_node.group else None
-                            if node_id:
-                                key = (source_page_idx, node_id)
-                                if key not in tree_node_same_page_strokes:
-                                    tree_node_same_page_strokes[key] = set()
-                                stroke_id = id(anno_block)
-                                tree_node_same_page_strokes[key].add(stroke_id)
-
-            except Exception as e:
-                logger.warning(f"Failed to route annotation: {e}")
-                # Fallback: keep on source page
-                target_page_idx = min(source_page_idx, len(pages) - 1)
-                contexts[target_page_idx].annotations.append(anno_block)
-
-        # Compute TreeNodeBlock exclusions: only exclude if ALL strokes using it moved out
-        for key, cross_strokes in tree_node_cross_page_strokes.items():
-            page_idx, node_id = key
-            same_strokes = tree_node_same_page_strokes.get(key, set())
-            if not same_strokes:
-                # No strokes stayed on this page - safe to exclude the TreeNodeBlock
-                contexts[page_idx].exclude_tree_node_ids.add(node_id)
-                logger.debug(
-                    f"Page {page_idx}: TreeNodeBlock {node_id} can be excluded "
-                    f"({len(cross_strokes)} strokes moved, 0 stayed)"
-                )
-            else:
-                logger.debug(
-                    f"Page {page_idx}: TreeNodeBlock {node_id} KEPT "
-                    f"({len(cross_strokes)} strokes moved, {len(same_strokes)} stayed)"
-                )
-
-        # =================================================================
-        # PHASE 4: Assign contexts to pages
-        # =================================================================
-
-        for page_idx, page in enumerate(pages):
-            ctx = contexts[page_idx]
-
-            # Set source for roundtrip if we have same-page annotations
-            # or if we need to remove moved-out annotations
-            if not ctx.source_rm_path and ctx.exclude_ids:
-                # Need to roundtrip to remove moved-out annotations
-                if page_idx < len(existing_rm_files) and existing_rm_files[page_idx]:
-                    ctx.source_rm_path = existing_rm_files[page_idx]
-
-            # If only cross-page annotations and no same-page, use target's existing file
-            if ctx.annotations and not ctx.has_same_page:
-                if page_idx < len(existing_rm_files) and existing_rm_files[page_idx]:
-                    ctx.source_rm_path = existing_rm_files[page_idx]
-
-            page.annotation_context = ctx
-
-            # Log summary
-            if ctx.annotations or ctx.exclude_ids:
-                same_count = len(ctx.annotations) if ctx.has_same_page else 0
-                cross_count = len(ctx.annotations) - same_count
-                mode = "roundtrip" if ctx.source_rm_path else "fresh"
-                logger.info(
-                    f"Page {page_idx}: {same_count} same-page + {cross_count} cross-page "
-                    f"annotations, {len(ctx.exclude_ids)} moved out ({mode})"
-                )
-
-    def _find_nearest_page_with_content(
-        self, source_page_idx: int, pages: list[RemarkablePage]
-    ) -> int:
-        """Find nearest page that has text content when original page is gone.
-
-        Args:
-            source_page_idx: Original page index
-            pages: List of new pages
+            existing_rm_files: List of .rm file paths in original order
+            pages: List of newly generated pages
 
         Returns:
-            Index of nearest page with content
+            Reordered list where matched_rm_files[i] is the .rm file for pages[i]
         """
-        if not pages:
-            return 0
+        if not existing_rm_files or not pages:
+            return existing_rm_files
 
-        # Search outward from source_page_idx
-        for offset in range(len(pages)):
-            # Try forward
-            if source_page_idx + offset < len(pages):
-                if pages[source_page_idx + offset].text_blocks:
-                    return source_page_idx + offset
-            # Try backward
-            if source_page_idx - offset >= 0:
-                if pages[source_page_idx - offset].text_blocks:
-                    return source_page_idx - offset
+        # Extract text from each .rm file
+        rm_texts: list[tuple[Path | None, str]] = []
+        for rm_path in existing_rm_files:
+            if rm_path and Path(rm_path).exists():
+                _, _, page_text = self._extract_text_blocks_from_rm(rm_path)
+                rm_texts.append((rm_path, page_text))
+            else:
+                rm_texts.append((rm_path, ""))
 
-        # Fallback to first page
-        return 0
+        # Get text from each new page
+        page_texts = []
+        for page in pages:
+            page_text = "\n".join(tb.content for tb in page.text_blocks)
+            page_texts.append(page_text)
+
+        # Match each new page to the best .rm file using Jaccard similarity
+        matched_rm_files: list[Path | None] = [None] * len(pages)
+        used_rm_indices: set[int] = set()
+
+        for page_idx, page_text in enumerate(page_texts):
+            if not page_text.strip():
+                continue
+
+            page_words = set(page_text.lower().split())
+            if not page_words:
+                continue
+
+            best_rm_idx = None
+            best_score = 0.0
+
+            for rm_idx, (rm_path, rm_text) in enumerate(rm_texts):
+                if rm_idx in used_rm_indices:
+                    continue
+                if not rm_text.strip():
+                    continue
+
+                rm_words = set(rm_text.lower().split())
+                if not rm_words:
+                    continue
+
+                # Jaccard similarity
+                intersection = len(page_words & rm_words)
+                union = len(page_words | rm_words)
+                score = intersection / union if union > 0 else 0.0
+
+                if score > best_score:
+                    best_score = score
+                    best_rm_idx = rm_idx
+
+            # Require minimum similarity threshold
+            if best_rm_idx is not None and best_score > 0.3:
+                matched_rm_files[page_idx] = rm_texts[best_rm_idx][0]
+                used_rm_indices.add(best_rm_idx)
+                logger.debug(
+                    f"Matched new page {page_idx} to .rm file {best_rm_idx} "
+                    f"(similarity={best_score:.2f})"
+                )
+
+        # Log any unmatched .rm files (may contain orphaned annotations)
+        unmatched_rm = [
+            i for i in range(len(rm_texts)) if i not in used_rm_indices and rm_texts[i][1].strip()
+        ]
+        if unmatched_rm:
+            logger.warning(
+                f"{len(unmatched_rm)} .rm file(s) with content couldn't be matched to new pages"
+            )
+
+        return matched_rm_files
 
     def _extract_text_blocks_from_rm(
         self, rm_file_path: Path

@@ -627,3 +627,224 @@ class TestdataStore:
         test_dir = self.base_dir / test_id
         phase_dir = test_dir / "phases" / f"phase_{phase_num}_{phase_name}"
         return phase_dir
+
+    # =========================================================================
+    # Hybrid Test Scenario Support
+    # =========================================================================
+
+    def create_hybrid_scenario(
+        self,
+        test_id: str,
+        rm_phase_num: int,
+        markdown_phase_num: int,
+        scenario_name: str,
+        description: str = "",
+    ) -> Path:
+        """Create a hybrid test scenario by combining data from two phases.
+
+        A hybrid scenario uses .rm files from one phase with markdown from another.
+        This is useful for testing anchor validity when text changes between phases.
+
+        For example, Phase 2 .rm files (with annotations) + Phase 3 markdown (longer
+        text) can reproduce the anchor overflow bug.
+
+        Args:
+            test_id: Test identifier
+            rm_phase_num: Phase number to get .rm files from
+            markdown_phase_num: Phase number to get markdown from
+            scenario_name: Name for this scenario (e.g., "anchor_overflow")
+            description: Human-readable description
+
+        Returns:
+            Path to scenario directory with symlinks to source data
+
+        Raises:
+            FileNotFoundError: If phases not found
+        """
+        test_dir = self._find_test_dir(test_id)
+        phases = self.load_phases(test_id)
+
+        # Find source phases
+        rm_phase = next((p for p in phases if p.phase_number == rm_phase_num), None)
+        md_phase = next((p for p in phases if p.phase_number == markdown_phase_num), None)
+
+        if rm_phase is None:
+            raise FileNotFoundError(f"Phase {rm_phase_num} not found for .rm files")
+        if md_phase is None:
+            raise FileNotFoundError(f"Phase {markdown_phase_num} not found for markdown")
+
+        # Create scenario directory
+        scenario_dir = test_dir / "scenarios" / scenario_name
+        scenario_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create scenario manifest
+        manifest = {
+            "scenario_name": scenario_name,
+            "description": description,
+            "rm_source": {
+                "phase_number": rm_phase_num,
+                "phase_name": rm_phase.phase_name,
+            },
+            "markdown_source": {
+                "phase_number": markdown_phase_num,
+                "phase_name": md_phase.phase_name,
+            },
+            "created_at": datetime.now().isoformat(),
+        }
+        (scenario_dir / "scenario.json").write_text(json.dumps(manifest, indent=2))
+
+        # Copy .rm files to scenario
+        rm_dir = scenario_dir / "rm_files"
+        rm_dir.mkdir(exist_ok=True)
+        for uuid, rm_bytes in rm_phase.rm_files.items():
+            (rm_dir / f"{uuid}.rm").write_bytes(rm_bytes)
+
+        # Copy markdown to scenario
+        md_src = md_phase.vault_snapshot_path
+        md_dest = scenario_dir / "vault_snapshot"
+        if md_dest.exists():
+            shutil.rmtree(md_dest)
+        shutil.copytree(md_src, md_dest)
+
+        return scenario_dir
+
+    def load_hybrid_scenario(
+        self, test_id: str, scenario_name: str
+    ) -> tuple[dict[str, bytes], Path]:
+        """Load a hybrid test scenario.
+
+        Args:
+            test_id: Test identifier
+            scenario_name: Name of the scenario
+
+        Returns:
+            Tuple of (rm_files dict, vault_snapshot_path)
+
+        Raises:
+            FileNotFoundError: If scenario not found
+        """
+        test_dir = self._find_test_dir(test_id)
+        scenario_dir = test_dir / "scenarios" / scenario_name
+
+        if not scenario_dir.exists():
+            raise FileNotFoundError(f"Scenario '{scenario_name}' not found for test '{test_id}'")
+
+        # Load .rm files
+        rm_files: dict[str, bytes] = {}
+        rm_dir = scenario_dir / "rm_files"
+        if rm_dir.exists():
+            for rm_file in rm_dir.glob("*.rm"):
+                rm_files[rm_file.stem] = rm_file.read_bytes()
+
+        # Get vault snapshot path
+        vault_path = scenario_dir / "vault_snapshot"
+
+        return rm_files, vault_path
+
+    def save_phase_with_validation(
+        self,
+        test_id: str,
+        phase_num: int,
+        phase_name: str,
+        vault_dir: Path,
+        rm_files: dict[str, bytes],
+        device_state: dict | None = None,
+        validation: dict | None = None,
+        action: str = "sync",
+        description: str = "",
+    ) -> Path:
+        """Save a phase with optional validation expectations.
+
+        This extends the basic phase save with validation data that can be
+        used to verify test results during replay.
+
+        Args:
+            test_id: Test identifier
+            phase_num: Phase number
+            phase_name: Phase name
+            vault_dir: Path to vault directory
+            rm_files: Dict of page_uuid -> .rm bytes
+            device_state: Device metadata
+            validation: Validation expectations dict, e.g.:
+                {
+                    "anchors_valid": True,
+                    "expected_anchor_bounds": [
+                        {"page": 0, "max_anchor": 771, "min_anchor": 0},
+                    ],
+                    "expected_stroke_count": 5,
+                    "expected_tree_node_count": 2,
+                }
+            action: Action that produced this phase
+            description: Human-readable description
+
+        Returns:
+            Path to phase directory
+        """
+        phase_dir = self.get_phase_dir(test_id, phase_num, phase_name)
+        phase_dir.mkdir(parents=True, exist_ok=True)
+
+        # Save vault snapshot
+        vault_snapshot = phase_dir / "vault_snapshot"
+        if vault_snapshot.exists():
+            shutil.rmtree(vault_snapshot)
+        shutil.copytree(
+            vault_dir,
+            vault_snapshot,
+            ignore=shutil.ignore_patterns(".state", ".cache", "logs", "*.db", "config.toml"),
+        )
+
+        # Save .rm files
+        rm_dir = phase_dir / "rm_files"
+        rm_dir.mkdir(exist_ok=True)
+        for page_uuid, rm_bytes in rm_files.items():
+            (rm_dir / f"{page_uuid}.rm").write_bytes(rm_bytes)
+
+        # Save device state if provided
+        if device_state:
+            (phase_dir / "device_state.json").write_text(json.dumps(device_state, indent=2))
+
+        # Create phase info with validation
+        phase_info = PhaseInfo(
+            phase_number=phase_num,
+            phase_name=phase_name,
+            timestamp=datetime.now().isoformat(),
+            action=action,
+            description=description,
+            device_state=device_state,
+        )
+        phase_info_dict = phase_info.to_dict()
+
+        # Add validation expectations
+        if validation:
+            phase_info_dict["validation"] = validation
+
+        (phase_dir / "phase_info.json").write_text(json.dumps(phase_info_dict, indent=2))
+
+        return phase_dir
+
+    def get_phase_validation(self, test_id: str, phase_num: int) -> dict | None:
+        """Get validation expectations for a phase.
+
+        Args:
+            test_id: Test identifier
+            phase_num: Phase number
+
+        Returns:
+            Validation dict or None if not set
+        """
+        test_dir = self._find_test_dir(test_id)
+        phases_dir = test_dir / "phases"
+
+        # Find phase directory matching phase_num
+        for phase_dir in phases_dir.iterdir():
+            if not phase_dir.is_dir():
+                continue
+            phase_info_file = phase_dir / "phase_info.json"
+            if not phase_info_file.exists():
+                continue
+
+            data = json.loads(phase_info_file.read_text())
+            if data.get("phase_number") == phase_num:
+                return data.get("validation")
+
+        return None
