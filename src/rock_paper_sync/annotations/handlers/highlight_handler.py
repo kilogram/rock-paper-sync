@@ -519,6 +519,11 @@ class HighlightHandler:
         # Find anchor in old document
         anchor = text_anchor_strategy.find_anchor(highlight_text, old_text, (old_x, old_y))
 
+        # Debug: print anchor details for troubleshooting
+        print(
+            f"[DEBUG-HL] Highlight '{highlight_text[:20]}': old_pos=({old_x:.1f}, {old_y:.1f}), anchor_offset={anchor.char_offset}"
+        )
+
         logger.debug(
             f"Highlight '{highlight_text[:30]}...': old_pos=({old_x:.1f}, {old_y:.1f}), "
             f"old_offset={anchor.char_offset}, confidence={anchor.confidence:.2f}"
@@ -550,13 +555,25 @@ class HighlightHandler:
             f"(delta={new_offset - old_offset})"
         )
 
+        # Debug: print resolution details
+        print(
+            f"[DEBUG-HL] Resolved: old_offset={old_offset} -> new_offset={new_offset} (delta={new_offset - old_offset})"
+        )
+        # Show text context around offsets
+        old_context = old_text[max(0, old_offset - 20) : old_offset + len(highlight_text) + 20]
+        new_context = new_text[max(0, new_offset - 20) : new_offset + len(highlight_text) + 20]
+        print(f"[DEBUG-HL] Old context: '...{old_context}...'")
+        print(f"[DEBUG-HL] New context: '...{new_context}...'")
+
         # DELTA-BASED APPROACH: Calculate positions using SAME layout model
         try:
+            # Enable debug for 'bottom' highlight
+            is_bottom = "bottom" in highlight_text.lower()
             old_x_model, old_y_model = layout_engine.offset_to_position(
-                old_offset, old_text, old_origin, geometry.text_width
+                old_offset, old_text, old_origin, geometry.text_width, debug=is_bottom
             )
             new_x_model, new_y_model = layout_engine.offset_to_position(
-                new_offset, new_text, new_origin, geometry.text_width
+                new_offset, new_text, new_origin, geometry.text_width, debug=is_bottom
             )
         except Exception as e:
             logger.warning(f"Failed to calculate positions for highlight: {e}")
@@ -572,13 +589,26 @@ class HighlightHandler:
         )
         logger.debug(f"  Delta: ({x_delta:.1f}, {y_delta:.1f})")
 
+        # Debug: print model positions
+        print(
+            f"[DEBUG-HL] Model: old=({old_x_model:.1f}, {old_y_model:.1f}), new=({new_x_model:.1f}, {new_y_model:.1f})"
+        )
+        print(f"[DEBUG-HL] Delta: ({x_delta:.1f}, {y_delta:.1f})")
+
         # REFLOW DETECTION: Check if content significantly changed
         # When text content changes significantly (large char_offset delta), the original
         # "device offset from model" is no longer valid because it was specific to the
         # old page layout. In this case, place highlight at model position directly
         # instead of preserving the old device offset.
+        #
+        # NOTE: Reflow detection is currently disabled because the delta-based approach
+        # gives better results. The model position calculation is inaccurate for cross-paragraph
+        # text because joining text_blocks with '\n' creates artificial line breaks that
+        # don't match the device's actual paragraph spacing. The delta-based approach
+        # cancels out these errors by using the same (flawed) model for both positions.
+        # TODO: Fix the model to properly handle paragraph spacing, then re-enable reflow.
         offset_change = abs(new_offset - old_offset)
-        SIGNIFICANT_OFFSET_CHANGE = 100  # characters
+        SIGNIFICANT_OFFSET_CHANGE = 100000  # Effectively disabled - was 100
 
         if offset_change > SIGNIFICANT_OFFSET_CHANGE:
             # Significant content reflow - use model position directly

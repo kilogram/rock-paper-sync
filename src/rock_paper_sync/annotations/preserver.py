@@ -31,6 +31,7 @@ import rmscene
 from rock_paper_sync.annotations import TextBlock, calculate_position_mapping
 from rock_paper_sync.annotations.handlers.highlight_handler import HighlightHandler
 from rock_paper_sync.annotations.handlers.stroke_handler import StrokeHandler
+from rock_paper_sync.coordinate_transformer import END_OF_DOC_ANCHOR_MARKER
 
 if TYPE_CHECKING:
     from rock_paper_sync.generator import PageAnnotationContext, RemarkablePage
@@ -347,6 +348,8 @@ class AnnotationPreserver:
                                     y_end=y_end,
                                     block_type="paragraph",
                                     page_index=page_index,
+                                    char_start=para_start,
+                                    char_end=para_end,
                                 )
                             )
 
@@ -476,22 +479,88 @@ class AnnotationPreserver:
             position = handler.get_position(anno_block, old_text_origin_y)
             anno_center_y = position[1] if position else None
 
-        # Find target page
-        if anno_center_y is None:
-            target_page_idx = min(source_page_idx, len(new_pages) - 1)
-        else:
+        # For strokes (Line blocks), prefer anchor-based routing over Y position
+        # Strokes use dual-anchor coordinates which can give misleading Y positions
+        # The TreeNodeBlock anchor_id points to the actual text character offset
+        nearest_old_idx = None
+        if "Line" in type(anno_block).__name__:
+            parent_id = getattr(anno_block, "parent_id", None)
+            if parent_id and parent_id in page_data.tree_nodes_by_id:
+                tree_node = page_data.tree_nodes_by_id[parent_id]
+                if (
+                    hasattr(tree_node, "group")
+                    and tree_node.group
+                    and hasattr(tree_node.group, "anchor_id")
+                    and tree_node.group.anchor_id
+                ):
+                    anchor_val = tree_node.group.anchor_id.value
+                    if hasattr(anchor_val, "part2"):
+                        anchor_offset = anchor_val.part2
+                        # Skip sentinel anchors - use Y fallback for those
+                        if anchor_offset != END_OF_DOC_ANCHOR_MARKER:
+                            # Find which text block contains this anchor offset
+                            # Use actual char_start/char_end - should always be available
+                            for local_idx, tb in enumerate(old_text_blocks):
+                                if tb.char_start is not None and tb.char_end is not None:
+                                    if tb.char_start <= anchor_offset <= tb.char_end:
+                                        nearest_old_idx = doc_offset + local_idx
+                                        logger.debug(
+                                            f"Stroke anchor-based routing: "
+                                            f"anchor={anchor_offset} -> text_block={nearest_old_idx}"
+                                        )
+                                        break
+                                else:
+                                    # This shouldn't happen - char offsets should be populated
+                                    logger.warning(
+                                        f"TextBlock missing char_start/char_end at index "
+                                        f"{local_idx} during routing, falling back"
+                                    )
+                                    cumulative = sum(
+                                        len(old_text_blocks[i].content) + 1
+                                        for i in range(local_idx)
+                                    )
+                                    block_end = cumulative + len(tb.content)
+                                    if cumulative <= anchor_offset <= block_end:
+                                        nearest_old_idx = doc_offset + local_idx
+                                        break
+
+        # Fall back to Y-position matching if anchor-based routing didn't work
+        if nearest_old_idx is None and anno_center_y is not None:
             nearest_old_idx = self._find_nearest_text_block(
                 anno_center_y, old_text_blocks, doc_offset
             )
-            if nearest_old_idx is not None and nearest_old_idx in position_mapping:
-                new_block_idx = position_mapping[nearest_old_idx]
-                new_text_block = all_new_text_blocks[new_block_idx]
-                target_page_idx = new_text_block.page_index
-            else:
-                target_page_idx = self._find_nearest_page_with_content(source_page_idx, new_pages)
+
+        # Find target page
+        if nearest_old_idx is not None and nearest_old_idx in position_mapping:
+            new_block_idx = position_mapping[nearest_old_idx]
+            new_text_block = all_new_text_blocks[new_block_idx]
+            target_page_idx = new_text_block.page_index
+            if "Line" in type(anno_block).__name__:
+                print(
+                    f"[DEBUG] Routing via position_mapping: nearest_old_idx={nearest_old_idx}, new_block_idx={new_block_idx}, target_page_idx={target_page_idx}"
+                )
+        elif anno_center_y is None:
+            target_page_idx = min(source_page_idx, len(new_pages) - 1)
+            if "Line" in type(anno_block).__name__:
+                print(
+                    f"[DEBUG] Routing fallback (no Y): source_page_idx={source_page_idx}, target_page_idx={target_page_idx}"
+                )
+        else:
+            target_page_idx = self._find_nearest_page_with_content(source_page_idx, new_pages)
+            if "Line" in type(anno_block).__name__:
+                print(
+                    f"[DEBUG] Routing fallback (nearest page): source_page_idx={source_page_idx}, target_page_idx={target_page_idx}"
+                )
 
         target_page_idx = max(0, min(target_page_idx, len(new_pages) - 1))
         is_cross_page = source_page_idx != target_page_idx
+
+        if "Line" in type(anno_block).__name__:
+            old_text_len = len(page_data.page_text) if page_data.page_text else 0
+            new_page_text_len = sum(len(b.content) for b in new_pages[target_page_idx].text_blocks)
+            print(
+                f"[DEBUG] Stroke routing: source={source_page_idx}, target={target_page_idx}, is_cross_page={is_cross_page}, old_len={old_text_len}, new_len={new_page_text_len}"
+            )
 
         # Adjust annotation position
         crdt_base_id = get_crdt_base_id_from_rm(page_data.rm_file_path)
@@ -512,25 +581,44 @@ class AnnotationPreserver:
         else:
             adjusted_block = anno_block
 
-        # Handle TreeNodeBlock for cross-page strokes
+        # Handle TreeNodeBlock for strokes
+        # We need to recalculate anchor offsets if:
+        # 1. The stroke moved to a different page (is_cross_page), OR
+        # 2. The stroke stays on the same page but the page text changed
         tree_node = None
         target_char_offset = None
-        if is_cross_page and "Line" in type(anno_block).__name__:
+        if "Line" in type(anno_block).__name__:
             parent_id = getattr(anno_block, "parent_id", None)
             if parent_id and parent_id in page_data.tree_nodes_by_id:
                 tree_node = page_data.tree_nodes_by_id[parent_id]
-                target_char_offset = self._calculate_tree_node_offset(
-                    tree_node,
-                    old_text_blocks,
-                    new_pages[target_page_idx],
-                    position_mapping,
-                    doc_offset,
-                    source_page_idx,
-                    anno_center_y,
-                    old_page_data_list,
-                    adjusted_block,
-                    new_text_origin_y,
+                # Check if page text changed (compare lengths as proxy)
+                old_text_len = len(page_data.page_text) if page_data.page_text else 0
+                new_page_text = "\n".join(
+                    block.content for block in new_pages[target_page_idx].text_blocks
                 )
+                new_text_len = len(new_page_text)
+                text_changed = old_text_len != new_text_len
+
+                if is_cross_page or text_changed:
+                    target_char_offset = self._calculate_tree_node_offset(
+                        tree_node,
+                        old_text_blocks,
+                        new_pages[target_page_idx],
+                        position_mapping,
+                        doc_offset,
+                        source_page_idx,
+                        anno_center_y,
+                        old_page_data_list,
+                        adjusted_block,
+                        new_text_origin_y,
+                        all_new_text_blocks,
+                        target_page_idx,
+                    )
+                    if text_changed and not is_cross_page:
+                        print(
+                            f"[DEBUG] Same-page reanchor: old_len={old_text_len}, "
+                            f"new_len={new_text_len}, offset={target_char_offset}"
+                        )
 
         return RoutingDecision(
             annotation_block=anno_block,
@@ -605,6 +693,22 @@ class AnnotationPreserver:
                 if old_data:
                     ctx.source_rm_path = old_data.rm_file_path
                 ctx.has_same_page = True
+
+                # Handle same-page strokes that need reanchoring (text changed)
+                if decision.tree_node and decision.target_char_offset is not None:
+                    # Add to tree_nodes for reanchoring, just like cross-page
+                    existing_node_ids = [
+                        tn.group.node_id
+                        for tn, _ in ctx.tree_nodes
+                        if hasattr(tn, "group") and tn.group
+                    ]
+                    parent_id = getattr(decision.annotation_block, "parent_id", None)
+                    if parent_id not in existing_node_ids:
+                        ctx.tree_nodes.append((decision.tree_node, decision.target_char_offset))
+                        # Mark for exclusion from original file (will be reinjected with new anchor)
+                        if hasattr(decision.tree_node, "group") and decision.tree_node.group:
+                            node_id = decision.tree_node.group.node_id
+                            ctx.exclude_tree_node_ids.add(node_id)
 
                 # Track same-page strokes for exclusion logic
                 if "Line" in type(decision.annotation_block).__name__:
@@ -742,12 +846,21 @@ class AnnotationPreserver:
         old_page_data_list: list[OldPageData | None],
         adjusted_block: Any,
         new_text_origin_y: float,
+        all_new_text_blocks: list[TextBlock],
+        target_page_idx: int,
     ) -> int:
-        """Calculate target character offset for TreeNodeBlock anchor."""
+        """Calculate target character offset for TreeNodeBlock anchor.
+
+        For margin notes and other non-text-anchored strokes, the anchor_id
+        uses a sentinel value (END_OF_DOC_ANCHOR_MARKER with part1=0) which
+        should be preserved unchanged during cross-page migration.
+        """
+        print(f"[DEBUG] _calculate_tree_node_offset called, target_page_idx={target_page_idx}")
         target_char_offset = 0
 
         # Get original anchor
         original_anchor = None
+        anchor_part1 = None
         if (
             hasattr(tree_node, "group")
             and tree_node.group
@@ -757,21 +870,47 @@ class AnnotationPreserver:
             anchor_val = tree_node.group.anchor_id.value
             if hasattr(anchor_val, "part2"):
                 original_anchor = anchor_val.part2
+                anchor_part1 = anchor_val.part1
             else:
                 original_anchor = anchor_val
 
+        # Check for sentinel anchor (margin notes, non-text-anchored strokes)
+        # These have anchor_id.part1 = 0 and part2 = END_OF_DOC_ANCHOR_MARKER
+        # They should be preserved unchanged - Y positioning comes from stroke coords
+        if original_anchor == END_OF_DOC_ANCHOR_MARKER and anchor_part1 == 0:
+            logger.debug(
+                "Preserving sentinel anchor for TreeNodeBlock "
+                "(margin note or non-text-anchored stroke)"
+            )
+            return END_OF_DOC_ANCHOR_MARKER
+
         # Find which old text block the anchor pointed to
+        # Use actual char_start/char_end offsets from TextBlock to correctly handle
+        # empty paragraphs and gaps in the full page text
         anchor_old_idx = None
         intra_block_offset = 0
         if original_anchor is not None and old_text_blocks:
-            cumulative = 0
             for local_idx, tb in enumerate(old_text_blocks):
-                block_end = cumulative + len(tb.content)
-                if cumulative <= original_anchor <= block_end:
-                    anchor_old_idx = doc_offset + local_idx
-                    intra_block_offset = original_anchor - cumulative
-                    break
-                cumulative = block_end + 1
+                # Use actual character offsets - these should always be available
+                if tb.char_start is not None and tb.char_end is not None:
+                    if tb.char_start <= original_anchor <= tb.char_end:
+                        anchor_old_idx = doc_offset + local_idx
+                        intra_block_offset = original_anchor - tb.char_start
+                        break
+                else:
+                    # This shouldn't happen - char_start/char_end should be populated
+                    logger.warning(
+                        f"TextBlock missing char_start/char_end at index {local_idx}, "
+                        f"falling back to cumulative calculation"
+                    )
+                    cumulative = 0
+                    for i, old_tb in enumerate(old_text_blocks[:local_idx]):
+                        cumulative += len(old_tb.content) + 1
+                    block_end = cumulative + len(tb.content)
+                    if cumulative <= original_anchor <= block_end:
+                        anchor_old_idx = doc_offset + local_idx
+                        intra_block_offset = original_anchor - cumulative
+                        break
 
         # Use anchor-based mapping if available
         mapping_idx = anchor_old_idx if anchor_old_idx is not None else nearest_old_idx
@@ -779,19 +918,44 @@ class AnnotationPreserver:
         if mapping_idx is not None and mapping_idx in position_mapping:
             target_doc_idx = position_mapping[mapping_idx]
 
-            # Calculate page-local index (simplified: assumes page_start_idx = 0)
-            target_page_local_idx = target_doc_idx
-            for i in range(target_page_local_idx):
-                if i < len(target_page.text_blocks):
-                    target_char_offset += len(target_page.text_blocks[i].content)
-                    if i < len(target_page.text_blocks) - 1:
-                        target_char_offset += 1
+            # Calculate starting doc index for target page
+            target_page_start_idx = 0
+            for tb in all_new_text_blocks:
+                if tb.page_index == target_page_idx:
+                    break
+                target_page_start_idx += 1
 
-            # Add intra-block offset
-            if target_page_local_idx < len(target_page.text_blocks):
-                target_block_len = len(target_page.text_blocks[target_page_local_idx].content)
-                clamped_offset = min(intra_block_offset, target_block_len)
-                target_char_offset += clamped_offset
+            # Convert document-level index to page-local index
+            target_page_local_idx = target_doc_idx - target_page_start_idx
+
+            # Calculate character offset using actual char_start from target block
+            if 0 <= target_page_local_idx < len(target_page.text_blocks):
+                target_block = target_page.text_blocks[target_page_local_idx]
+                # Use actual char_start - should always be available
+                if target_block.char_start is not None:
+                    target_block_len = len(target_block.content)
+                    clamped_offset = min(intra_block_offset, target_block_len)
+                    target_char_offset = target_block.char_start + clamped_offset
+                    print(
+                        f"[DEBUG] TreeNode anchor: original={original_anchor}, "
+                        f"intra_offset={intra_block_offset}, target.char_start="
+                        f"{target_block.char_start}, clamped={clamped_offset}, "
+                        f"result={target_char_offset}, target_page_idx={target_page_idx}"
+                    )
+                else:
+                    # This shouldn't happen - char_start should be populated
+                    logger.warning(
+                        f"Target TextBlock missing char_start at page-local index "
+                        f"{target_page_local_idx}, falling back to cumulative calculation"
+                    )
+                    for i in range(target_page_local_idx):
+                        if i < len(target_page.text_blocks):
+                            target_char_offset += len(target_page.text_blocks[i].content)
+                            if i < len(target_page.text_blocks) - 1:
+                                target_char_offset += 1
+                    target_block_len = len(target_block.content)
+                    clamped_offset = min(intra_block_offset, target_block_len)
+                    target_char_offset += clamped_offset
         else:
             # Fallback: use Y position
             handler = self._get_handler_for_block(adjusted_block)
@@ -807,10 +971,20 @@ class AnnotationPreserver:
                             best_distance = distance
                             best_idx = idx
 
-                    for i in range(best_idx):
-                        target_char_offset += len(target_page.text_blocks[i].content)
-                        if i < len(target_page.text_blocks) - 1:
-                            target_char_offset += 1
+                    # Use char_start - should always be available
+                    best_block = target_page.text_blocks[best_idx]
+                    if best_block.char_start is not None:
+                        target_char_offset = best_block.char_start
+                    else:
+                        # This shouldn't happen - char_start should be populated
+                        logger.warning(
+                            f"Best-match TextBlock missing char_start at index {best_idx}, "
+                            f"falling back to cumulative calculation"
+                        )
+                        for i in range(best_idx):
+                            target_char_offset += len(target_page.text_blocks[i].content)
+                            if i < len(target_page.text_blocks) - 1:
+                                target_char_offset += 1
 
         return target_char_offset
 

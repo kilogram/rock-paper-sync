@@ -1,11 +1,11 @@
 {
-  "doc_uuid": "d4228f3f-64b1-4fb9-83f4-282224edd841",
+  "doc_uuid": "9539b378-43ff-449b-a327-eeeffeca20b4",
   "page_uuids": [
-    "4db13fe5-70df-4f01-bf61-c96ed41b5552",
-    "644b91ed-3bb1-4839-a30c-f834ce5d2114",
-    "68c113ad-3361-4a17-9d7b-1c9b2cf88480"
+    "24aeebaf-c9b5-4aa5-96b2-554b053d1bb0",
+    "49f0c0a9-aec6-409b-ba6d-50b245b1e4c3",
+    "d142af21-75d5-4144-87d8-e10f05482e3b"
   ],
   "rm_files_count": 3,
   "has_annotations": true,
-  "timestamp": "2025-12-08T17:49:04.448989"
+  "timestamp": "2025-12-08T19:10:06.686962"
 }

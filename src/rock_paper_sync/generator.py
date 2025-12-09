@@ -690,6 +690,8 @@ class RemarkableGenerator:
                                     y_start=y_start,
                                     y_end=y_end,
                                     block_type="paragraph",
+                                    char_start=para_start,
+                                    char_end=para_end,
                                 )
                             )
 
@@ -1025,8 +1027,11 @@ class RemarkableGenerator:
         sets the anchor to the pre-calculated character offset.
 
         The anchor_id.value is CrdtId(part1, part2) where:
-        - part1: Author/origin ID (typically 1)
+        - part1: Author/origin ID (typically 1 for text-anchored, 0 for sentinel)
         - part2: Character offset into the RootTextBlock text (NOT combined with CRDT base)
+
+        Special case: Margin notes use sentinel anchor_id with part1=0 and
+        part2=END_OF_DOC_ANCHOR_MARKER. These must be preserved unchanged.
 
         Args:
             tree_node: Original TreeNodeBlock
@@ -1043,10 +1048,22 @@ class RemarkableGenerator:
         if not hasattr(g, "anchor_id") or not g.anchor_id or not g.anchor_id.value:
             return tree_node
 
+        old_anchor = g.anchor_id
+        old_offset = old_anchor.value.part2
+
+        # Check for sentinel anchor (margin notes, non-text-anchored strokes)
+        # These have anchor_id.part1 = 0 and part2 = END_OF_DOC_ANCHOR_MARKER
+        # They should be preserved unchanged - Y positioning comes from stroke coords
+        if target_char_offset == END_OF_DOC_ANCHOR_MARKER:
+            logger.debug(
+                f"Preserving sentinel anchor for cross-page TreeNodeBlock {g.node_id} "
+                f"(margin note or non-text-anchored stroke)"
+            )
+            return tree_node
+
         # Create new anchor_id with the pre-calculated offset
         # The anchor's part2 is simply the character offset into the RootTextBlock text,
         # NOT combined with crdt_base_id (that's for CRDT sequence items, not text anchors)
-        old_anchor = g.anchor_id
         new_anchor_value = CrdtId(old_anchor.value.part1, target_char_offset)
         new_anchor_lww = LwwValue(timestamp=old_anchor.timestamp, value=new_anchor_value)
 
@@ -1056,7 +1073,6 @@ class RemarkableGenerator:
         # Create new TreeNodeBlock with updated group
         new_block = replace(tree_node, group=new_group)
 
-        old_offset = old_anchor.value.part2
         logger.debug(
             f"Reanchored cross-page TreeNodeBlock {g.node_id}: "
             f"anchor_id {old_offset} -> {target_char_offset}"
@@ -1324,6 +1340,8 @@ class RemarkableGenerator:
                     y_end=y_end,
                     block_type=block.type.name.lower(),
                     page_index=block.page_index if block.page_index is not None else 0,
+                    char_start=current_offset,
+                    char_end=para_end,
                 )
             )
 

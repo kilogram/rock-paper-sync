@@ -98,11 +98,11 @@ The bug can be reproduced with the multi-trip test data:
 3. **Add tracing**: Instrument anchor calculations to enable debugging
 4. **Add regression test**: Verify anchors are semantically correct after cross-page moves
 
-## Solution Implemented
+## Solution Implemented (Phase 1: Cross-Page Ordering)
 
-The root cause was that `.rm` files were being passed to `_preserve_annotations()` in UUID-sorted order, but the code assumed they were in NEW document page order. When document content reorganizes across pages, these orders differ.
+The first root cause was that `.rm` files were being passed to `_preserve_annotations()` in UUID-sorted order, but the code assumed they were in NEW document page order. When document content reorganizes across pages, these orders differ.
 
-### The Fix
+### Phase 1 Fix
 
 Added `_match_rm_files_to_pages()` method in `generator.py` that:
 
@@ -113,15 +113,94 @@ Added `_match_rm_files_to_pages()` method in `generator.py` that:
 
 This ensures that when processing page N, we use the `.rm` file whose content matches page N, regardless of filename order.
 
-### Key Changes
+## Additional Bug Discovered (Phase 2: Same-Page Text Changes)
+
+**Status: FIXED** (2025-12-08)
+
+### Symptoms
+
+Device logs show the same anchor errors, but for strokes that stayed on the SAME page where text content changed:
+```
+anchor=1:845 for group=2:962 is not present in text
+anchor=1:842 for group=2:947 is not present in text
+anchor=1:836 for group=2:929 is not present in text
+```
+
+Page text length: 791 chars, but anchors reference 836, 842, 845 (all > 791).
+
+### Root Cause
+
+The `_calculate_tree_node_offset()` function calculated character offsets using **cumulative sums** of filtered TextBlock content. However:
+
+1. Empty paragraphs are skipped during TextBlock extraction (`if paragraph.strip()`)
+2. The RootTextBlock in .rm files contains the FULL page text including empty paragraphs
+3. TreeNodeBlock anchors reference positions in the FULL RootTextBlock text
+4. Cumulative calculation from filtered blocks produces wrong offsets
+
+Additionally, same-page strokes weren't being reanchored at all - only cross-page strokes triggered the TreeNodeBlock recalculation.
+
+### Phase 2 Fix
+
+1. **Added `char_start`/`char_end` fields to `TextBlock`** (`core_types.py`):
+   - Track actual character positions in the full page text
+   - Set during extraction from both old .rm files and new page generation
+
+2. **Updated offset extraction** (`preserver.py`, `generator.py`):
+   - `_extract_old_page_data()`: Store actual offsets when creating TextBlocks
+   - `blocks_to_text_items()`: Store actual offsets when generating pages
+   - `_extract_text_blocks_from_rm()`: Store actual offsets when reading .rm files
+
+3. **Updated anchor calculation** (`preserver.py`):
+   - `_calculate_tree_node_offset()`: Use `char_start`/`char_end` instead of cumulative sums
+   - `_route_single_annotation()`: Use actual offsets for anchor-based routing
+
+4. **Added same-page reanchoring** (`preserver.py`):
+   - Detect when page text length changes (even if stroke stays on same page)
+   - Recalculate TreeNodeBlock anchor for same-page strokes
+   - Add reanchored TreeNodeBlocks to context for reinsertion
+
+5. **Added anchor validation to test harness** (`tests/record_replay/harness/offline.py`):
+   - `_validate_rm_anchors()`: Validates anchors during test replay
+   - Catches anchor errors before device upload
+   - Uses `tools/rmlib/validator.py` for validation
+
+6. **Added sentinel anchor detection** (`tools/rmlib/validator.py`):
+   - Skip validation for `END_OF_DOC_ANCHOR_MARKER` (0xFFFFFFFFFFFF)
+   - These are intentionally large anchors for margin notes
+
+### Key Changes (Phase 2)
+
+- `src/rock_paper_sync/annotations/core_types.py`:
+  - Added `char_start: int | None` and `char_end: int | None` to `TextBlock`
+
+- `src/rock_paper_sync/annotations/preserver.py`:
+  - `_extract_old_page_data()`: Set char_start/char_end on TextBlocks
+  - `_route_single_annotation()`: Use actual offsets for routing decisions
+  - `_calculate_tree_node_offset()`: Use char_start/char_end instead of cumulative sums
+  - `_process_routing_decision()`: Handle same-page reanchoring
 
 - `src/rock_paper_sync/generator.py`:
-  - Added `_match_rm_files_to_pages()` method for content-based page matching
-  - Modified `generate_document()` to call `_match_rm_files_to_pages()` before annotation preservation
+  - `blocks_to_text_items()`: Set char_start/char_end on TextBlocks
+  - `_extract_text_blocks_from_rm()`: Set char_start/char_end on TextBlocks
 
-- `src/rock_paper_sync/annotations/document_anchors.py` (new):
-  - Document-level anchoring data types for future enhancements
+- `tools/rmlib/validator.py`:
+  - Added `END_OF_DOC_ANCHOR_MARKER` constant
+  - Skip sentinel anchors in validation
+
+- `tests/record_replay/harness/offline.py`:
+  - Added `_validate_rm_anchors()` method
+  - Called after sync to catch anchor errors during replay
 
 ### Test Coverage
 
 - `tests/annotations/test_tree_node_anchor_validity.py`: 4 tests validating anchor correctness
+- `tests/record_replay/test_cross_page_reanchor.py`: End-to-end test with golden comparison
+
+### Architectural Insight
+
+The core issue was **mixing coordinate systems**:
+- TreeNodeBlock anchors use positions in the **full RootTextBlock text** (includes all whitespace)
+- TextBlock extraction **filters** empty paragraphs
+- Cumulative offset calculations assumed filtered blocks mapped directly to full text positions
+
+The fix establishes a single source of truth: each TextBlock now knows its **exact** position in the full page text via `char_start`/`char_end`, eliminating the need for cumulative calculations that can drift.

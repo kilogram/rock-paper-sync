@@ -32,7 +32,7 @@ The fourth section adds even more content. When we insert a large amount of text
 
 Additional text in the fourth section. Cross-page annotation tracking requires document-level position mapping rather than per-page processing.
 
-___ADD MARGIN NOTE HERE___
+Write "margin note" here: __________
 
 One more paragraph to ensure we have enough content for proper multi-page behavior.
 

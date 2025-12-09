@@ -246,7 +246,7 @@ class WordWrapLayoutEngine:
         return chunks
 
     def offset_to_position(
-        self, offset: int, text: str, origin: tuple[float, float], width: float
+        self, offset: int, text: str, origin: tuple[float, float], width: float, debug: bool = False
     ) -> tuple[float, float]:
         """Convert character offset to (x, y) coordinates.
 
@@ -259,6 +259,7 @@ class WordWrapLayoutEngine:
             text: Full text content
             origin: (x, y) origin point for text rendering
             width: Available width for text
+            debug: If True, print debug info
 
         Returns:
             (x, y) coordinates for the character at the given offset
@@ -286,6 +287,19 @@ class WordWrapLayoutEngine:
         # Calculate position
         x = origin[0] + x_offset
         y = origin[1] + (line_num * self.line_height)
+
+        if debug:
+            print(f"[DEBUG-LAYOUT] offset={offset}, line_num={line_num}, line_start={line_start}")
+            print(
+                f"[DEBUG-LAYOUT] Total line_breaks: {len(line_breaks)}, breaks={line_breaks[:15]}..."
+            )
+            context = text[max(0, offset - 10) : offset + 10]
+            print(f"[DEBUG-LAYOUT] Text at offset: '...{context}...'")
+            # Show what's around line breaks 5-8
+            for i in range(5, min(9, len(line_breaks))):
+                lb = line_breaks[i]
+                lb_context = text[max(0, lb - 5) : lb + 20].replace("\n", "\\n")
+                print(f"[DEBUG-LAYOUT] Line {i} (offset {lb}): '{lb_context}'")
 
         return (x, y)
 

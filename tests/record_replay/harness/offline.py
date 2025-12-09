@@ -575,12 +575,51 @@ class OfflineEmulator(DeviceInteractionManager):
         if has_annotations:
             self.bench.observe(f"Found {len(rm_files)} .rm file(s) after injection")
 
-        return DocumentState(
+        state = DocumentState(
             doc_uuid=doc_uuid,
             page_uuids=page_uuids,
             rm_files=rm_files,
             has_annotations=has_annotations,
         )
+
+        # Validate anchor offsets in synced .rm files
+        self._validate_rm_anchors(state, context="after sync")
+
+        return state
+
+    def _validate_rm_anchors(self, state: DocumentState, context: str = "unknown") -> None:
+        """Validate that TreeNodeBlock anchors are within page text bounds.
+
+        This catches the device error "anchor=X for group=Y is not present in text"
+        during test replay instead of requiring device re-recording.
+
+        Args:
+            state: Document state with .rm files to validate
+            context: Description of when validation is happening (for error messages)
+
+        Raises:
+            AssertionError: If any anchor is out of range
+        """
+        # Import here to avoid circular imports
+        import sys
+
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "tools"))
+        from rmlib.validator import validate_rm_bytes
+
+        errors: list[str] = []
+        for page_uuid, rm_data in state.rm_files.items():
+            result = validate_rm_bytes(rm_data, source_name=f"{page_uuid[:8]}.rm")
+            if not result.is_valid:
+                for error in result.errors:
+                    errors.append(f"{page_uuid[:8]}: {error}")
+
+        if errors:
+            error_msg = (
+                f"ANCHOR VALIDATION FAILED ({context}):\n"
+                f"The following anchors are invalid (device would show 'anchor is not present in text'):\n"
+                + "\n".join(f"  - {e}" for e in errors)
+            )
+            raise AssertionError(error_msg)
 
     def _inject_rm_files(self, doc_uuid: str, rm_files: dict[str, bytes]) -> None:
         """Inject .rm files into rmfakecloud.

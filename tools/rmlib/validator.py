@@ -28,6 +28,10 @@ from typing import Any
 import rmscene
 from rmscene.scene_stream import RootTextBlock, TreeNodeBlock
 
+# Sentinel anchor for margin notes / non-text-anchored strokes
+# These anchors are intentionally very large and should not be validated
+END_OF_DOC_ANCHOR_MARKER = 281474976710655  # 0xFFFFFFFFFFFF
+
 
 @dataclass
 class ValidationError:
@@ -169,6 +173,10 @@ def validate_rm_file(
             anchor_val = group.anchor_id.value
             anchor_offset = anchor_val.part2 if hasattr(anchor_val, "part2") else anchor_val
 
+            # Skip sentinel anchors (margin notes, non-text-anchored strokes)
+            if anchor_offset == END_OF_DOC_ANCHOR_MARKER:
+                continue
+
             # Check if anchor is within valid range
             if page_text_len is not None:
                 if anchor_offset < 0:
@@ -303,6 +311,10 @@ def validate_rm_bytes(
                 anchor_offset = anchor_val.part2
             else:
                 anchor_offset = anchor_val
+
+            # Skip sentinel anchors (margin notes, non-text-anchored strokes)
+            if anchor_offset == END_OF_DOC_ANCHOR_MARKER:
+                continue
 
             if effective_text_len is not None:
                 if anchor_offset < 0:
