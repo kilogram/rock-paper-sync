@@ -49,6 +49,9 @@ dev = [
     "ruff>=0.1.0",
     "types-PyYAML>=6.0.0",
 ]
+calibration = [
+    "PyQt6>=6.0",
+]
 
 [project.scripts]
 rock-paper-sync = "rock_paper_sync.cli:main"

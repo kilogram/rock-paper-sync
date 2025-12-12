@@ -1,6 +1,6 @@
 # Cross-Page TreeNodeBlock Anchor Bug
 
-**Status: FIXED** (2025-12-07)
+**Status: FIXED** (Phase 1-3 complete)
 
 ## Summary
 
@@ -204,3 +204,159 @@ The core issue was **mixing coordinate systems**:
 - Cumulative offset calculations assumed filtered blocks mapped directly to full text positions
 
 The fix establishes a single source of truth: each TextBlock now knows its **exact** position in the full page text via `char_start`/`char_end`, eliminating the need for cumulative calculations that can drift.
+
+## Future Architecture: AnchorContext
+
+The Phase 1 and Phase 2 fixes address immediate bugs but don't solve the fundamental fragility of character offset anchoring. A more robust architecture has been designed:
+
+**See**: `docs/ANNOTATION_ARCHITECTURE_V2.md`
+
+Key concepts:
+- **AnchorContext**: Multi-signal stable identifier (text + context + structure + spatial)
+- **DiffAnchor**: Anchor relative to unchanged text (survives edits)
+- **DocumentModel**: Document-level abstraction with pages as projections
+- **ContextResolver**: Unified resolution using preserved `HeuristicTextAnchor`
+
+This architecture will eliminate the class of bugs where coordinate systems are mixed, by making anchoring explicit and multi-layered rather than relying on fragile character offsets.
+
+## Phase 3: Scene Tree Structure Missing (2025-12-21)
+
+**Status: FIXED**
+
+### Symptoms
+
+Device logs show errors when loading a document with cross-page strokes:
+```
+Dec 16 01:25:37 rm.scene.tree  Unable to find node with id=0:11, but it should be present
+Dec 16 01:25:37 rm.crdt.sequence  - left not found 2:957 - insert at beginning
+```
+
+Strokes that moved cross-page disappear on the device, even though:
+- TreeNodeBlocks are present and correctly anchored
+- SceneLineItemBlocks (strokes) are present and reference the correct parent
+- All blocks pass rmscene serialization
+
+### Root Cause (Confirmed)
+
+The CRDT scene graph requires **three blocks** for each stroke group, not two:
+
+```
+SceneTreeBlock (declares node in scene tree)
+  - tree_id: CrdtId(2, 956)       # The TreeNodeBlock being declared
+  - node_id: CrdtId(0, 0)         # Update marker
+  - is_update: True
+  - parent_id: CrdtId(0, 11)      # Layer 1
+
+TreeNodeBlock (2:956)
+  - node_id: CrdtId(2, 956)
+  - anchor_id: CrdtId(1, 845)     # Text position
+
+SceneGroupItemBlock (links to layer's sequence)
+  - parent_id: CrdtId(0, 11)      # Layer 1
+  - item_id: CrdtId(2, 957)       # This item's ID
+  - left_id: CrdtId(0, 0)         # CRDT sequence predecessor (reset for cross-page)
+  - right_id: CrdtId(0, 0)        # CRDT sequence successor (reset for cross-page)
+  - value: CrdtId(2, 956)         # Points to TreeNodeBlock
+
+SceneLineItemBlock (stroke data)
+  - parent_id: CrdtId(2, 956)     # References TreeNodeBlock
+```
+
+When we moved a stroke cross-page, we were:
+1. ✅ Copying the TreeNodeBlock (with reanchored anchor_id)
+2. ✅ Copying the SceneLineItemBlock (stroke data)
+3. ✅ Copying the SceneGroupItemBlock (links node to layer)
+4. ❌ **NOT copying the SceneTreeBlock** that declares the node in the scene tree
+
+Without the SceneTreeBlock, the device can't find the TreeNodeBlock in the scene tree hierarchy, so it logs "Unable to find node with id=0:11" and fails to render the strokes.
+
+### Discovery Process
+
+1. **Device logs** showed "Unable to find node with id=0:11" - this is Layer 1, not a stroke node
+2. **rm_inspector tool** was enhanced with `--mode scene-graph` to debug block structure
+3. **Analysis** of working device-native files revealed the SceneTreeBlock pattern:
+   ```
+   [5] SceneTreeBlock: tree_id=CrdtId(2, 929), parent_id=CrdtId(0, 11)
+   [13] TreeNodeBlock: node_id=CrdtId(2, 929)
+   [19] SceneGroupItemBlock: parent_id=CrdtId(0, 11), value=CrdtId(2, 929)
+   ```
+
+### Fix Implementation
+
+1. **OldPageData** (`preserver.py`):
+   - Added `scene_tree_blocks_by_tree_id: dict[Any, Any]` field
+   - Extract SceneTreeBlocks during page data extraction
+
+2. **RoutingDecision** (`preserver.py`):
+   - Added `scene_tree_block: Any | None` field
+   - Extract scene_tree_block in `_route_single_annotation()`
+
+3. **Extraction** (`preserver.py`):
+   - Both `extract_old_page_data()` and `_extract_page_data_internal()` now extract SceneTreeBlocks
+   - Build `scene_tree_blocks_by_tree_id` mapping keyed by `tree_id`
+
+4. **Context Building** (`preserver.py`):
+   - 4-tuple structure: `(TreeNodeBlock, offset, SceneGroupItemBlock, SceneTreeBlock)`
+   - Pass all four elements through the routing pipeline
+
+5. **Injection** (`generator.py`):
+   - Create NEW SceneTreeBlock for each cross-page TreeNodeBlock:
+     ```python
+     new_scene_tree_block = SceneTreeBlock(
+         tree_id=node_id,
+         node_id=CrdtId(0, 0),
+         is_update=True,
+         parent_id=CrdtId(0, 11),  # Layer 1
+     )
+     ```
+   - Create NEW SceneGroupItemBlock with reset left_id/right_id:
+     ```python
+     new_scene_group_item = SceneGroupItemBlock(
+         parent_id=CrdtId(0, 11),  # Layer 1
+         item=CrdtSequenceItem(
+             item_id=scene_group_item.item.item_id,
+             left_id=CrdtId(0, 0),   # Reset - no predecessor
+             right_id=CrdtId(0, 0),  # Reset - no successor
+             deleted_length=0,
+             value=node_id,
+         ),
+     )
+     ```
+   - Inject in order: TreeNodeBlock → SceneTreeBlock → SceneGroupItemBlock
+
+### Key Files Changed
+
+- `src/rock_paper_sync/annotations/preserver.py`:
+  - Added `scene_tree_blocks_by_tree_id` to OldPageData
+  - Added `scene_tree_block` to RoutingDecision
+  - Extract SceneTreeBlocks in both extraction methods
+  - 4-tuple structure for tree_nodes
+
+- `src/rock_paper_sync/generator.py`:
+  - Updated tuple unpacking for 4-element structure
+  - Inject SceneTreeBlock before SceneGroupItemBlock
+  - Create new blocks with proper CRDT IDs
+
+- `tools/analysis/rm_inspector.py`:
+  - Added `--mode scene-graph` for debugging scene tree structure
+  - Shows block order, parent relationships, and validates parent_id references
+
+### Verification
+
+After the fix:
+```
+=== Scene Graph Debug ===
+[ 4] SceneTreeBlock: tree_id=CrdtId(0, 11), parent_id=CrdtId(0, 1)
+[ 5] SceneTreeBlock: tree_id=CrdtId(2, 299), parent_id=CrdtId(0, 11)  # Cross-page stroke
+[ 8] TreeNodeBlock: node_id=CrdtId(0, 11) label='Layer 1'
+[ 9] TreeNodeBlock: node_id=CrdtId(2, 299) anchor=CrdtId(0, 281474976710655)
+[11] SceneGroupItemBlock: parent_id=CrdtId(0, 11), value=CrdtId(2, 299)
+
+✓ All SceneGroupItemBlock parent_ids exist
+```
+
+Device logs no longer show "Unable to find node" errors, and strokes render correctly.
+
+### Remaining Issue
+
+Highlight rectangles have a 17.6px X-position delta vs golden data. This is a **separate issue** from the stroke rendering bug - strokes now work correctly. The highlight positioning issue may be related to font metrics or coordinate transformation differences.

@@ -1,0 +1,17 @@
+{
+  "device_name": "paper_pro_move",
+  "page_width": 1404,
+  "page_height": 1872,
+  "text_width": 750.0,
+  "layout_text_width": 758.0,
+  "font_point_size": 29.5,
+  "line_height": 57.0,
+  "calibration_date": "2025-12-12",
+  "golden_files": [
+    "calibration_wrap.rm",
+    "calibration_geometry.rm",
+    "calibration_font_sizes.rm",
+    "calibration_chars.rm",
+    "calibration_structure.rm"
+  ]
+}

@@ -1,0 +1,139 @@
+Geometry Calibration Strokes
+========================================
+
+Page dimensions: 1404 x 1872 doc pixels
+Physical PPI: 264
+Doc PPI X: 388.5 (388.5 doc px/inch)
+Doc PPI Y: 291.4 (291.4 doc px/inch)
+Text area: x=-375.0, y=94.0, width=750.0
+
+Physical dimensions (portrait):
+  Width: 3.61 inches (954 physical px)
+  Height: 6.42 inches (1696 physical px)
+
+Expected ruler positions:
+----------------------------------------
+  1 inch from top: Y = 291 doc px
+  2 inch from top: Y = 583 doc px
+  3 inch from top: Y = 874 doc px
+  4 inch from top: Y = 1166 doc px
+  5 inch from top: Y = 1457 doc px
+  6 inch from top: Y = 1748 doc px
+  1 inch from left: X = 389 doc px
+  2 inch from left: X = 777 doc px
+  3 inch from left: X = 1166 doc px
+
+Stroke definitions (for manual drawing or injection):
+----------------------------------------
+
+border:
+  (2, 2)
+  (1402, 2)
+
+border:
+  (2, 1870)
+  (1402, 1870)
+
+border:
+  (2, 2)
+  (2, 1870)
+
+border:
+  (1402, 2)
+  (1402, 1870)
+
+h_inch_1:
+  (50, 291)
+  (100, 291)
+
+h_inch_1_r:
+  (1354, 291)
+  (1304, 291)
+
+h_inch_2:
+  (50, 583)
+  (150, 583)
+
+h_inch_2_r:
+  (1354, 583)
+  (1254, 583)
+
+h_inch_3:
+  (50, 874)
+  (100, 874)
+
+h_inch_3_r:
+  (1354, 874)
+  (1304, 874)
+
+h_inch_4:
+  (50, 1166)
+  (150, 1166)
+
+h_inch_4_r:
+  (1354, 1166)
+  (1254, 1166)
+
+h_inch_5:
+  (50, 1457)
+  (100, 1457)
+
+h_inch_5_r:
+  (1354, 1457)
+  (1304, 1457)
+
+h_inch_6:
+  (50, 1748)
+  (150, 1748)
+
+h_inch_6_r:
+  (1354, 1748)
+  (1254, 1748)
+
+v_inch_1:
+  (389, 50)
+  (389, 100)
+
+v_inch_1_b:
+  (389, 1822)
+  (389, 1772)
+
+v_inch_2:
+  (777, 50)
+  (777, 150)
+
+v_inch_2_b:
+  (777, 1822)
+  (777, 1722)
+
+v_inch_3:
+  (1166, 50)
+  (1166, 100)
+
+v_inch_3_b:
+  (1166, 1822)
+  (1166, 1772)
+
+center_h:
+  (602, 936)
+  (802, 936)
+
+center_v:
+  (702, 836)
+  (702, 1036)
+
+text_corner_0_0:
+  (327, 94)
+  (357, 94)
+
+text_corner_0_1:
+  (327, 94)
+  (327, 124)
+
+text_corner_1_0:
+  (1077, 94)
+  (1047, 94)
+
+text_corner_1_1:
+  (1077, 94)
+  (1077, 124)

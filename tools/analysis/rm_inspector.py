@@ -302,6 +302,94 @@ def analyze_structure(rm_file: Path, output_file: Path | None = None):
         print(output)
 
 
+def analyze_scene_graph(rm_file: Path, output_file: Path | None = None):
+    """Debug scene graph structure with all blocks in order.
+
+    Shows blocks in file order to debug parent-child relationships
+    and identify issues with SceneGroupItemBlock references.
+    """
+    from rmscene.scene_stream import SceneTreeBlock
+
+    with rm_file.open('rb') as f:
+        blocks = list(rmscene.read_blocks(f))
+
+    lines = []
+    lines.append("=== Scene Graph Debug ===")
+    lines.append(f"File: {rm_file}")
+    lines.append(f"Total blocks: {len(blocks)}\n")
+
+    # Track defined nodes (TreeNodeBlock node_ids)
+    defined_nodes = set()
+    # Track referenced parent_ids in SceneGroupItemBlocks
+    referenced_parents = []
+
+    for i, block in enumerate(blocks):
+        block_type = type(block).__name__
+
+        if block_type == "AuthorIdsBlock":
+            author_count = len(block.author_uuids) if hasattr(block, 'author_uuids') else "?"
+            lines.append(f"[{i:2d}] {block_type} (authors: {author_count})")
+        elif block_type == "SceneTreeBlock":
+            lines.append(f"[{i:2d}] {block_type}: tree_id={block.tree_id}, node_id={block.node_id}, parent_id={block.parent_id}")
+        elif block_type == "TreeNodeBlock":
+            if hasattr(block, 'group') and block.group:
+                node_id = block.group.node_id
+                defined_nodes.add(str(node_id))
+                label = block.group.label.value if hasattr(block.group, 'label') and block.group.label else ""
+                anchor = block.group.anchor_id.value if hasattr(block.group, 'anchor_id') and block.group.anchor_id else None
+                author = f"author={node_id.part1}" if node_id.part1 != 0 else ""
+                lines.append(f"[{i:2d}] {block_type}: node_id={node_id} {author}")
+                if label:
+                    lines.append(f"      label='{label}'")
+                if anchor:
+                    lines.append(f"      anchor={anchor}")
+        elif block_type == "SceneGroupItemBlock":
+            parent_id = block.parent_id
+            value = block.item.value
+            item_id = block.item.item_id
+            left_id = block.item.left_id
+            right_id = block.item.right_id
+
+            # Check if parent exists
+            parent_exists = str(parent_id) in defined_nodes
+            parent_status = "✓" if parent_exists else "✗ MISSING"
+
+            referenced_parents.append((str(parent_id), parent_exists))
+
+            lines.append(f"[{i:2d}] {block_type}:")
+            lines.append(f"      parent_id={parent_id} {parent_status}")
+            lines.append(f"      value={value} (links to TreeNode)")
+            lines.append(f"      item_id={item_id}")
+            lines.append(f"      left_id={left_id}, right_id={right_id}")
+        elif "Line" in block_type or "Glyph" in block_type:
+            parent = getattr(block, 'parent_id', '?')
+            lines.append(f"[{i:2d}] {block_type}: parent_id={parent}")
+        elif block_type in ["MigrationInfoBlock", "PageInfoBlock", "RootTextBlock", "SceneInfo"]:
+            lines.append(f"[{i:2d}] {block_type}")
+        else:
+            lines.append(f"[{i:2d}] {block_type}")
+
+    # Summary
+    lines.append("\n=== Summary ===")
+    lines.append(f"Defined TreeNodeBlocks: {len(defined_nodes)}")
+    lines.append(f"  {', '.join(sorted(defined_nodes))}")
+
+    missing_parents = [p for p, exists in referenced_parents if not exists]
+    if missing_parents:
+        lines.append(f"\n⚠️ SceneGroupItemBlocks with MISSING parent_id:")
+        for p in set(missing_parents):
+            lines.append(f"  - {p}")
+    else:
+        lines.append("\n✓ All SceneGroupItemBlock parent_ids exist")
+
+    output = "\n".join(lines)
+    if output_file:
+        output_file.write_text(output)
+        print(f"Output written to {output_file}")
+    else:
+        print(output)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Unified reMarkable file inspector",
@@ -311,7 +399,7 @@ def main():
     parser.add_argument(
         '--mode',
         required=True,
-        choices=['anchors', 'coords', 'baselines', 'blocks', 'text', 'structure'],
+        choices=['anchors', 'coords', 'baselines', 'blocks', 'text', 'structure', 'scene-graph'],
         help='Analysis mode to run'
     )
     parser.add_argument(
@@ -339,6 +427,7 @@ def main():
         'blocks': analyze_blocks,
         'text': analyze_text,
         'structure': analyze_structure,
+        'scene-graph': analyze_scene_graph,
     }
 
     modes[args.mode](args.rm_file, args.output)

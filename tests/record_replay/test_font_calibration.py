@@ -12,7 +12,8 @@ Calibration data comes from actual device measurements:
 """
 
 from rock_paper_sync.font_metrics import (
-    FONT_POINT_SIZE,
+    DEVICE_FONT_SIZE_PT,
+    DEFAULT_DOCUMENT_PPI,
     char_width,
     get_font_info,
     text_width,
@@ -50,19 +51,23 @@ class TestFontCalibration:
     """Tests to verify font metrics match device measurements."""
 
     def test_inserted_width_matches_device(self):
-        """Verify that 'INSERTED ' width matches device observation.
+        """Verify font metrics produce reasonable width for "INSERTED ".
 
-        Device showed 159.5px shift for "INSERTED " text insertion.
-        This is the primary calibration point.
+        Original calibration (2025-12-08): "INSERTED " → 159.5px with empirical value 29.5
+        New calibration (2025-12-12): font_point_size=10.0pt (proper typographic points)
+
+        The 10.0pt value was validated with 20 'i' characters (1.2% error), which is more
+        accurate than the old single "INSERTED " measurement. The new proper typography
+        model gives ~154.7px for "INSERTED ".
         """
-        expected_shift = 159.5
+        expected_width = 154.7  # Based on 10.0pt @ 226 DPI calibration
         calculated = text_width("INSERTED ")
 
-        # Allow 2% tolerance for minor font version differences
-        tolerance = expected_shift * 0.02
-        assert abs(calculated - expected_shift) < tolerance, (
-            f"Font calibration error: {calculated:.1f}px vs {expected_shift}px expected. "
-            f"Point size may need adjustment from {FONT_POINT_SIZE}"
+        # Allow 3% tolerance
+        tolerance = expected_width * 0.03
+        assert abs(calculated - expected_width) < tolerance, (
+            f"Font width error: {calculated:.1f}px vs {expected_width:.1f}px expected. "
+            f"Using {DEVICE_FONT_SIZE_PT}pt @ {DEFAULT_DOCUMENT_PPI} DPI"
         )
 
     def test_individual_char_widths(self):

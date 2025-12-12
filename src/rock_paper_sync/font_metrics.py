@@ -10,6 +10,15 @@ widths vary significantly:
 - "INSERTED " = ~159px vs naive 15px/char = 135px
 
 Using actual font metrics reduces positioning errors from ~24px to <5px.
+
+Typography Model:
+  - Font size: 10.0 typographic points (1/72 inch)
+  - Document DPI: 226 (reMarkable 2 coordinate system)
+  - Pixel size: 10.0 × 226 / 72 ≈ 31.4 pixels
+
+This is the PROPER typographic model discovered through empirical calibration
+on 2025-12-12. The previous value (29.5) worked because it was used directly
+as pixels, but lacked the proper DPI conversion.
 """
 
 from functools import lru_cache
@@ -19,9 +28,15 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     pass
 
-# Calibrated point size from device measurements
-# Derived from: 159.5px shift / 4928 font units * 1000 = 32.4pt
-FONT_POINT_SIZE = 32.4
+# Device font size (discovered via calibration 2025-12-12)
+# This is the TYPOGRAPHIC point size (1/72 inch)
+# Measured by highlighting 20 'i' characters and comparing to theoretical widths
+# at different point sizes. 10.0pt matched within 1.2% error.
+DEVICE_FONT_SIZE_PT = 10.0
+
+# Document coordinate DPI (reMarkable 2 format)
+# All reMarkable devices use 226 DPI for document coordinates
+DEFAULT_DOCUMENT_PPI = 226
 
 # Common paths where Noto Sans might be installed
 FONT_SEARCH_PATHS = [
@@ -77,60 +92,87 @@ def _load_font() -> tuple[dict[int, str], dict, int]:
     return cmap, glyphset, units_per_em
 
 
-def char_width(char: str, point_size: float = FONT_POINT_SIZE) -> float:
-    """Get width of a single character in pixels at given point size.
+def char_width(
+    char: str,
+    font_size_pt: float = DEVICE_FONT_SIZE_PT,
+    document_ppi: int = DEFAULT_DOCUMENT_PPI,
+) -> float:
+    """Get width of a single character in document pixels.
 
     Args:
         char: Single character to measure
-        point_size: Font size in points/pixels
+        font_size_pt: Font size in typographic points (1/72 inch)
+        document_ppi: Document coordinate DPI (default: 226 for reMarkable)
 
     Returns:
-        Width in pixels
+        Width in document pixels
+
+    Example:
+        # Get width of 'A' at device font size (10pt @ 226 DPI)
+        width = char_width('A')  # ~18.7 pixels
+
+        # Get width at different font size
+        width = char_width('A', font_size_pt=12.0)  # ~22.4 pixels
     """
     if len(char) != 1:
         raise ValueError(f"Expected single character, got {len(char)}")
+
+    # Convert typographic points to document pixels
+    pixel_size = font_size_pt * document_ppi / 72.0
 
     cmap, glyphset, units_per_em = _load_font()
     glyph_name = cmap.get(ord(char))
 
     if glyph_name and glyph_name in glyphset:
-        return glyphset[glyph_name].width * point_size / units_per_em
+        return glyphset[glyph_name].width * pixel_size / units_per_em
 
     # Fallback for unknown characters - use space width
     space_glyph = cmap.get(ord(" "))
     if space_glyph and space_glyph in glyphset:
-        return glyphset[space_glyph].width * point_size / units_per_em
+        return glyphset[space_glyph].width * pixel_size / units_per_em
 
     # Last resort - return average width
-    return 15.0
+    return pixel_size * 0.5
 
 
-def text_width(text: str, point_size: float = FONT_POINT_SIZE) -> float:
-    """Get total width of text string in pixels.
+def text_width(
+    text: str,
+    font_size_pt: float = DEVICE_FONT_SIZE_PT,
+    document_ppi: int = DEFAULT_DOCUMENT_PPI,
+) -> float:
+    """Get total width of text string in document pixels.
 
     Args:
         text: String to measure
-        point_size: Font size in points/pixels
+        font_size_pt: Font size in typographic points (1/72 inch)
+        document_ppi: Document coordinate DPI (default: 226 for reMarkable)
 
     Returns:
-        Total width in pixels
+        Total width in document pixels
     """
-    return sum(char_width(c, point_size) for c in text)
+    return sum(char_width(c, font_size_pt, document_ppi) for c in text)
 
 
-def text_width_range(text: str, start: int, end: int, point_size: float = FONT_POINT_SIZE) -> float:
+def text_width_range(
+    text: str,
+    start: int,
+    end: int,
+    font_size_pt: float = DEVICE_FONT_SIZE_PT,
+    document_ppi: int = DEFAULT_DOCUMENT_PPI,
+) -> float:
     """Get width of a text substring.
 
     Args:
         text: Full text
         start: Start index (inclusive)
         end: End index (exclusive)
-        point_size: Font size in points/pixels
+        font_size_pt: Font size in typographic points (1/72 inch)
+        document_ppi: Document coordinate DPI (default: 226 for reMarkable)
 
     Returns:
-        Width of text[start:end] in pixels
+        Width of text[start:end] in document pixels
     """
-    return text_width(text[start:end], point_size)
+    return text_width(text[start:end], font_size_pt, document_ppi)
 
 
 def get_font_info() -> dict:
@@ -141,11 +183,14 @@ def get_font_info() -> dict:
     """
     try:
         cmap, glyphset, units_per_em = _load_font()
+        pixel_size = DEVICE_FONT_SIZE_PT * DEFAULT_DOCUMENT_PPI / 72.0
         return {
             "font_path": str(_find_font_path()),
             "units_per_em": units_per_em,
             "num_glyphs": len(glyphset),
-            "point_size": FONT_POINT_SIZE,
+            "font_size_pt": DEVICE_FONT_SIZE_PT,
+            "document_ppi": DEFAULT_DOCUMENT_PPI,
+            "pixel_size": pixel_size,
             "sample_widths": {
                 "space": char_width(" "),
                 "a": char_width("a"),

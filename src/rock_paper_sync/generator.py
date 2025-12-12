@@ -31,9 +31,13 @@ from .annotations import (
     HeuristicTextAnchor,
     TextBlock,
 )
-from .annotations.handlers.highlight_handler import HighlightHandler
-from .annotations.handlers.stroke_handler import StrokeHandler
-from .annotations.preserver import AnnotationPreserver
+from .annotations.document_model import (
+    AnchorContext,
+    ContextResolver,
+    DocumentAnnotation,
+    DocumentModel,
+    PageProjection,
+)
 from .config import LayoutConfig as AppLayoutConfig
 from .coordinate_transformer import (
     END_OF_DOC_ANCHOR_MARKER,
@@ -244,7 +248,7 @@ class PageAnnotationContext:
 
     Attributes:
         annotations: All annotation blocks routed to this page
-        tree_nodes: List of (TreeNodeBlock, stroke_y) tuples for cross-page strokes
+        tree_nodes: List of (TreeNodeBlock, stroke_y, SceneGroupItemBlock, SceneTreeBlock) tuples for cross-page strokes
         source_rm_path: Original .rm file path (for roundtrip preservation)
         exclude_ids: Annotation IDs that moved OUT of this page (exclude from roundtrip)
         exclude_tree_node_ids: TreeNodeBlock node_ids that moved OUT (exclude from roundtrip)
@@ -252,7 +256,9 @@ class PageAnnotationContext:
     """
 
     annotations: list = field(default_factory=list)
-    tree_nodes: list = field(default_factory=list)  # List of (TreeNodeBlock, stroke_y) tuples
+    tree_nodes: list = field(
+        default_factory=list
+    )  # List of (TreeNodeBlock, stroke_y, SceneGroupItemBlock, SceneTreeBlock) tuples
     source_rm_path: Path | None = None
     exclude_ids: set = field(default_factory=set)
     exclude_tree_node_ids: set = field(default_factory=set)
@@ -367,8 +373,7 @@ class RemarkableGenerator:
         self.line_height = self.geometry.line_height
         self.char_width = self.geometry.char_width
 
-        # Initialize annotation adjustment strategies (Phase 1)
-        self.text_anchor_strategy = HeuristicTextAnchor(context_window=50, fuzzy_threshold=0.8)
+        # Initialize layout engine for text positioning
         # Use proportional font metrics for accurate highlight positioning
         # The device uses Noto Sans (proportional font), not monospace
         self.layout_engine = WordWrapLayoutEngine.from_geometry(
@@ -376,20 +381,17 @@ class RemarkableGenerator:
             use_font_metrics=True,  # Enable Noto Sans font metrics for accuracy
         )
 
-        # Initialize annotation handlers for position extraction and relocation
-        self._highlight_handler = HighlightHandler()
-        self._stroke_handler = StrokeHandler()
-
-        # Initialize annotation preserver for cross-page annotation handling
-        self._annotation_preserver = AnnotationPreserver(
-            geometry=self.geometry,
-            layout_engine=self.layout_engine,
-            highlight_handler=self._highlight_handler,
-            stroke_handler=self._stroke_handler,
+        # Context resolver for annotation migration (V2 architecture)
+        self._context_resolver = ContextResolver(
+            context_window=50,
+            fuzzy_threshold=0.8,
         )
 
+        # Keep HeuristicTextAnchor for direct use (e.g., highlight adjustment)
+        self.text_anchor_strategy = HeuristicTextAnchor(context_window=50, fuzzy_threshold=0.8)
+
         logger.info(
-            "RemarkableGenerator initialized with rmscene integration and Phase 1 annotation anchoring"
+            "RemarkableGenerator initialized with DocumentModel-based annotation preservation"
         )
 
     def _get_handler_for_block(self, block):
@@ -455,6 +457,9 @@ class RemarkableGenerator:
     ) -> RemarkableDocument:
         """Convert markdown document to reMarkable format.
 
+        Uses DocumentModel as the authoritative source for pagination and
+        annotation migration (V2 architecture).
+
         Args:
             md_doc: Parsed markdown document
             parent_uuid: UUID of parent folder (empty for root)
@@ -477,30 +482,48 @@ class RemarkableGenerator:
         timestamp = int(time.time() * 1000)
         existing_page_uuids = existing_page_uuids or []
 
-        # Paginate content blocks
-        page_blocks = self.paginate_content(md_doc.content)
+        # Create DocumentModel from content blocks (V2 architecture)
+        new_model = DocumentModel.from_content_blocks(md_doc.content, self.geometry)
 
-        # Generate pages with positioned text items
+        # If we have existing .rm files, load old model and migrate annotations
+        if existing_rm_files:
+            valid_rm_files = [p for p in existing_rm_files if p and p.exists()]
+            if valid_rm_files:
+                old_model = DocumentModel.from_rm_files(valid_rm_files, self.geometry)
+                if old_model.annotations:
+                    new_model, report = old_model.migrate_annotations_to(new_model)
+                    logger.info(
+                        f"Migrated {len(report.migrations)} annotations, "
+                        f"{len(report.orphans)} orphaned (success rate: {report.success_rate:.1%})"
+                    )
+
+        # Project to pages - DocumentModel is authoritative for pagination
+        projections = new_model.project_to_pages(existing_page_uuids, self.layout_engine)
+
+        # Build UUID -> .rm path mapping for source file tracking
+        uuid_to_rm_path: dict[str, Path] = {}
+        if existing_rm_files and existing_page_uuids:
+            for uuid, rm_path in zip(existing_page_uuids, existing_rm_files):
+                if rm_path and rm_path.exists():
+                    uuid_to_rm_path[uuid] = rm_path
+
+        # Generate RemarkablePages from PageProjections
         pages: list[RemarkablePage] = []
-        for i, blocks in enumerate(page_blocks):
-            # Reuse existing page UUID if available, otherwise generate new one
-            if i < len(existing_page_uuids):
-                page_uuid = existing_page_uuids[i]
-                logger.debug(f"Reusing existing page UUID: {page_uuid}")
-            else:
-                page_uuid = str(uuid_module.uuid4())
-                logger.debug(f"Generated new page UUID: {page_uuid}")
+        for projection in projections:
+            # Convert content blocks to text items
+            text_items, text_blocks = self.blocks_to_text_items(projection.content_blocks)
 
-            text_items, text_blocks = self.blocks_to_text_items(blocks)
-            pages.append(
-                RemarkablePage(uuid=page_uuid, text_items=text_items, text_blocks=text_blocks)
+            page = RemarkablePage(
+                uuid=projection.page_uuid,
+                text_items=text_items,
+                text_blocks=text_blocks,
             )
 
-        # Preserve annotations from existing .rm files if provided
-        if existing_rm_files:
-            # Match .rm files to new pages by content (fixes page reordering bug)
-            matched_rm_files = self._match_rm_files_to_pages(existing_rm_files, pages)
-            self._annotation_preserver.preserve(pages, matched_rm_files)
+            # Add annotations from projection
+            if projection.annotations:
+                self._apply_annotations_to_page(page, projection, uuid_to_rm_path)
+
+            pages.append(page)
 
         logger.debug(
             f"Generated document {doc_uuid} with {len(pages)} page(s) "
@@ -514,6 +537,279 @@ class RemarkableGenerator:
             pages=pages,
             modified_time=timestamp,
         )
+
+    def _apply_annotations_to_page(
+        self,
+        page: RemarkablePage,
+        projection: PageProjection,
+        uuid_to_rm_path: dict[str, Path],
+    ) -> None:
+        """Apply annotations from PageProjection to RemarkablePage.
+
+        Converts DocumentAnnotation objects to rmscene blocks and adjusts
+        coordinates for the target page.
+
+        Args:
+            page: Target RemarkablePage to add annotations to
+            projection: PageProjection containing annotations and page text
+            uuid_to_rm_path: Mapping of page UUIDs to source .rm file paths
+        """
+        # Initialize annotation context if needed
+        if page.annotation_context is None:
+            page.annotation_context = PageAnnotationContext()
+
+        ctx = page.annotation_context
+        page_text = projection.page_text
+        new_origin = (self.geometry.text_pos_x, self.geometry.text_pos_y)
+
+        # Collect annotation IDs that are being applied to this page
+        projection_annotation_ids: set[CrdtId] = set()
+        for doc_anno in projection.annotations:
+            block = doc_anno.original_rm_block
+            if block and hasattr(block, "item") and hasattr(block.item, "item_id"):
+                projection_annotation_ids.add(block.item.item_id)
+
+        for doc_anno in projection.annotations:
+            block = doc_anno.original_rm_block
+            if block is None:
+                logger.warning(f"Annotation {doc_anno.annotation_id} has no original block")
+                continue
+
+            block_type = type(block).__name__
+
+            if "Glyph" in block_type:
+                # Highlight - adjust coordinates for this page
+                adjusted_block = self._adjust_highlight_for_projection(
+                    block,
+                    page_text,
+                    new_origin,
+                    doc_anno.anchor_context,
+                )
+                if adjusted_block:
+                    ctx.annotations.append(adjusted_block)
+
+            elif "Line" in block_type:
+                # Stroke - keep original coordinates (relative to text anchor)
+                ctx.annotations.append(block)
+
+                # Handle TreeNodeBlock for strokes
+                if doc_anno.original_tree_node:
+                    # Calculate target char offset in page text
+                    target_offset = self._calculate_annotation_page_offset(
+                        doc_anno.anchor_context, page_text
+                    )
+                    # Store ORIGINAL TreeNodeBlock, SceneGroupItemBlock, and SceneTreeBlock - roundtrip code will reanchor/inject them
+                    # (Don't reanchor here to avoid double-reanchoring)
+                    ctx.tree_nodes.append(
+                        (
+                            doc_anno.original_tree_node,
+                            target_offset,
+                            doc_anno.original_scene_group_item,
+                            doc_anno.original_scene_tree_block,
+                        )
+                    )
+
+            else:
+                # Unknown type - keep as-is
+                ctx.annotations.append(block)
+
+        # Set source .rm path and populate exclude_ids
+        if projection.page_uuid in uuid_to_rm_path:
+            source_rm_path = uuid_to_rm_path[projection.page_uuid]
+            ctx.source_rm_path = source_rm_path
+
+            # Extract annotation IDs from the source .rm file
+            # Annotations NOT in projection_annotation_ids have moved to other pages
+            if source_rm_path.exists():
+                try:
+                    with open(source_rm_path, "rb") as f:
+                        source_blocks = list(rmscene.read_blocks(f))
+
+                    source_annotation_ids: set[CrdtId] = set()
+                    source_tree_node_ids: set[CrdtId] = set()
+
+                    for block in source_blocks:
+                        # Collect annotation item IDs
+                        if hasattr(block, "item") and hasattr(block.item, "item_id"):
+                            source_annotation_ids.add(block.item.item_id)
+
+                        # Collect TreeNodeBlock node IDs
+                        block_type = type(block).__name__
+                        if block_type == "TreeNodeBlock":
+                            if hasattr(block, "group") and block.group:
+                                node_id = block.group.node_id
+                                if node_id:
+                                    source_tree_node_ids.add(node_id)
+
+                    # Annotations in source but not in projection have moved to other pages
+                    ctx.exclude_ids = source_annotation_ids - projection_annotation_ids
+
+                    # TreeNodeBlocks for cross-page strokes should also be excluded
+                    projection_tree_node_ids = {
+                        tn.group.node_id
+                        for tn, _, _, _ in ctx.tree_nodes
+                        if hasattr(tn, "group") and tn.group
+                    }
+                    ctx.exclude_tree_node_ids = source_tree_node_ids - projection_tree_node_ids
+
+                    if ctx.exclude_ids:
+                        logger.debug(
+                            f"Excluding {len(ctx.exclude_ids)} annotations that moved to other pages"
+                        )
+                    if ctx.exclude_tree_node_ids:
+                        logger.debug(
+                            f"Excluding {len(ctx.exclude_tree_node_ids)} TreeNodeBlocks that moved to other pages"
+                        )
+
+                except Exception as e:
+                    logger.warning(f"Failed to read source .rm file for exclude_ids: {e}")
+
+        if ctx.annotations:
+            ctx.has_same_page = True
+            logger.debug(
+                f"Applied {len(ctx.annotations)} annotations to page {projection.page_index}"
+            )
+
+    def _adjust_highlight_for_projection(
+        self,
+        block,
+        page_text: str,
+        new_origin: tuple[float, float],
+        anchor_context: AnchorContext,
+    ):
+        """Adjust highlight rectangles for a target page.
+
+        Uses the anchor context to find where the highlighted text is in the
+        page text, then recalculates rectangle positions.
+
+        For cross-page movement (V2 architecture), we recalculate positions
+        from scratch based on the target page layout rather than using deltas.
+
+        Args:
+            block: SceneGlyphItemBlock containing highlight
+            page_text: Text content of the target page
+            new_origin: (x, y) origin of the page text
+            anchor_context: AnchorContext with highlight position info
+
+        Returns:
+            Adjusted block or None if highlight can't be placed
+        """
+        from rmscene import scene_items as si
+
+        if not hasattr(block.item, "value"):
+            return block
+
+        glyph_value = block.item.value
+        highlight_text = getattr(glyph_value, "text", "") or ""
+
+        if not highlight_text:
+            return block
+
+        # Find where this highlight is in the page text
+        offset = page_text.find(highlight_text)
+        if offset == -1:
+            # Try anchor context text
+            offset = page_text.find(anchor_context.text_content)
+            if offset == -1:
+                logger.warning(f"Could not find highlight '{highlight_text[:30]}...' in page")
+                return None
+
+        # Get original rectangles for shape preservation
+        if not hasattr(glyph_value, "rectangles") or not glyph_value.rectangles:
+            return block
+
+        original_rects = glyph_value.rectangles
+        original_height = original_rects[0].h if original_rects else self.geometry.line_height
+
+        # Calculate new highlight rectangles using layout engine
+        end_offset = offset + len(highlight_text)
+        new_rects = self.layout_engine.calculate_highlight_rectangles(
+            offset, end_offset, page_text, new_origin, self.geometry.text_width
+        )
+
+        if not new_rects:
+            logger.warning(
+                f"Failed to calculate rectangles for highlight '{highlight_text[:30]}...'"
+            )
+            return block
+
+        # Replace rectangles with newly calculated ones (preserving original height)
+        glyph_value.rectangles.clear()
+        for x, y, w, h in new_rects:
+            glyph_value.rectangles.append(si.Rectangle(x, y, w, original_height))
+
+        # Update offset fields
+        glyph_value.start = offset
+        glyph_value.length = len(highlight_text)
+
+        if hasattr(block, "extra_value_data") and block.extra_value_data:
+            # Update CRDT anchor if needed
+            crdt_base_id = 16  # Default
+            block.extra_value_data = update_glyph_extra_value_data(
+                block.extra_value_data, offset, len(highlight_text), crdt_base_id
+            )
+
+        logger.debug(
+            f"Placed highlight '{highlight_text[:20]}...' at offset={offset}, "
+            f"{len(new_rects)} rect(s)"
+        )
+
+        return block
+
+    def _calculate_annotation_page_offset(
+        self,
+        anchor_context: AnchorContext,
+        page_text: str,
+    ) -> int:
+        """Calculate character offset for an annotation in page text.
+
+        Args:
+            anchor_context: AnchorContext with annotation position info
+            page_text: Text content of the target page
+
+        Returns:
+            Character offset in page text, or 0 if not found
+        """
+        # Try to find the anchor's text in the page
+        pos = page_text.find(anchor_context.text_content)
+        if pos != -1:
+            return pos
+
+        # Try diff anchor
+        if anchor_context.diff_anchor:
+            span = anchor_context.diff_anchor.resolve_in(page_text)
+            if span:
+                return span[0]
+
+        # Fallback: Use Y position hint to approximate anchor
+        # This handles strokes that moved to different pages where their
+        # original anchor text no longer exists
+        if anchor_context.y_position_hint is not None:
+            from rock_paper_sync.layout import LayoutContext, TextAreaConfig
+
+            # Create layout context for this page
+            layout_ctx = LayoutContext.from_text(
+                page_text,
+                use_font_metrics=True,
+                config=TextAreaConfig(
+                    text_width=self.geometry.text_width,
+                    text_pos_x=self.geometry.text_pos_x,
+                    text_pos_y=self.geometry.text_pos_y,
+                ),
+            )
+
+            # Convert Y position to approximate offset
+            offset = layout_ctx.position_to_offset(0, anchor_context.y_position_hint)
+            offset = max(0, min(offset, len(page_text) - 1))
+
+            logger.debug(
+                f"Using Y-position fallback for stroke anchor: y={anchor_context.y_position_hint:.1f} "
+                f"-> offset={offset}"
+            )
+            return offset
+
+        logger.warning("Failed to resolve annotation anchor, defaulting to offset=0")
+        return 0
 
     def _match_rm_files_to_pages(
         self, existing_rm_files: list[Path | None], pages: list[RemarkablePage]
@@ -605,6 +901,328 @@ class RemarkableGenerator:
             )
 
         return matched_rm_files
+
+    def _preserve_annotations_with_document_model(
+        self,
+        pages: list[RemarkablePage],
+        existing_rm_files: list[Path | None],
+    ) -> None:
+        """Preserve annotations using DocumentModel-based migration (V2 architecture).
+
+        This method replaces the old AnnotationPreserver with a cleaner flow:
+        1. Build DocumentModel from existing .rm files (extracts annotations)
+        2. Build DocumentModel from new pages (content only)
+        3. Migrate annotations using AnchorContext-based resolution
+        4. Adjust annotation blocks to new positions
+        5. Assign adjusted annotations to pages via PageAnnotationContext
+
+        Args:
+            pages: List of newly generated pages (will be modified in-place)
+            existing_rm_files: List of .rm file paths matching old pages
+        """
+        from .annotations.document_model import Paragraph as DocParagraph
+
+        # Filter to only existing files
+        valid_rm_files = [p for p in existing_rm_files if p and Path(p).exists()]
+        if not valid_rm_files:
+            logger.debug("No valid .rm files for annotation preservation")
+            return
+
+        # Build document model from existing .rm files
+        old_model = DocumentModel.from_rm_files(valid_rm_files, self.geometry)
+        if not old_model.annotations:
+            logger.debug("No annotations found in existing .rm files")
+            return
+
+        logger.info(f"Extracted {len(old_model.annotations)} annotations from existing .rm files")
+
+        # Build document model from new pages
+        new_paragraphs = []
+        for page in pages:
+            for tb in page.text_blocks:
+                para = DocParagraph(
+                    content=tb.content,
+                    paragraph_type="paragraph",
+                    char_start=tb.char_start or 0,
+                    char_end=tb.char_end or len(tb.content),
+                )
+                new_paragraphs.append(para)
+
+        new_model = DocumentModel.from_paragraphs(new_paragraphs, self.geometry)
+
+        # Get old/new text for block adjustment
+        old_text = old_model.full_text
+        new_text = new_model.full_text
+        old_origin = (self.geometry.text_pos_x, self.geometry.text_pos_y)
+        new_origin = (self.geometry.text_pos_x, self.geometry.text_pos_y)
+
+        # Migrate annotations from old to new
+        migrated_model, report = old_model.migrate_annotations_to(new_model)
+
+        logger.info(
+            f"Migration report: {len(report.migrations)} migrated, {len(report.orphans)} orphaned "
+            f"(success rate: {report.success_rate:.1%}, avg confidence: {report.average_confidence:.2f})"
+        )
+
+        # Route annotations to pages by finding which page contains the annotation's text
+        # (Don't use project_to_pages() because it uses a different pagination algorithm)
+        page_texts = ["\n".join(tb.content for tb in page.text_blocks) for page in pages]
+
+        # For each annotation, find which page contains it
+        annotations_by_page: dict[int, list[DocumentAnnotation]] = {
+            i: [] for i in range(len(pages))
+        }
+
+        for doc_anno in migrated_model.annotations:
+            anchor = doc_anno.anchor_context
+
+            # Find which page contains this annotation's text
+            target_page = None
+            for page_idx, page_text in enumerate(page_texts):
+                if anchor.text_content in page_text:
+                    target_page = page_idx
+                    break
+
+            # Fallback: fuzzy match
+            if target_page is None:
+                import difflib
+
+                best_page = None
+                best_score = 0.0
+                for page_idx, page_text in enumerate(page_texts):
+                    matcher = difflib.SequenceMatcher(None, anchor.text_content, page_text)
+                    match = matcher.find_longest_match(
+                        0, len(anchor.text_content), 0, len(page_text)
+                    )
+                    score = match.size / len(anchor.text_content) if anchor.text_content else 0
+                    if score > best_score:
+                        best_score = score
+                        best_page = page_idx
+
+                if best_page is not None and best_score > 0.5:
+                    target_page = best_page
+                    logger.debug(
+                        f"Fuzzy matched '{anchor.text_content[:30]}...' to page {target_page} (score={best_score:.2f})"
+                    )
+
+            if target_page is not None:
+                annotations_by_page[target_page].append(doc_anno)
+                logger.debug(
+                    f"Routed {doc_anno.annotation_type} '{anchor.text_content[:30]}...' to page {target_page}"
+                )
+            else:
+                logger.warning(
+                    f"Could not find page for {doc_anno.annotation_type} '{anchor.text_content[:30]}...'"
+                )
+
+        # Assign annotations to pages via annotation_context
+        for page_idx, page in enumerate(pages):
+            page_annotations = annotations_by_page.get(page_idx, [])
+            if not page_annotations:
+                continue
+
+            # Create annotation context for this page
+            ctx = PageAnnotationContext()
+
+            # Get PAGE-level text for this page (not document-level)
+            page_text = page_texts[page_idx]
+
+            # Process each annotation - ADJUST blocks to new positions
+            for doc_anno in page_annotations:
+                if not doc_anno.original_rm_block:
+                    continue
+
+                block = doc_anno.original_rm_block
+                block_type = type(block).__name__
+
+                # Adjust highlight (Glyph) blocks
+                if "Glyph" in block_type:
+                    # For highlight adjustment, we need to use PAGE-level text
+                    # not document-level text, because rectangles are page-relative.
+                    #
+                    # Strategy: Find the highlighted text in the page and adjust
+                    # relative to the PAGE origin, not document origin.
+                    adjusted_block = self._adjust_glyph_for_page(
+                        block,
+                        page_text,
+                        new_origin,
+                        doc_anno.anchor_context,
+                    )
+                    ctx.annotations.append(adjusted_block)
+
+                # Adjust stroke (Line) blocks
+                elif "Line" in block_type:
+                    # Strokes keep their original coordinates (relative to text anchor)
+                    # The TreeNodeBlock anchor handles positioning
+                    ctx.annotations.append(block)
+
+                    # Handle TreeNodeBlock for strokes
+                    if doc_anno.original_tree_node:
+                        # Calculate target char offset in page text
+                        target_offset = self._calculate_annotation_offset(
+                            doc_anno, page, projection
+                        )
+                        ctx.tree_nodes.append(
+                            (
+                                doc_anno.original_tree_node,
+                                target_offset,
+                                doc_anno.original_scene_group_item,
+                            )
+                        )
+
+                else:
+                    # Unknown type - keep as-is
+                    ctx.annotations.append(block)
+
+            # Determine source path for roundtrip
+            # Use the first matching .rm file for this page
+            for rm_path in existing_rm_files:
+                if rm_path and rm_path.exists():
+                    ctx.source_rm_path = rm_path
+                    break
+
+            if ctx.annotations:
+                ctx.has_same_page = True
+
+            page.annotation_context = ctx
+
+            if ctx.annotations:
+                logger.debug(
+                    f"Page {page_idx}: assigned {len(ctx.annotations)} annotations, "
+                    f"{len(ctx.tree_nodes)} TreeNodeBlocks"
+                )
+
+    def _calculate_annotation_offset(
+        self,
+        doc_anno: DocumentAnnotation,
+        page: RemarkablePage,
+        projection: PageProjection,
+    ) -> int:
+        """Calculate character offset for an annotation on a page.
+
+        Uses the anchor context to find the best position in the page text.
+        """
+        # Get page text
+        page_text = "\n".join(tb.content for tb in page.text_blocks)
+
+        # Try to find the annotation's text in the page
+        anchor = doc_anno.anchor_context
+        pos = page_text.find(anchor.text_content)
+        if pos != -1:
+            return pos
+
+        # Fallback: use paragraph index
+        if anchor.paragraph_index is not None:
+            offset = 0
+            for i, tb in enumerate(page.text_blocks):
+                if i >= anchor.paragraph_index:
+                    return offset
+                offset += len(tb.content) + 1  # +1 for newline
+
+        # Default to 0
+        return 0
+
+    def _adjust_glyph_for_page(
+        self,
+        glyph_block,
+        page_text: str,
+        page_origin: tuple[float, float],
+        anchor_context: AnchorContext,
+    ):
+        """Adjust highlight rectangles for a target page.
+
+        Unlike _adjust_glyph_with_content_anchoring which uses document-level
+        text and calculates deltas, this method recalculates positions from
+        scratch for the target page. This is necessary when highlights move
+        cross-page, as the coordinate system changes.
+
+        Args:
+            glyph_block: SceneGlyphItemBlock containing highlight rectangles
+            page_text: Text content of the target page
+            page_origin: (x, y) origin of text on target page
+            anchor_context: AnchorContext with resolved position info
+
+        Returns:
+            Modified glyph_block with rectangles positioned for target page
+        """
+        # Get highlight text and rectangles
+        if not hasattr(glyph_block.item, "value"):
+            return glyph_block
+
+        glyph_value = glyph_block.item.value
+        highlight_text = getattr(glyph_value, "text", "") or ""
+
+        if not highlight_text or not hasattr(glyph_value, "rectangles"):
+            return glyph_block
+
+        # Find the highlighted text in the page
+        # Try exact match first, then fuzzy match
+        text_offset = page_text.find(highlight_text)
+
+        if text_offset == -1:
+            # Try anchor context text content
+            text_offset = page_text.find(anchor_context.text_content)
+
+        if text_offset == -1:
+            # Fuzzy match - find closest match
+            import difflib
+
+            matcher = difflib.SequenceMatcher(None, highlight_text, page_text)
+            match = matcher.find_longest_match(0, len(highlight_text), 0, len(page_text))
+            if match.size >= len(highlight_text) * 0.6:
+                text_offset = match.b
+            else:
+                logger.warning(
+                    f"Could not find '{highlight_text[:30]}...' in page (page has {len(page_text)} chars), "
+                    f"anchor_context.text_content='{anchor_context.text_content[:50]}...'"
+                )
+                logger.debug(f"Page text snippet: '{page_text[:200]}...'")
+                return glyph_block
+
+        # Calculate new rectangles using layout engine
+        end_offset = text_offset + len(highlight_text)
+        new_rects = self.layout_engine.calculate_highlight_rectangles(
+            text_offset,
+            end_offset,
+            page_text,
+            page_origin,
+            self.geometry.text_width,
+        )
+
+        if not new_rects:
+            logger.warning(f"Failed to calculate rectangles for '{highlight_text[:30]}...'")
+            return glyph_block
+
+        # Preserve original rectangle properties where possible
+        original_height = (
+            glyph_value.rectangles[0].h if glyph_value.rectangles else self.geometry.line_height
+        )
+
+        # Update rectangles
+        glyph_value.rectangles.clear()
+        for x, y, w, _ in new_rects:
+            glyph_value.rectangles.append(si.Rectangle(x, y, w, original_height))
+
+        # Update start field for older firmware
+        glyph_value.start = text_offset
+
+        # Update text field if needed
+        new_text = page_text[text_offset:end_offset]
+        if new_text:
+            glyph_value.text = new_text
+            glyph_value.length = len(new_text)
+
+        # Update extra_value_data for CRDT anchoring (firmware 3.6+)
+        if hasattr(glyph_block, "extra_value_data") and glyph_block.extra_value_data:
+            glyph_block.extra_value_data = update_glyph_extra_value_data(
+                glyph_block.extra_value_data, text_offset, len(highlight_text), crdt_base_id=16
+            )
+
+        logger.debug(
+            f"Adjusted highlight '{highlight_text[:30]}...' to offset {text_offset} on page"
+        )
+
+        return glyph_block
 
     def _extract_text_blocks_from_rm(
         self, rm_file_path: Path
@@ -1529,7 +2147,9 @@ class RemarkableGenerator:
 
                 # Also skip if this TreeNodeBlock will be injected as cross-page
                 # (to avoid duplicates with different anchor values)
-                cross_page_node_ids = {tn.group.node_id for tn, _ in ctx.tree_nodes if tn.group}
+                cross_page_node_ids = {
+                    tn.group.node_id for tn, _, _, _ in ctx.tree_nodes if tn.group
+                }
                 if node_id and node_id in cross_page_node_ids:
                     logger.debug(
                         f"Skipping TreeNodeBlock {node_id} (will be injected as cross-page)"
@@ -1549,12 +2169,48 @@ class RemarkableGenerator:
         # Inject cross-page TreeNodeBlocks FIRST (strokes reference them via parent_id)
         # Reanchor them to point to correct text positions on this page
         if ctx.tree_nodes:
-            for tree_node, target_char_offset in ctx.tree_nodes:
+            logger.warning(f"INJECTING {len(ctx.tree_nodes)} TreeNodeBlocks to page")
+            for tree_node, target_char_offset, scene_group_item, scene_tree_block in ctx.tree_nodes:
                 reanchored_node = self._reanchor_tree_node_for_cross_page(
                     tree_node, target_char_offset, page
                 )
                 modified_blocks.append(reanchored_node)
-            logger.info(f"Injected {len(ctx.tree_nodes)} cross-page TreeNodeBlocks (reanchored)")
+
+                if hasattr(tree_node, "group") and tree_node.group:
+                    node_id = tree_node.group.node_id
+
+                    # Inject SceneTreeBlock to declare this node in the scene tree
+                    # This MUST come before SceneGroupItemBlock that references it
+                    new_scene_tree_block = SceneTreeBlock(
+                        tree_id=node_id,
+                        node_id=CrdtId(0, 0),
+                        is_update=True,
+                        parent_id=CrdtId(0, 11),  # Layer 1
+                    )
+                    modified_blocks.append(new_scene_tree_block)
+                    logger.debug(f"Injected SceneTreeBlock for TreeNode {node_id}")
+
+                    # Create a NEW SceneGroupItemBlock to link TreeNodeBlock to scene graph
+                    # The original scene_group_item has left_id/right_id referencing nodes
+                    # from the source page that don't exist here. Reset them to (0,0).
+                    if scene_group_item:
+                        new_scene_group_item = SceneGroupItemBlock(
+                            parent_id=CrdtId(0, 11),  # Layer 1
+                            item=CrdtSequenceItem(
+                                item_id=scene_group_item.item.item_id,  # Keep original ID
+                                left_id=CrdtId(0, 0),  # Reset - no left neighbor
+                                right_id=CrdtId(0, 0),  # Reset - no right neighbor
+                                deleted_length=0,
+                                value=node_id,  # The TreeNodeBlock we're linking
+                            ),
+                        )
+                        modified_blocks.append(new_scene_group_item)
+                        logger.debug(f"Injected SceneGroupItemBlock for TreeNode {node_id}")
+            logger.info(
+                f"Injected {len(ctx.tree_nodes)} cross-page TreeNodeBlocks (reanchored) with SceneTreeBlocks and SceneGroupItemBlocks"
+            )
+        else:
+            logger.warning("NO TreeNodeBlocks to inject (ctx.tree_nodes is empty)")
 
         # Inject cross-page annotations that couldn't be matched by item_id
         if cross_page_to_inject:
@@ -1653,6 +2309,51 @@ class RemarkableGenerator:
         # Add preserved annotations (strokes and highlights) from context
         ctx = page.annotation_context
         if ctx and ctx.annotations:
+            # First add TreeNodeBlocks for strokes (strokes reference them via parent_id)
+            if ctx.tree_nodes:
+                logger.warning(f"FROM-SCRATCH: Injecting {len(ctx.tree_nodes)} TreeNodeBlocks")
+                for tree_node, target_offset, scene_group_item, scene_tree_block in ctx.tree_nodes:
+                    # Reanchor TreeNodeBlock for this page
+                    reanchored_node = self._reanchor_tree_node_for_cross_page(
+                        tree_node, target_offset, page
+                    )
+                    blocks.append(reanchored_node)
+
+                    if hasattr(tree_node, "group") and tree_node.group:
+                        node_id = tree_node.group.node_id
+
+                        # Inject SceneTreeBlock to declare this node in the scene tree
+                        new_scene_tree_block = SceneTreeBlock(
+                            tree_id=node_id,
+                            node_id=CrdtId(0, 0),
+                            is_update=True,
+                            parent_id=CrdtId(0, 11),  # Layer 1
+                        )
+                        blocks.append(new_scene_tree_block)
+                        logger.debug(
+                            f"FROM-SCRATCH: Injected SceneTreeBlock for TreeNode {node_id}"
+                        )
+
+                        # Create a NEW SceneGroupItemBlock to link TreeNodeBlock to scene graph
+                        # The original scene_group_item has left_id/right_id referencing nodes
+                        # from the source page that don't exist here. Reset them to (0,0).
+                        if scene_group_item:
+                            new_scene_group_item = SceneGroupItemBlock(
+                                parent_id=CrdtId(0, 11),  # Layer 1
+                                item=CrdtSequenceItem(
+                                    item_id=scene_group_item.item.item_id,  # Keep original ID
+                                    left_id=CrdtId(0, 0),  # Reset - no left neighbor
+                                    right_id=CrdtId(0, 0),  # Reset - no right neighbor
+                                    deleted_length=0,
+                                    value=node_id,  # The TreeNodeBlock we're linking
+                                ),
+                            )
+                            blocks.append(new_scene_group_item)
+                            logger.debug(
+                                f"FROM-SCRATCH: Injected SceneGroupItemBlock for TreeNode {node_id}"
+                            )
+
+            # Then add the annotation blocks (strokes, highlights)
             blocks.extend(ctx.annotations)
             logger.debug(f"Added {len(ctx.annotations)} preserved annotation blocks to .rm file")
 

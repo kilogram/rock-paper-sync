@@ -82,7 +82,15 @@ class WordWrapLayoutEngine:
             try:
                 from rock_paper_sync.font_metrics import text_width as font_text_width
 
-                self._text_width_fn = font_text_width
+                # Create wrapper that passes font size and DPI from geometry
+                def _width_with_dpi(text: str) -> float:
+                    return font_text_width(
+                        text,
+                        font_size_pt=self._geometry.font_point_size,
+                        document_ppi=self._geometry.document_ppi,
+                    )
+
+                self._text_width_fn = _width_with_dpi
             except Exception:
                 # Fall back to fixed width if font metrics unavailable
                 self._text_width_fn = None

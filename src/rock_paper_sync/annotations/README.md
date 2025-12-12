@@ -169,6 +169,73 @@ The system automatically routes annotations to the correct handler and applies t
    - Protocol ensures handlers implement required interface
    - Type changes support cross-handler workflows
 
+## Planned Architecture: AnchorContext (V2)
+
+The current architecture anchors annotations using **character offsets** into RootTextBlock text. While functional, this is fragile when content changes. A revised architecture has been designed:
+
+**See**: `docs/ANNOTATION_ARCHITECTURE_V2.md`
+
+### Key Concepts
+
+| Current | V2 |
+|---------|------|
+| Character offset anchor | **AnchorContext**: Multi-signal stable identifier |
+| Page-first routing | **DocumentModel**: Document-level with page projection |
+| `HeuristicTextAnchor` as fallback | **ContextResolver**: Fuzzy matching as primary strategy |
+| Delta-based offset updates | **DiffAnchor**: Anchor relative to unchanged text |
+
+### AnchorContext Signals
+
+```python
+@dataclass
+class AnchorContext:
+    content_hash: str       # Hash of normalized content
+    text_content: str       # Actual text for fuzzy matching
+    context_before: str     # ~50 chars before
+    context_after: str      # ~50 chars after
+    paragraph_index: int    # Structural position
+    line_range: tuple       # Spatial hint
+    diff_anchor: DiffAnchor # Anchor relative to stable text
+```
+
+### Benefits
+
+1. **Edit resilience**: Survives content rewrites, not just insertions/deletions
+2. **Natural cross-page**: Page boundaries are projections, not special cases
+3. **Multi-signal matching**: Falls back gracefully through resolution strategies
+4. **Explicit failures**: No hidden fallback paths that mask bugs
+
+### Implementation Status
+
+- Phase 1 (Core Types): Planned
+- Phase 2 (DocumentModel): Planned
+- Phase 3 (Migration): Planned
+- Phase 4 (Deprecation): Planned
+
+See `docs/ANNOTATION_ARCHITECTURE_V2.md` for full design and implementation roadmap.
+
+## Debugging
+
+### Known Issues
+
+See `docs/bugs/CROSS_PAGE_ANCHOR_BUG.md` for documentation of anchor-related bugs and fixes.
+
+### Anchor Validation
+
+The test harness includes anchor validation that catches out-of-bounds anchors:
+
+```python
+# In tests/record_replay/harness/offline.py
+def _validate_rm_anchors(state: DocumentState, context: str) -> None:
+    """Validate TreeNodeBlock anchors are within page text bounds."""
+```
+
+Use `tools/rmlib/validator.py` for standalone anchor validation:
+
+```bash
+uv run python -m tools.rmlib.validator path/to/file.rm --verbose
+```
+
 ## Testing
 
 Integration tests validate annotation preservation through round-trip sync:

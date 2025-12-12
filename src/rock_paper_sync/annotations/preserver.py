@@ -54,6 +54,8 @@ class OldPageData:
         page_text: Full text content for content-based anchoring
         annotation_blocks: Raw rmscene annotation blocks (Line/Glyph)
         tree_nodes_by_id: Mapping of node_id -> TreeNodeBlock for stroke anchoring
+        scene_group_items_by_tree_node_id: Mapping of TreeNode ID -> SceneGroupItemBlock
+        scene_tree_blocks_by_tree_id: Mapping of tree_id -> SceneTreeBlock
         all_blocks: All rmscene blocks from the file (for reference)
     """
 
@@ -63,6 +65,8 @@ class OldPageData:
     page_text: str
     annotation_blocks: list[Any]
     tree_nodes_by_id: dict[Any, Any] = field(default_factory=dict)
+    scene_group_items_by_tree_node_id: dict[Any, Any] = field(default_factory=dict)
+    scene_tree_blocks_by_tree_id: dict[Any, Any] = field(default_factory=dict)
     all_blocks: list[Any] = field(default_factory=list)
 
 
@@ -77,6 +81,8 @@ class RoutingDecision:
         is_cross_page: True if annotation moves between pages
         adjusted_block: Block with position adjustments applied
         tree_node: TreeNodeBlock for strokes (if cross-page)
+        scene_group_item: SceneGroupItemBlock that links TreeNodeBlock to scene graph
+        scene_tree_block: SceneTreeBlock that declares TreeNodeBlock in scene tree
         target_char_offset: Character offset for TreeNodeBlock anchor
     """
 
@@ -86,6 +92,8 @@ class RoutingDecision:
     is_cross_page: bool
     adjusted_block: Any
     tree_node: Any | None = None
+    scene_group_item: Any | None = None
+    scene_tree_block: Any | None = None
     target_char_offset: int | None = None
 
 
@@ -223,12 +231,27 @@ class AnnotationPreserver:
 
             # Build TreeNodeBlock lookup
             tree_nodes_by_id = {}
+            scene_group_items_by_tree_node_id = {}
+            scene_tree_blocks_by_tree_id = {}
             for block in all_blocks:
                 if type(block).__name__ == "TreeNodeBlock":
                     if hasattr(block, "group") and block.group:
                         node_id = block.group.node_id
                         if node_id:
                             tree_nodes_by_id[node_id] = block
+
+                elif type(block).__name__ == "SceneGroupItemBlock":
+                    # Maps TreeNodeBlock IDs to their SceneGroupItemBlocks
+                    # SceneGroupItemBlock.value points to the TreeNodeBlock
+                    if hasattr(block, "value") and block.value:
+                        tree_node_id = block.value
+                        scene_group_items_by_tree_node_id[tree_node_id] = block
+
+                elif type(block).__name__ == "SceneTreeBlock":
+                    # Maps tree_id to SceneTreeBlock
+                    # SceneTreeBlock declares a TreeNodeBlock in the scene tree
+                    if hasattr(block, "tree_id") and block.tree_id:
+                        scene_tree_blocks_by_tree_id[block.tree_id] = block
 
             # Extract annotation blocks
             annotation_blocks = [
@@ -249,6 +272,8 @@ class AnnotationPreserver:
                 page_text=page_text,
                 annotation_blocks=annotation_blocks,
                 tree_nodes_by_id=tree_nodes_by_id,
+                scene_group_items_by_tree_node_id=scene_group_items_by_tree_node_id,
+                scene_tree_blocks_by_tree_id=scene_tree_blocks_by_tree_id,
                 all_blocks=all_blocks,
             )
 
@@ -355,12 +380,27 @@ class AnnotationPreserver:
 
             # Build TreeNodeBlock lookup
             tree_nodes_by_id = {}
+            scene_group_items_by_tree_node_id = {}
+            scene_tree_blocks_by_tree_id = {}
             for block in all_blocks:
                 if type(block).__name__ == "TreeNodeBlock":
                     if hasattr(block, "group") and block.group:
                         node_id = block.group.node_id
                         if node_id:
                             tree_nodes_by_id[node_id] = block
+
+                elif type(block).__name__ == "SceneGroupItemBlock":
+                    # Maps TreeNodeBlock IDs to their SceneGroupItemBlocks
+                    # SceneGroupItemBlock.value points to the TreeNodeBlock
+                    if hasattr(block, "value") and block.value:
+                        tree_node_id = block.value
+                        scene_group_items_by_tree_node_id[tree_node_id] = block
+
+                elif type(block).__name__ == "SceneTreeBlock":
+                    # Maps tree_id to SceneTreeBlock
+                    # SceneTreeBlock declares a TreeNodeBlock in the scene tree
+                    if hasattr(block, "tree_id") and block.tree_id:
+                        scene_tree_blocks_by_tree_id[block.tree_id] = block
 
             # Extract annotation blocks
             annotation_blocks = [
@@ -376,6 +416,8 @@ class AnnotationPreserver:
                 page_text=full_text,
                 annotation_blocks=annotation_blocks,
                 tree_nodes_by_id=tree_nodes_by_id,
+                scene_group_items_by_tree_node_id=scene_group_items_by_tree_node_id,
+                scene_tree_blocks_by_tree_id=scene_tree_blocks_by_tree_id,
                 all_blocks=all_blocks,
             )
 
@@ -586,11 +628,18 @@ class AnnotationPreserver:
         # 1. The stroke moved to a different page (is_cross_page), OR
         # 2. The stroke stays on the same page but the page text changed
         tree_node = None
+        scene_group_item = None
+        scene_tree_block = None
         target_char_offset = None
         if "Line" in type(anno_block).__name__:
             parent_id = getattr(anno_block, "parent_id", None)
             if parent_id and parent_id in page_data.tree_nodes_by_id:
                 tree_node = page_data.tree_nodes_by_id[parent_id]
+                # Get SceneGroupItemBlock and SceneTreeBlock for this tree node
+                if hasattr(tree_node, "group") and tree_node.group:
+                    node_id = tree_node.group.node_id
+                    scene_group_item = page_data.scene_group_items_by_tree_node_id.get(node_id)
+                    scene_tree_block = page_data.scene_tree_blocks_by_tree_id.get(node_id)
                 # Check if page text changed (compare lengths as proxy)
                 old_text_len = len(page_data.page_text) if page_data.page_text else 0
                 new_page_text = "\n".join(
@@ -627,6 +676,8 @@ class AnnotationPreserver:
             is_cross_page=is_cross_page,
             adjusted_block=adjusted_block,
             tree_node=tree_node,
+            scene_group_item=scene_group_item,
+            scene_tree_block=scene_tree_block,
             target_char_offset=target_char_offset,
         )
 
@@ -670,12 +721,19 @@ class AnnotationPreserver:
                     # Check if already added
                     existing_node_ids = [
                         tn.group.node_id
-                        for tn, _ in ctx.tree_nodes
+                        for tn, _, _, _ in ctx.tree_nodes
                         if hasattr(tn, "group") and tn.group
                     ]
                     parent_id = getattr(decision.annotation_block, "parent_id", None)
                     if parent_id not in existing_node_ids:
-                        ctx.tree_nodes.append((decision.tree_node, decision.target_char_offset))
+                        ctx.tree_nodes.append(
+                            (
+                                decision.tree_node,
+                                decision.target_char_offset,
+                                decision.scene_group_item,
+                                decision.scene_tree_block,
+                            )
+                        )
 
                 # Track for exclusion
                 if decision.tree_node and hasattr(decision.tree_node, "group"):
@@ -699,12 +757,19 @@ class AnnotationPreserver:
                     # Add to tree_nodes for reanchoring, just like cross-page
                     existing_node_ids = [
                         tn.group.node_id
-                        for tn, _ in ctx.tree_nodes
+                        for tn, _, _, _ in ctx.tree_nodes
                         if hasattr(tn, "group") and tn.group
                     ]
                     parent_id = getattr(decision.annotation_block, "parent_id", None)
                     if parent_id not in existing_node_ids:
-                        ctx.tree_nodes.append((decision.tree_node, decision.target_char_offset))
+                        ctx.tree_nodes.append(
+                            (
+                                decision.tree_node,
+                                decision.target_char_offset,
+                                decision.scene_group_item,
+                                decision.scene_tree_block,
+                            )
+                        )
                         # Mark for exclusion from original file (will be reinjected with new anchor)
                         if hasattr(decision.tree_node, "group") and decision.tree_node.group:
                             node_id = decision.tree_node.group.node_id
