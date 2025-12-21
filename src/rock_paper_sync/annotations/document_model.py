@@ -39,6 +39,7 @@ from typing import TYPE_CHECKING, Any, Literal
 import rmscene
 
 from .core_types import HeuristicTextAnchor, StrokeData
+from .scene_graph import SceneGraphIndex, StrokeBundle
 
 if TYPE_CHECKING:
     from rock_paper_sync.layout import DeviceGeometry, LayoutContext, WordWrapLayoutEngine
@@ -521,6 +522,9 @@ class DocumentAnnotation:
 
     Annotations exist at the document level. Page boundaries are
     determined during projection, not when defining the annotation.
+
+    For strokes, the `as_stroke_bundle` property provides access to a
+    StrokeBundle that groups all the CRDT blocks needed for the stroke.
     """
 
     annotation_id: str
@@ -542,6 +546,41 @@ class DocumentAnnotation:
     original_scene_tree_block: Any = (
         None  # SceneTreeBlock that declares TreeNodeBlock in scene tree
     )
+
+    @property
+    def as_stroke_bundle(self) -> StrokeBundle | None:
+        """Get a StrokeBundle for this annotation (strokes only).
+
+        Returns a StrokeBundle containing all the CRDT blocks needed to
+        represent this stroke on the device. Returns None for highlights
+        or if the TreeNodeBlock is missing.
+
+        Note: The returned bundle contains only this annotation's stroke.
+        Multiple annotations may share the same TreeNodeBlock in the original
+        document; use SceneGraphIndex.from_blocks() + StrokeBundle.from_index()
+        for complete bundles.
+        """
+        if self.annotation_type != "stroke":
+            return None
+        if not self.original_tree_node:
+            return None
+
+        # Get node_id from TreeNodeBlock
+        tree_node = self.original_tree_node
+        if not hasattr(tree_node, "group") or not tree_node.group:
+            return None
+        node_id = tree_node.group.node_id
+
+        # Build stroke list (just this annotation's stroke)
+        strokes = [self.original_rm_block] if self.original_rm_block else []
+
+        return StrokeBundle(
+            node_id=node_id,
+            tree_node=tree_node,
+            scene_tree=self.original_scene_tree_block,
+            scene_group_item=self.original_scene_group_item,
+            strokes=strokes,
+        )
 
 
 @dataclass
@@ -659,12 +698,11 @@ class DocumentModel:
             # Extract text and tree nodes
             page_text = ""
             text_origin_y = geometry.text_pos_y
-            tree_nodes_by_id: dict[Any, Any] = {}
-            scene_group_items_by_tree_node_id: dict[
-                Any, Any
-            ] = {}  # Map TreeNode ID -> SceneGroupItemBlock
-            scene_tree_blocks_by_tree_id: dict[Any, Any] = {}  # Map tree_id -> SceneTreeBlock
 
+            # Build scene graph index for efficient block lookups
+            scene_index = SceneGraphIndex.from_blocks(blocks)
+
+            # Extract page text from RootTextBlock
             for block in blocks:
                 if "RootText" in type(block).__name__:
                     text_data = block.value
@@ -675,25 +713,7 @@ class DocumentModel:
                         if hasattr(item, "value") and isinstance(item.value, str):
                             text_parts.append(item.value)
                     page_text = "".join(text_parts)
-
-                elif type(block).__name__ == "TreeNodeBlock":
-                    if hasattr(block, "group") and block.group:
-                        node_id = block.group.node_id
-                        if node_id:
-                            tree_nodes_by_id[node_id] = block
-
-                elif type(block).__name__ == "SceneGroupItemBlock":
-                    # Maps TreeNodeBlock IDs to their SceneGroupItemBlocks
-                    # SceneGroupItemBlock.item.value points to the TreeNodeBlock
-                    if hasattr(block, "item") and hasattr(block.item, "value"):
-                        tree_node_id = block.item.value
-                        scene_group_items_by_tree_node_id[tree_node_id] = block
-
-                elif type(block).__name__ == "SceneTreeBlock":
-                    # Maps tree_id to SceneTreeBlock
-                    # SceneTreeBlock.tree_id matches the TreeNodeBlock's node_id
-                    if hasattr(block, "tree_id") and block.tree_id:
-                        scene_tree_blocks_by_tree_id[block.tree_id] = block
+                    break
 
             if not page_text:
                 continue
@@ -763,17 +783,17 @@ class DocumentModel:
                         diff_anchor=anchor.diff_anchor,
                     )
 
-                    # Get tree node for this stroke
+                    # Get tree node for this stroke using scene graph index
                     parent_id = getattr(block, "parent_id", None)
-                    tree_node = tree_nodes_by_id.get(parent_id) if parent_id else None
+                    tree_node = scene_index.tree_nodes.get(parent_id) if parent_id else None
 
-                    # Get SceneGroupItemBlock and SceneTreeBlock for this tree node
+                    # Get SceneGroupItemBlock and SceneTreeBlock using scene graph index
                     scene_group_item = None
                     scene_tree_block = None
                     if tree_node and hasattr(tree_node, "group") and tree_node.group:
                         node_id = tree_node.group.node_id
-                        scene_group_item = scene_group_items_by_tree_node_id.get(node_id)
-                        scene_tree_block = scene_tree_blocks_by_tree_id.get(node_id)
+                        scene_group_item = scene_index.scene_group_items.get(node_id)
+                        scene_tree_block = scene_index.scene_trees.get(node_id)
 
                     # Build stroke data
                     xs = [p[0] for p in points]
