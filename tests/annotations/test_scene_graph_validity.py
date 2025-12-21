@@ -88,7 +88,7 @@ class TestSceneGraphStructure:
             with open(rm_file, "rb") as f:
                 rm_bytes = f.read()
 
-            result = validate_scene_graph(rm_bytes, str(rm_file))
+            result = validate_scene_graph(rm_bytes)
 
             assert result.is_valid, f"Input file {rm_file.name} has invalid scene graph:\n{result}"
 
@@ -125,7 +125,7 @@ class TestSceneGraphStructure:
         all_errors = []
         for i, page in enumerate(doc.pages):
             rm_bytes = generator.generate_rm_file(page)
-            result = validate_scene_graph(rm_bytes, f"page_{i}")
+            result = validate_scene_graph(rm_bytes)
 
             if not result.is_valid:
                 all_errors.append(f"Page {i}:\n{result}")
@@ -222,7 +222,7 @@ class TestSceneGraphStructure:
 
         for i, page in enumerate(doc.pages):
             rm_bytes = generator.generate_rm_file(page)
-            result = validate_scene_graph(rm_bytes, f"page_{i}")
+            result = validate_scene_graph(rm_bytes)
 
             # Check for orphaned or missing parent errors
             orphaned = [e for e in result.errors if "ORPHANED" in e.error_type]
@@ -379,7 +379,7 @@ class TestStrokeBundle:
 
     def test_incomplete_bundle_reports_missing_blocks(self):
         """Test that incomplete bundles correctly report missing blocks."""
-        from rock_paper_sync.annotations import CrdtId
+        from rmscene import CrdtId
 
         # Create a bundle with only a node_id (missing everything)
         node_id = CrdtId(2, 999)
