@@ -363,6 +363,222 @@ def _format_crdt_id(crdt_id: Any) -> str:
     return str(crdt_id)
 
 
+@dataclass
+class SceneGraphValidationResult:
+    """Result of validating scene graph structure."""
+
+    errors: list[ValidationError]
+    warnings: list[ValidationError]
+    tree_node_count: int
+    scene_tree_count: int
+    scene_group_item_count: int
+    stroke_count: int
+
+    @property
+    def is_valid(self) -> bool:
+        return len(self.errors) == 0
+
+    def __str__(self) -> str:
+        status = "PASS" if self.is_valid else "FAIL"
+        lines = [
+            f"Scene Graph Validation: {status}",
+            f"  TreeNodeBlocks: {self.tree_node_count}",
+            f"  SceneTreeBlocks: {self.scene_tree_count}",
+            f"  SceneGroupItemBlocks: {self.scene_group_item_count}",
+            f"  Strokes: {self.stroke_count}",
+        ]
+        if self.errors:
+            lines.append(f"  Errors ({len(self.errors)}):")
+            for error in self.errors:
+                lines.append(f"    - {error}")
+        if self.warnings:
+            lines.append(f"  Warnings ({len(self.warnings)}):")
+            for warning in self.warnings:
+                lines.append(f"    - {warning}")
+        return "\n".join(lines)
+
+
+def validate_scene_graph(rm_bytes: bytes, source_name: str = "<bytes>") -> SceneGraphValidationResult:
+    """Validate scene graph structure for device compatibility.
+
+    Checks that all required block relationships are present:
+    - Every SceneGroupItemBlock.value has a corresponding TreeNodeBlock
+    - Every user-created TreeNodeBlock has a corresponding SceneTreeBlock
+    - All parent_id references resolve to existing nodes
+    - All stroke parent_ids reference existing TreeNodeBlocks
+
+    Args:
+        rm_bytes: The raw .rm file content
+        source_name: Name to use in error messages
+
+    Returns:
+        SceneGraphValidationResult with errors and warnings
+    """
+    errors: list[ValidationError] = []
+    warnings: list[ValidationError] = []
+
+    # Parse blocks
+    try:
+        blocks = list(rmscene.read_blocks(io.BytesIO(rm_bytes)))
+    except Exception as e:
+        errors.append(
+            ValidationError(
+                error_type="READ_ERROR",
+                message=f"Failed to parse .rm bytes: {e}",
+            )
+        )
+        return SceneGraphValidationResult(
+            errors=errors,
+            warnings=warnings,
+            tree_node_count=0,
+            scene_tree_count=0,
+            scene_group_item_count=0,
+            stroke_count=0,
+        )
+
+    # Build indices
+    tree_node_ids: set[str] = set()  # All TreeNodeBlock node_ids
+    user_tree_node_ids: set[str] = set()  # User-created TreeNodeBlocks (part1 == 2)
+    scene_tree_ids: set[str] = set()  # SceneTreeBlock tree_ids (nodes declared in scene tree)
+    scene_group_item_values: list[tuple[str, str]] = []  # (value, parent_id) for each SceneGroupItemBlock
+    stroke_parent_ids: list[str] = []  # parent_ids from SceneLineItemBlocks
+
+    tree_node_count = 0
+    scene_tree_count = 0
+    scene_group_item_count = 0
+    stroke_count = 0
+
+    for block in blocks:
+        block_type = type(block).__name__
+
+        if block_type == "TreeNodeBlock":
+            if hasattr(block, "group") and block.group:
+                node_id = block.group.node_id
+                node_id_str = _format_crdt_id(node_id)
+                tree_node_ids.add(node_id_str)
+                tree_node_count += 1
+
+                # Track user-created nodes (author ID part1 == 2)
+                if hasattr(node_id, "part1") and node_id.part1 == 2:
+                    user_tree_node_ids.add(node_id_str)
+
+        elif block_type == "SceneTreeBlock":
+            if hasattr(block, "tree_id") and block.tree_id:
+                tree_id_str = _format_crdt_id(block.tree_id)
+                scene_tree_ids.add(tree_id_str)
+                scene_tree_count += 1
+
+        elif block_type == "SceneGroupItemBlock":
+            if hasattr(block, "item") and block.item:
+                value_str = _format_crdt_id(block.item.value)
+                parent_str = _format_crdt_id(block.parent_id)
+                scene_group_item_values.append((value_str, parent_str))
+                scene_group_item_count += 1
+
+        elif "Line" in block_type:
+            parent_id = getattr(block, "parent_id", None)
+            if parent_id:
+                stroke_parent_ids.append(_format_crdt_id(parent_id))
+            stroke_count += 1
+
+    # System node IDs (part1 == 0) are implicitly present in scene graph
+    # 0:1 = root, 0:11 = Layer 1, 0:13 = Layer 1 scene group item
+    def is_system_node(node_str: str) -> bool:
+        """Check if a node ID is a system node (part1 == 0)."""
+        if ":" in node_str:
+            part1 = node_str.split(":")[0]
+            return part1 == "0"
+        return False
+
+    # Add system nodes to the tree_node_ids set for validation purposes
+    all_node_ids = tree_node_ids.copy()
+    # Common system nodes that may be referenced but not explicitly defined
+    system_nodes = {"0:1", "0:11", "0:13"}
+    all_node_ids.update(system_nodes)
+
+    # Validation 1: Every SceneGroupItemBlock.value must have a TreeNodeBlock
+    # (except system nodes which are implicitly defined)
+    for value_str, parent_str in scene_group_item_values:
+        if value_str not in all_node_ids and not is_system_node(value_str):
+            errors.append(
+                ValidationError(
+                    error_type="ORPHANED_SCENE_GROUP_ITEM",
+                    message=f"SceneGroupItemBlock.value={value_str} has no corresponding TreeNodeBlock",
+                    details={"value": value_str, "parent_id": parent_str},
+                )
+            )
+
+    # Validation 2: Every SceneGroupItemBlock.parent_id must exist
+    # (except system nodes which are implicitly defined)
+    for value_str, parent_str in scene_group_item_values:
+        if parent_str not in all_node_ids and not is_system_node(parent_str):
+            errors.append(
+                ValidationError(
+                    error_type="MISSING_PARENT",
+                    message=f"SceneGroupItemBlock.parent_id={parent_str} not found in TreeNodeBlocks",
+                    details={"value": value_str, "parent_id": parent_str},
+                )
+            )
+
+    # Validation 3: Every user-created TreeNodeBlock must have a SceneTreeBlock
+    for user_node_id in user_tree_node_ids:
+        if user_node_id not in scene_tree_ids:
+            errors.append(
+                ValidationError(
+                    error_type="UNDECLARED_TREE_NODE",
+                    message=f"TreeNodeBlock {user_node_id} has no SceneTreeBlock declaration",
+                    node_id=user_node_id,
+                    details={"node_id": user_node_id},
+                )
+            )
+
+    # Validation 4: Every stroke parent_id must reference an existing TreeNodeBlock
+    # (strokes should reference user TreeNodeBlocks, not system nodes)
+    for parent_id_str in stroke_parent_ids:
+        if parent_id_str not in all_node_ids:
+            errors.append(
+                ValidationError(
+                    error_type="ORPHANED_STROKE",
+                    message=f"Stroke parent_id={parent_id_str} not found in TreeNodeBlocks",
+                    details={"parent_id": parent_id_str},
+                )
+            )
+
+    # Warning: User TreeNodeBlocks without corresponding SceneGroupItemBlock
+    scene_group_values_set = {v for v, _ in scene_group_item_values}
+    for user_node_id in user_tree_node_ids:
+        if user_node_id not in scene_group_values_set:
+            warnings.append(
+                ValidationError(
+                    error_type="UNLINKED_TREE_NODE",
+                    message=f"TreeNodeBlock {user_node_id} has no SceneGroupItemBlock linking it to layer",
+                    node_id=user_node_id,
+                )
+            )
+
+    return SceneGraphValidationResult(
+        errors=errors,
+        warnings=warnings,
+        tree_node_count=tree_node_count,
+        scene_tree_count=scene_tree_count,
+        scene_group_item_count=scene_group_item_count,
+        stroke_count=stroke_count,
+    )
+
+
+def validate_scene_graph_file(rm_path: Path) -> SceneGraphValidationResult:
+    """Validate scene graph structure from a file path.
+
+    Args:
+        rm_path: Path to the .rm file
+
+    Returns:
+        SceneGraphValidationResult with errors and warnings
+    """
+    with rm_path.open("rb") as f:
+        return validate_scene_graph(f.read(), str(rm_path))
+
+
 # CLI interface
 if __name__ == "__main__":
     import argparse

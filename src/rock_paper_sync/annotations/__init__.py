@@ -34,6 +34,20 @@ from .core_types import (
 )
 from .handlers.highlight_handler import HighlightHandler
 from .handlers.stroke_handler import StrokeHandler
+from .scene_graph import (
+    AuthorId,
+    CrdtId,
+    SceneGraphIndex,
+    SceneGraphValidationResult,
+    StrokeBundle,
+    TypedSceneGroupItemBlock,
+    TypedSceneLineItemBlock,
+    TypedSceneTreeBlock,
+    TypedTreeNodeBlock,
+    ValidationError,
+    validate_scene_graph,
+    validate_scene_graph_file,
+)
 
 __all__ = [
     # Core annotation types
@@ -60,4 +74,17 @@ __all__ = [
     "AnnotationHandler",
     "HighlightHandler",
     "StrokeHandler",
+    # Scene graph types and validation
+    "AuthorId",
+    "CrdtId",
+    "SceneGraphIndex",
+    "SceneGraphValidationResult",
+    "StrokeBundle",
+    "TypedSceneGroupItemBlock",
+    "TypedSceneLineItemBlock",
+    "TypedSceneTreeBlock",
+    "TypedTreeNodeBlock",
+    "ValidationError",
+    "validate_scene_graph",
+    "validate_scene_graph_file",
 ]

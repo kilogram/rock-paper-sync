@@ -360,3 +360,152 @@ Device logs no longer show "Unable to find node" errors, and strokes render corr
 ### Remaining Issue
 
 Highlight rectangles have a 17.6px X-position delta vs golden data. This is a **separate issue** from the stroke rendering bug - strokes now work correctly. The highlight positioning issue may be related to font metrics or coordinate transformation differences.
+
+---
+
+## Postmortem: Why This Bug Took So Long to Fix
+
+**Timeline**: This bug spanned multiple debugging sessions across several weeks, with three distinct phases of fixes before strokes finally rendered on the device.
+
+### What Made This Hard
+
+#### 1. Implicit Knowledge About rmscene Block Relationships
+
+The reMarkable v6 format uses a CRDT-based scene graph where strokes require **multiple interdependent blocks**:
+
+```
+SceneTreeBlock  →  TreeNodeBlock  →  SceneGroupItemBlock  →  SceneLineItemBlock
+   (declares)        (anchors)          (links to layer)       (stroke data)
+```
+
+This relationship was never explicitly documented. We discovered it incrementally:
+- Phase 1: Realized TreeNodeBlock anchors matter
+- Phase 2: Realized SceneGroupItemBlock links nodes to layers
+- Phase 3: Realized SceneTreeBlock declares nodes in the tree
+
+Each discovery came from device log analysis and reverse engineering, not from understanding the format upfront.
+
+#### 2. No "Stroke Bundle" Abstraction
+
+The code treated each block type independently:
+- `TreeNodeBlock` extracted in one place
+- `SceneGroupItemBlock` extracted in another
+- `SceneTreeBlock` not extracted at all (until Phase 3)
+
+There was no single abstraction representing "a complete stroke with all its scene graph dependencies." This meant:
+- Easy to forget a required block when moving strokes
+- No compile-time or test-time enforcement of completeness
+- Each phase fixed one missing piece without addressing the structural gap
+
+#### 3. Scattered Extraction/Injection Logic
+
+Block extraction happened in multiple places:
+- `document_model.py`: DocumentAnnotation extraction
+- `preserver.py`: OldPageData extraction (two methods!)
+- `generator.py`: Direct block reading
+
+Block injection also happened in multiple places:
+- `generator.py`: Round-trip path (~line 2165)
+- `generator.py`: From-scratch path (~line 2305)
+
+This scatter meant:
+- Fixes had to be applied in multiple locations
+- Easy to miss a code path
+- No single source of truth for "how to move a stroke"
+
+#### 4. Incremental Symptom-Driven Fixes
+
+Each phase addressed symptoms rather than root cause:
+
+| Phase | Symptom | Fix | Underlying Issue |
+|-------|---------|-----|------------------|
+| 1 | Wrong page matching | Reorder .rm files | No document-level model |
+| 2 | Invalid anchors | Track char offsets | Mixed coordinate systems |
+| 3 | Missing nodes | Inject SceneTreeBlock | No stroke bundle abstraction |
+
+The fixes were correct but didn't address why these bugs kept appearing.
+
+#### 5. Testing at the Wrong Abstraction Level
+
+Tests validated:
+- ✅ Annotation counts preserved
+- ✅ Highlights detected by text content
+- ❌ Scene graph structure validity
+- ❌ Block relationship integrity
+
+The test harness couldn't catch "SceneTreeBlock missing" because it counted annotations, not scene graph nodes. We only caught this via device logs.
+
+#### 6. Reverse-Engineering Overhead
+
+Each debugging session required:
+1. Sync to real device
+2. Wait for xochitl to process
+3. SSH to fetch logs
+4. Parse cryptic error messages ("Unable to find node with id=0:11")
+5. Correlate with generated .rm files
+6. Hypothesis → code change → repeat
+
+The `device_iteration.py` tool helped, but the feedback loop was still slow compared to unit tests.
+
+### Structural Gaps in Current Architecture
+
+#### Gap 1: No Schema for "Valid Injectable Stroke"
+
+**Current state**: Code implicitly assumes various blocks are needed, discovered through trial and error.
+
+**Needed**: Explicit type/schema defining what constitutes a complete stroke:
+```python
+@dataclass
+class StrokeBundle:
+    """All blocks required to render a stroke on the device."""
+    scene_tree_block: SceneTreeBlock      # Declares node in tree
+    tree_node_block: TreeNodeBlock        # Anchors to text
+    scene_group_item: SceneGroupItemBlock # Links to layer
+    line_items: list[SceneLineItemBlock]  # Actual strokes
+```
+
+#### Gap 2: No Single Extraction/Injection Point
+
+**Current state**: Extract in preserver.py, inject in generator.py, with multiple code paths.
+
+**Needed**: Single abstraction that handles both:
+```python
+class StrokeMigrator:
+    def extract(rm_file: Path) -> list[StrokeBundle]: ...
+    def inject(bundles: list[StrokeBundle], target_blocks: list) -> list: ...
+```
+
+#### Gap 3: No Scene Graph Validation
+
+**Current state**: rmscene serializes anything, device silently fails.
+
+**Needed**: Validation layer that checks:
+- Every SceneGroupItemBlock.value has a corresponding TreeNodeBlock
+- Every TreeNodeBlock has a corresponding SceneTreeBlock
+- All parent_id references resolve to existing nodes
+- Anchor offsets are within text bounds
+
+#### Gap 4: No Document-Level Model
+
+**Current state**: Process page-by-page, reconstruct relationships ad-hoc.
+
+**Needed**: Document model that understands:
+- Which strokes belong to which text ranges
+- How strokes should move when text moves
+- Complete dependency graph for each annotation
+
+### Recommendations
+
+1. **Create StrokeBundle abstraction** that encapsulates all required blocks
+2. **Centralize extraction/injection** in a single module
+3. **Add scene graph validation** to test harness and pre-sync checks
+4. **Document rmscene block relationships** in RMSCENE_FINDINGS.md
+5. **Add structural tests** that validate scene graph integrity, not just counts
+
+### Lessons Learned
+
+1. **Understand the format before writing code**: Time spent reverse-engineering upfront saves debugging time later
+2. **Create abstractions for related concepts**: If blocks always appear together, model them together
+3. **Test at the right level**: Count-based tests miss structural issues
+4. **Single source of truth**: Scattered code paths multiply bug surface area
+5. **Fast feedback loops matter**: device_iteration.py was essential but came late

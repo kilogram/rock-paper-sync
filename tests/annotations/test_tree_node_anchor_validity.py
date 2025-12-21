@@ -414,3 +414,174 @@ def test_anchor_validity_with_positive_delta():
 
     finally:
         modified_md_path.unlink()
+
+
+# ============================================================================
+# Parametrized edge case tests for anchor validity
+# ============================================================================
+
+# Import cross_page_reanchor testdata for additional coverage
+CROSS_PAGE_TESTDATA = (
+    Path(__file__).parent.parent / "record_replay" / "testdata" / "cross_page_reanchor"
+)
+
+
+@pytest.fixture
+def cross_page_rm_files():
+    """Load cross_page_reanchor .rm files."""
+    rm_dir = CROSS_PAGE_TESTDATA / "trips" / "1" / "annotations" / "rm_files"
+    if not rm_dir.exists():
+        pytest.skip("cross_page_reanchor testdata not available")
+    rm_files = sorted(rm_dir.glob("*.rm"))
+    if not rm_files:
+        pytest.skip("No .rm files in testdata")
+    return rm_files
+
+
+@pytest.fixture
+def cross_page_markdown():
+    """Load cross_page_reanchor base markdown."""
+    md_file = CROSS_PAGE_TESTDATA / "trips" / "1" / "vault" / "document.md"
+    if not md_file.exists():
+        pytest.skip("Markdown not available")
+    return md_file
+
+
+def validate_anchors_for_modified_markdown(
+    rm_files: list[Path],
+    modified_content: str,
+    test_name: str,
+) -> None:
+    """Helper to validate anchors after markdown modification.
+
+    Args:
+        rm_files: Source .rm files with annotations
+        modified_content: Modified markdown content
+        test_name: Name for temp file and error messages
+    """
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
+        f.write(modified_content)
+        modified_md_path = Path(f.name)
+
+    try:
+        md_doc = parse_markdown_file(modified_md_path)
+        layout = LayoutConfig(margin_top=50, margin_bottom=50, margin_left=50, margin_right=50)
+        generator = RemarkableGenerator(layout)
+
+        doc = generator.generate_document(
+            md_doc,
+            existing_page_uuids=[f.stem for f in rm_files],
+            existing_rm_files=list(rm_files),
+        )
+
+        # Validate all TreeNodeBlock anchors
+        invalid_anchors = []
+        for i, page in enumerate(doc.pages):
+            rm_bytes = generator.generate_rm_file(page)
+            page_text_len = get_page_text_length(rm_bytes)
+            tree_nodes = get_user_tree_node_blocks(rm_bytes)
+
+            for node_id, anchor in tree_nodes:
+                # Skip sentinel anchors (margin notes)
+                if anchor is not None and anchor > 10**14:
+                    continue
+                if anchor is None or anchor < 0 or anchor > page_text_len:
+                    invalid_anchors.append(
+                        {
+                            "page": i,
+                            "node_id": node_id,
+                            "anchor": anchor,
+                            "page_text_len": page_text_len,
+                        }
+                    )
+
+        if invalid_anchors:
+            msg = f"[{test_name}] Invalid anchors:\n"
+            for inv in invalid_anchors:
+                msg += f"  Page {inv['page']}: {inv['node_id']} anchor={inv['anchor']} > {inv['page_text_len']}\n"
+            pytest.fail(msg)
+
+    finally:
+        modified_md_path.unlink()
+
+
+class TestAnchorValidityEdgeCases:
+    """Parametrized tests for anchor validity edge cases."""
+
+    def test_anchor_validity_text_prepended(self, cross_page_rm_files, cross_page_markdown):
+        """Test anchors valid when text is prepended to document."""
+        original = cross_page_markdown.read_text()
+        modified = "# Prepended Header\n\nNew paragraph at the start.\n\n" + original
+        validate_anchors_for_modified_markdown(cross_page_rm_files, modified, "prepend")
+
+    def test_anchor_validity_text_appended(self, cross_page_rm_files, cross_page_markdown):
+        """Test anchors valid when text is appended to document."""
+        original = cross_page_markdown.read_text()
+        modified = original + "\n\n# Appended Section\n\nNew content at the end.\n"
+        validate_anchors_for_modified_markdown(cross_page_rm_files, modified, "append")
+
+    def test_anchor_validity_text_inserted_middle(self, cross_page_rm_files, cross_page_markdown):
+        """Test anchors valid when text is inserted in middle."""
+        original = cross_page_markdown.read_text()
+        # Insert after first paragraph
+        lines = original.split("\n")
+        midpoint = len(lines) // 2
+        lines.insert(midpoint, "\n## Inserted Section\n\nThis is inserted in the middle.\n")
+        modified = "\n".join(lines)
+        validate_anchors_for_modified_markdown(cross_page_rm_files, modified, "insert_middle")
+
+    def test_anchor_validity_large_insertion(self, cross_page_rm_files, cross_page_markdown):
+        """Test anchors valid with large text insertion (pagination change)."""
+        original = cross_page_markdown.read_text()
+        # Insert enough text to cause pagination change
+        large_insert = (
+            "\n\n"
+            + "\n".join(
+                [
+                    f"## Extra Section {i}\n\nThis is paragraph {i} of inserted content. "
+                    "It needs to be long enough to cause pagination changes."
+                    for i in range(10)
+                ]
+            )
+            + "\n\n"
+        )
+        modified = large_insert + original
+        validate_anchors_for_modified_markdown(cross_page_rm_files, modified, "large_insert")
+
+    def test_anchor_validity_text_deleted_beginning(self, cross_page_rm_files, cross_page_markdown):
+        """Test anchors valid when text is deleted from beginning."""
+        original = cross_page_markdown.read_text()
+        # Remove first 200 characters (approximately first paragraph)
+        modified = original[200:]
+        if not modified.strip():
+            pytest.skip("Deletion would empty the document")
+        validate_anchors_for_modified_markdown(cross_page_rm_files, modified, "delete_beginning")
+
+    def test_anchor_validity_paragraph_removed(self, cross_page_rm_files, cross_page_markdown):
+        """Test anchors valid when a paragraph is removed."""
+        original = cross_page_markdown.read_text()
+        paragraphs = original.split("\n\n")
+        if len(paragraphs) < 3:
+            pytest.skip("Not enough paragraphs")
+        # Remove the second paragraph
+        modified = "\n\n".join(paragraphs[:1] + paragraphs[2:])
+        validate_anchors_for_modified_markdown(cross_page_rm_files, modified, "remove_paragraph")
+
+    def test_anchor_validity_mixed_changes(self, cross_page_rm_files, cross_page_markdown):
+        """Test anchors valid with mixed insertions and deletions."""
+        original = cross_page_markdown.read_text()
+        paragraphs = original.split("\n\n")
+        if len(paragraphs) < 4:
+            pytest.skip("Not enough paragraphs")
+
+        # Remove one paragraph, add two new ones
+        modified_paras = (
+            ["# Modified Document\n\nNew intro paragraph."]
+            + paragraphs[2:4]
+            + ["## New Middle Section\n\nInserted content."]
+            + paragraphs[4:]
+        )
+        modified = "\n\n".join(modified_paras)
+        validate_anchors_for_modified_markdown(cross_page_rm_files, modified, "mixed_changes")
