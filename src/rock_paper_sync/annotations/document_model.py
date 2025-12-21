@@ -38,7 +38,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import rmscene
 
-from .core_types import HeuristicTextAnchor, StrokeData
+from .core_types import HeuristicTextAnchor, Point, StrokeData
 from .scene_graph import SceneGraphIndex, StrokeBundle
 
 if TYPE_CHECKING:
@@ -547,6 +547,9 @@ class DocumentAnnotation:
         None  # SceneTreeBlock that declares TreeNodeBlock in scene tree
     )
 
+    # Spatial cluster membership (for grouped stroke migration)
+    cluster_id: str | None = None
+
     @property
     def as_stroke_bundle(self) -> StrokeBundle | None:
         """Get a StrokeBundle for this annotation (strokes only).
@@ -758,12 +761,15 @@ class DocumentModel:
                     if line is None or not hasattr(line, "points") or not line.points:
                         continue
 
-                    # Get Y position for anchoring
-                    points = [(p.x, p.y, getattr(p, "pressure", 100)) for p in line.points]
+                    # Convert to Point objects for unified stroke representation
+                    points = [
+                        Point(x=p.x, y=p.y, pressure=getattr(p, "pressure", 100))
+                        for p in line.points
+                    ]
                     if not points:
                         continue
 
-                    y_coords = [p[1] for p in points]
+                    y_coords = [p.y for p in points]
                     center_y = sum(y_coords) / len(y_coords)
                     # Transform to absolute Y
                     abs_y = text_origin_y + center_y + 60  # 60px offset for strokes
@@ -795,9 +801,9 @@ class DocumentModel:
                         scene_group_item = scene_index.scene_group_items.get(node_id)
                         scene_tree_block = scene_index.scene_trees.get(node_id)
 
-                    # Build stroke data
-                    xs = [p[0] for p in points]
-                    ys = [p[1] for p in points]
+                    # Build stroke data with bounding box
+                    xs = [p.x for p in points]
+                    ys = [p.y for p in points]
                     bbox = (min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys))
 
                     stroke_data = StrokeData(
@@ -874,12 +880,17 @@ class DocumentModel:
 
         full_text = "\n".join(full_text_parts)
 
-        return cls(
+        model = cls(
             paragraphs=all_paragraphs,
             full_text=full_text,
             annotations=all_annotations,
             geometry=geometry,
         )
+
+        # Assign spatial clusters to stroke annotations
+        model._assign_stroke_clusters()
+
+        return model
 
     @classmethod
     def from_paragraphs(
@@ -962,6 +973,166 @@ class DocumentModel:
             lines_per_page=geometry.lines_per_page,
         )
 
+    def _assign_stroke_clusters(self) -> None:
+        """Assign cluster IDs to spatially-related stroke annotations.
+
+        Uses KDTree-based proximity clustering with DEFAULT_CLUSTER_THRESHOLD.
+        Clusters are assigned during from_rm_files() and used by both:
+        - Annotation reanchoring (migrate_annotations_to)
+        - OCR processing (get_annotation_clusters)
+        """
+        import uuid
+
+        from .common.spatial import DEFAULT_CLUSTER_THRESHOLD, KDTreeProximityStrategy
+
+        # Get stroke annotations with valid stroke_data
+        stroke_annos = [
+            (i, anno)
+            for i, anno in enumerate(self.annotations)
+            if anno.annotation_type == "stroke" and anno.stroke_data
+        ]
+
+        if not stroke_annos:
+            return
+
+        # Cluster by bounding box proximity
+        strokes = [anno.stroke_data for _, anno in stroke_annos]
+        strategy = KDTreeProximityStrategy(distance_threshold=DEFAULT_CLUSTER_THRESHOLD)
+        clusters = strategy.cluster(strokes)
+
+        # Assign cluster IDs (only for actual clusters with >1 member)
+        for cluster_indices in clusters:
+            if len(cluster_indices) > 1:
+                cluster_id = str(uuid.uuid4())[:8]
+                for idx in cluster_indices:
+                    anno_idx, _ = stroke_annos[idx]
+                    self.annotations[anno_idx].cluster_id = cluster_id
+
+        logger.debug(
+            f"Assigned {sum(1 for c in clusters if len(c) > 1)} clusters "
+            f"to {len(stroke_annos)} stroke annotations"
+        )
+
+    def get_annotation_clusters(self) -> list[list[DocumentAnnotation]]:
+        """Get annotations grouped by cluster_id.
+
+        Returns a list of annotation clusters. Each cluster is a list of
+        DocumentAnnotation objects that should be processed together.
+        Unclustered annotations are returned as single-element lists.
+
+        Used by both OCR processing and annotation reanchoring.
+        """
+        clusters: dict[str, list[DocumentAnnotation]] = {}
+        unclustered: list[DocumentAnnotation] = []
+
+        for anno in self.annotations:
+            if anno.cluster_id:
+                clusters.setdefault(anno.cluster_id, []).append(anno)
+            else:
+                unclustered.append(anno)
+
+        # Return multi-annotation clusters + single-annotation "clusters"
+        result = list(clusters.values())
+        result.extend([[a] for a in unclustered])
+        return result
+
+    def _resolve_cluster_leader(
+        self,
+        indices: list[int],
+        resolver: ContextResolver,
+        new_model: DocumentModel,
+        old_layout: Any,
+        new_layout: Any,
+    ) -> ResolvedAnchorContext | None:
+        """Resolve all cluster members, return highest-confidence resolution.
+
+        The leader is the annotation whose anchor resolves with highest
+        confidence. All other cluster members will follow this resolution.
+
+        Args:
+            indices: Annotation indices in self.annotations
+            resolver: ContextResolver instance
+            new_model: Target document model
+            old_layout: Layout context for old document
+            new_layout: Layout context for new document
+
+        Returns:
+            Highest-confidence resolution, or None if no member resolves
+        """
+        resolutions: list[ResolvedAnchorContext] = []
+
+        for idx in indices:
+            anno = self.annotations[idx]
+            resolved = resolver.resolve(
+                anno.anchor_context,
+                self.full_text,
+                new_model.full_text,
+                old_layout,
+                new_layout,
+            )
+            if resolved:
+                resolutions.append(resolved)
+
+        if not resolutions:
+            return None
+
+        # Pick highest confidence, prefer better match types on tie
+        match_priority = {"exact": 0, "fuzzy": 1, "diff_anchor": 2, "spatial": 3}
+        resolutions.sort(key=lambda r: (-r.confidence, match_priority.get(r.match_type, 99)))
+        return resolutions[0]
+
+    def _migrate_with_resolution(
+        self,
+        annotation: DocumentAnnotation,
+        resolution: ResolvedAnchorContext,
+        new_model: DocumentModel,
+        cluster_id: str | None = None,
+    ) -> DocumentAnnotation:
+        """Create migrated annotation using provided resolution.
+
+        Args:
+            annotation: Source annotation to migrate
+            resolution: Resolved anchor context in new document
+            new_model: Target document model
+            cluster_id: Cluster ID to preserve (or None for unclustered)
+
+        Returns:
+            New DocumentAnnotation with updated anchor
+        """
+        new_anchor = AnchorContext.from_text_span(
+            new_model.full_text,
+            resolution.start_offset,
+            resolution.end_offset,
+        )
+
+        # Preserve Y-position hint for strokes (needed for page assignment)
+        if (
+            annotation.annotation_type == "stroke"
+            and annotation.anchor_context.y_position_hint is not None
+        ):
+            new_anchor = AnchorContext(
+                content_hash=new_anchor.content_hash,
+                text_content=new_anchor.text_content,
+                paragraph_index=new_anchor.paragraph_index,
+                context_before=new_anchor.context_before,
+                context_after=new_anchor.context_after,
+                y_position_hint=annotation.anchor_context.y_position_hint,
+                diff_anchor=new_anchor.diff_anchor,
+            )
+
+        return DocumentAnnotation(
+            annotation_id=annotation.annotation_id,
+            annotation_type=annotation.annotation_type,
+            anchor_context=new_anchor,
+            stroke_data=annotation.stroke_data,
+            highlight_data=annotation.highlight_data,
+            original_rm_block=annotation.original_rm_block,
+            original_tree_node=annotation.original_tree_node,
+            original_scene_group_item=annotation.original_scene_group_item,
+            original_scene_tree_block=annotation.original_scene_tree_block,
+            cluster_id=cluster_id,
+        )
+
     def migrate_annotations_to(
         self,
         new_model: DocumentModel,
@@ -998,9 +1169,48 @@ class DocumentModel:
                 ),
             )
 
-        migrated_annotations = []
+        migrated_annotations: list[DocumentAnnotation] = []
 
-        for annotation in self.annotations:
+        # Group annotations by cluster_id
+        clusters: dict[str, list[int]] = {}  # cluster_id -> annotation indices
+        unclustered: list[int] = []
+
+        for i, anno in enumerate(self.annotations):
+            if anno.cluster_id:
+                clusters.setdefault(anno.cluster_id, []).append(i)
+            else:
+                unclustered.append(i)
+
+        # Migrate clustered annotations (all follow the leader)
+        for cluster_id, indices in clusters.items():
+            leader_resolution = self._resolve_cluster_leader(
+                indices, resolver, new_model, old_layout, new_layout
+            )
+
+            for idx in indices:
+                annotation = self.annotations[idx]
+                if leader_resolution:
+                    new_annotation = self._migrate_with_resolution(
+                        annotation, leader_resolution, new_model, cluster_id
+                    )
+                    migrated_annotations.append(new_annotation)
+                    report.add_migration(annotation, new_annotation, leader_resolution)
+
+                    logger.debug(
+                        f"Migrated clustered {annotation.annotation_type} "
+                        f"(cluster={cluster_id}) with {leader_resolution.match_type} "
+                        f"match (confidence={leader_resolution.confidence:.2f})"
+                    )
+                else:
+                    report.add_orphan(annotation)
+                    logger.warning(
+                        f"Could not resolve cluster {cluster_id} "
+                        f"({annotation.annotation_type} annotation)"
+                    )
+
+        # Migrate unclustered annotations (existing single-annotation logic)
+        for idx in unclustered:
+            annotation = self.annotations[idx]
             resolved = resolver.resolve(
                 annotation.anchor_context,
                 self.full_text,
@@ -1010,39 +1220,8 @@ class DocumentModel:
             )
 
             if resolved:
-                # Create new anchor context at resolved location
-                new_anchor = AnchorContext.from_text_span(
-                    new_model.full_text,
-                    resolved.start_offset,
-                    resolved.end_offset,
-                )
-
-                # Preserve Y-position hint for strokes (needed for page assignment)
-                if (
-                    annotation.annotation_type == "stroke"
-                    and annotation.anchor_context.y_position_hint is not None
-                ):
-                    # Create a new anchor with the Y-position hint preserved
-                    new_anchor = AnchorContext(
-                        content_hash=new_anchor.content_hash,
-                        text_content=new_anchor.text_content,
-                        paragraph_index=new_anchor.paragraph_index,
-                        context_before=new_anchor.context_before,
-                        context_after=new_anchor.context_after,
-                        y_position_hint=annotation.anchor_context.y_position_hint,  # PRESERVE!
-                        diff_anchor=new_anchor.diff_anchor,
-                    )
-
-                # Clone annotation with new anchor
-                new_annotation = DocumentAnnotation(
-                    annotation_id=annotation.annotation_id,
-                    annotation_type=annotation.annotation_type,
-                    anchor_context=new_anchor,
-                    stroke_data=annotation.stroke_data,
-                    highlight_data=annotation.highlight_data,
-                    original_rm_block=annotation.original_rm_block,
-                    original_tree_node=annotation.original_tree_node,
-                    original_scene_group_item=annotation.original_scene_group_item,
+                new_annotation = self._migrate_with_resolution(
+                    annotation, resolved, new_model, None
                 )
                 migrated_annotations.append(new_annotation)
                 report.add_migration(annotation, new_annotation, resolved)

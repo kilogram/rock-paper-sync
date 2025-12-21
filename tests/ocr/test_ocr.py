@@ -629,6 +629,7 @@ class TestOCRIntegration:
         self, mock_create_service, ocr_config, state_manager, mock_ocr_service
     ):
         """Test processing annotations with mocked OCR service."""
+        from rock_paper_sync.annotations.document_model import DocumentModel
         from rock_paper_sync.ocr.integration import OCRProcessor
         from rock_paper_sync.ocr.markers import AnnotationInfo
 
@@ -639,18 +640,24 @@ class TestOCRIntegration:
         # Mock annotation data
         annotation_map = {0: AnnotationInfo(highlights=1, strokes=1)}
 
-        # This would need actual .rm files to work fully
-        # For now, test that the method runs without error
+        # Create empty DocumentModel
+        document_model = DocumentModel(
+            full_text="",
+            paragraphs=[],
+            annotations=[],
+        )
+
+        # Test that the method runs without error with empty document
         result = processor.process_annotations(
             vault_name="test-vault",
             obsidian_path="test.md",
             markdown_content="# Test\n\nParagraph",
             annotation_map=annotation_map,
-            rm_files=[],
+            document_model=document_model,
             paragraph_texts=["Paragraph"],
         )
 
-        # Without .rm files, should return unchanged content
+        # Without annotations, should return unchanged content
         assert "Test" in result
 
 
@@ -1103,7 +1110,7 @@ class TestRealPNGImages:
 
 
 class TestAnnotationImageRendering:
-    """Tests for annotation image rendering."""
+    """Tests for annotation image rendering using DocumentAnnotation."""
 
     def test_render_stroke_to_image(self):
         """Test rendering stroke annotations to PNG."""
@@ -1113,7 +1120,11 @@ class TestAnnotationImageRendering:
 
         from PIL import Image
 
-        from rock_paper_sync.annotations import Annotation, AnnotationType, Point, Stroke
+        from rock_paper_sync.annotations.core_types import Point, StrokeData
+        from rock_paper_sync.annotations.document_model import (
+            AnchorContext,
+            DocumentAnnotation,
+        )
         from rock_paper_sync.config import OCRConfig
         from rock_paper_sync.ocr.integration import OCRProcessor
 
@@ -1122,21 +1133,27 @@ class TestAnnotationImageRendering:
         mock_state = MagicMock()
         processor = OCRProcessor(config, mock_state)
 
-        # Create test stroke
-        stroke = Stroke(
+        # Create test stroke using StrokeData
+        stroke_data = StrokeData(
+            bounding_box=(10.0, 10.0, 90.0, 20.0),  # (x, y, w, h)
             points=[
-                Point(10, 10),
-                Point(50, 30),
-                Point(100, 10),
+                Point(x=10, y=10),
+                Point(x=50, y=30),
+                Point(x=100, y=10),
             ],
             color=0,  # black
             tool=1,
             thickness=2.0,
         )
-        annotation = Annotation(type=AnnotationType.STROKE, stroke=stroke)
+        annotation = DocumentAnnotation(
+            annotation_id="test-stroke-1",
+            annotation_type="stroke",
+            anchor_context=AnchorContext(content_hash="abc123", text_content="test"),
+            stroke_data=stroke_data,
+        )
 
         # Render to image
-        image_data, bbox = processor._render_annotations_to_image([annotation])
+        image_data, bbox = processor._render_document_annotations_to_image([annotation])
 
         # Verify image was created
         assert len(image_data) > 0
@@ -1157,11 +1174,10 @@ class TestAnnotationImageRendering:
 
         from PIL import Image
 
-        from rock_paper_sync.annotations import (
-            Annotation,
-            AnnotationType,
-            Highlight,
-            Rectangle,
+        from rock_paper_sync.annotations.document_model import (
+            AnchorContext,
+            DocumentAnnotation,
+            HighlightData,
         )
         from rock_paper_sync.config import OCRConfig
         from rock_paper_sync.ocr.integration import OCRProcessor
@@ -1170,16 +1186,21 @@ class TestAnnotationImageRendering:
         mock_state = MagicMock()
         processor = OCRProcessor(config, mock_state)
 
-        # Create test highlight
-        highlight = Highlight(
-            text="highlighted text",
+        # Create test highlight using HighlightData
+        highlight_data = HighlightData(
+            highlighted_text="highlighted text",
             color=3,  # yellow
-            rectangles=[Rectangle(x=10, y=20, w=200, h=30)],
+            rectangles=[(10.0, 20.0, 200.0, 30.0)],  # (x, y, w, h) tuples
         )
-        annotation = Annotation(type=AnnotationType.HIGHLIGHT, highlight=highlight)
+        annotation = DocumentAnnotation(
+            annotation_id="test-highlight-1",
+            annotation_type="highlight",
+            anchor_context=AnchorContext(content_hash="def456", text_content="test"),
+            highlight_data=highlight_data,
+        )
 
         # Render to image
-        image_data, bbox = processor._render_annotations_to_image([annotation])
+        image_data, bbox = processor._render_document_annotations_to_image([annotation])
 
         # Verify image was created
         assert len(image_data) > 0
@@ -1196,13 +1217,11 @@ class TestAnnotationImageRendering:
 
         from PIL import Image
 
-        from rock_paper_sync.annotations import (
-            Annotation,
-            AnnotationType,
-            Highlight,
-            Point,
-            Rectangle,
-            Stroke,
+        from rock_paper_sync.annotations.core_types import Point, StrokeData
+        from rock_paper_sync.annotations.document_model import (
+            AnchorContext,
+            DocumentAnnotation,
+            HighlightData,
         )
         from rock_paper_sync.config import OCRConfig
         from rock_paper_sync.ocr.integration import OCRProcessor
@@ -1211,29 +1230,36 @@ class TestAnnotationImageRendering:
         mock_state = MagicMock()
         processor = OCRProcessor(config, mock_state)
 
-        # Create multiple annotations
+        anchor = AnchorContext(content_hash="xyz789", text_content="test")
+
+        # Create multiple annotations using DocumentAnnotation
         annotations = [
-            Annotation(
-                type=AnnotationType.STROKE,
-                stroke=Stroke(
-                    points=[Point(10, 10), Point(50, 50)],
+            DocumentAnnotation(
+                annotation_id="test-stroke-2",
+                annotation_type="stroke",
+                anchor_context=anchor,
+                stroke_data=StrokeData(
+                    bounding_box=(10.0, 10.0, 40.0, 40.0),
+                    points=[Point(x=10, y=10), Point(x=50, y=50)],
                     color=0,
                     tool=1,
                     thickness=2.0,
                 ),
             ),
-            Annotation(
-                type=AnnotationType.HIGHLIGHT,
-                highlight=Highlight(
-                    text="test",
+            DocumentAnnotation(
+                annotation_id="test-highlight-2",
+                annotation_type="highlight",
+                anchor_context=anchor,
+                highlight_data=HighlightData(
+                    highlighted_text="test",
                     color=3,
-                    rectangles=[Rectangle(x=60, y=10, w=100, h=20)],
+                    rectangles=[(60.0, 10.0, 100.0, 20.0)],
                 ),
             ),
         ]
 
         # Render to single image
-        image_data, bbox = processor._render_annotations_to_image(annotations)
+        image_data, bbox = processor._render_document_annotations_to_image(annotations)
 
         # Verify combined bounding box
         assert bbox.width >= 150  # Should include both
@@ -1255,7 +1281,7 @@ class TestAnnotationImageRendering:
         mock_state = MagicMock()
         processor = OCRProcessor(config, mock_state)
 
-        image_data, bbox = processor._render_annotations_to_image([])
+        image_data, bbox = processor._render_document_annotations_to_image([])
 
         assert image_data == b""
         assert bbox.width == 0
@@ -1268,18 +1294,20 @@ class TestOCRVaultIntegration:
     def test_ocr_markers_in_vault_output_with_testdata(
         self, sample_config_with_ocr, state_manager, mock_ocr_service, tmp_path
     ):
-        """Full integration: real .rm testdata → clustering → mocked OCR → vault output with markers.
+        """Full integration: real .rm testdata → DocumentModel → mocked OCR → vault output with markers.
 
         This test:
-        1. Loads real .rm files with handwriting from testdata
+        1. Loads real .rm files with handwriting via DocumentModel
         2. Mocks RunpodsOCRService to return predictable text
-        3. Runs OCRProcessor.process_annotations with real .rm files
+        3. Runs OCRProcessor.process_annotations with DocumentModel
         4. Verifies OCR markers appear in vault output
 
         Note: If testdata .rm files don't have extractable annotations at expected
         paragraph indices, this test skips gracefully. The mocked version below
         demonstrates the full pipeline without relying on specific testdata format.
         """
+        from rock_paper_sync.annotations.document_model import DocumentModel
+        from rock_paper_sync.layout import DEFAULT_DEVICE
         from rock_paper_sync.ocr.integration import OCRProcessor
         from rock_paper_sync.ocr.markers import AnnotationInfo
         from rock_paper_sync.ocr.protocol import OCRResult
@@ -1296,6 +1324,12 @@ class TestOCRVaultIntegration:
         if not rm_files:
             pytest.skip("Real .rm file testdata not available")
         rm_file_1 = rm_files[0]
+
+        # Create DocumentModel from real .rm file
+        document_model = DocumentModel.from_rm_files([rm_file_1], DEFAULT_DEVICE)
+
+        if not document_model.annotations:
+            pytest.skip("Real .rm file has no extractable annotations")
 
         # Create vault file
         vault_dir = sample_config_with_ocr.sync.vaults[0].path
@@ -1347,7 +1381,7 @@ This is the conclusion."""
             obsidian_path="test_document.md",
             markdown_content=original_content,
             annotation_map=annotation_map,
-            rm_files=[rm_file_1],  # Real .rm file with annotations
+            document_model=document_model,
             paragraph_texts=paragraph_texts,
         )
 
@@ -1369,6 +1403,7 @@ This is the conclusion."""
         """
         from unittest.mock import MagicMock
 
+        from rock_paper_sync.annotations.document_model import DocumentModel
         from rock_paper_sync.ocr.integration import OCRProcessor
         from rock_paper_sync.ocr.markers import AnnotationInfo
         from rock_paper_sync.ocr.protocol import BoundingBox
@@ -1419,7 +1454,7 @@ Third paragraph."""
         # Inject the mock service directly to bypass lazy initialization
         processor._service = mock_ocr_service
 
-        # Mock _extract_annotation_images to return fake image data
+        # Mock _extract_annotation_images_from_model to return fake image data
         fake_image_data = b"fake PNG image data"
         mock_annotation_info = AnnotationInfo(highlights=1, strokes=2)
         fake_bbox = BoundingBox(x=10, y=20, width=100, height=50)
@@ -1429,15 +1464,22 @@ Third paragraph."""
             1: (mock_annotation_info, [(fake_image_data, fake_bbox, "mocked-uuid-1")])
         }
 
+        # Create empty DocumentModel (we're mocking the extraction anyway)
+        document_model = DocumentModel(
+            full_text="",
+            paragraphs=[],
+            annotations=[],
+        )
+
         with patch.object(
-            processor, "_extract_annotation_images", return_value=mock_extract_return
+            processor, "_extract_annotation_images_from_model", return_value=mock_extract_return
         ):
             result = processor.process_annotations(
                 vault_name=sample_config_with_ocr.sync.vaults[0].name,
                 obsidian_path="simple_test.md",
                 markdown_content=original_content,
                 annotation_map=annotation_map,
-                rm_files=[],  # Empty - we're mocking image extraction
+                document_model=document_model,
                 paragraph_texts=paragraph_texts,
             )
 

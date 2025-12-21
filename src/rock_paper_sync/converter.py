@@ -1307,20 +1307,22 @@ class SyncEngine:
         if self.ocr_processor and rm_files:
             logger.info(f"Running OCR on {len(rm_files)} .rm file(s)")
 
+            from rock_paper_sync.annotations.document_model import DocumentModel
+            from rock_paper_sync.layout import DEFAULT_DEVICE
+
             # Extract paragraph texts from content blocks
             paragraph_texts = [block.text for block in content_blocks]
 
-            # annotation_map already uses correct AnnotationInfo format (core.data_types)
-            # No conversion needed - OCR processor accepts same format
-            ocr_annotation_map = annotation_map
+            # Build DocumentModel from rm_files (handles clustering)
+            document_model = DocumentModel.from_rm_files(rm_files, DEFAULT_DEVICE)
 
-            # Process annotations with OCR
+            # Process annotations with OCR using DocumentModel
             marked_content = self.ocr_processor.process_annotations(
                 vault_name=vault_name,
                 obsidian_path=relative_path,
                 markdown_content=marked_content,
-                annotation_map=ocr_annotation_map,
-                rm_files=rm_files,
+                annotation_map=annotation_map,
+                document_model=document_model,
                 paragraph_texts=paragraph_texts,
             )
             logger.info(f"OCR processing complete for {vault_name}:{relative_path}")

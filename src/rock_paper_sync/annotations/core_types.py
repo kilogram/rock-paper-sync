@@ -115,21 +115,21 @@ class Stroke:
 
 @dataclass
 class StrokeData:
-    """Lightweight stroke data for document model and clustering.
+    """Canonical stroke data for document model, clustering, and rendering.
 
-    This is the canonical representation for stroke data used by:
+    This is the unified representation for stroke data used by:
     - DocumentModel/DocumentAnnotation for annotation storage
     - ClusteringStrategy implementations for spatial grouping
+    - OCR rendering for image generation
 
-    Unlike Stroke (which uses Point objects), this uses tuples for efficiency
-    when processing large numbers of strokes.
+    Uses Point objects for full fidelity with the original stroke data.
 
     For clustering, only bounding_box is required. Other fields are optional
     and default to sensible values when not provided.
 
     Attributes:
         bounding_box: Axis-aligned bounding box as (x, y, w, h) - REQUIRED
-        points: Raw stroke points as (x, y, pressure) tuples
+        points: Stroke points as Point objects
         color: Stroke color code (0=black, 1=grey, 2=white, etc.)
         tool: Pen tool type (ballpoint, fineliner, etc.)
         thickness: Stroke thickness scale
@@ -137,7 +137,7 @@ class StrokeData:
     """
 
     bounding_box: tuple[float, float, float, float]  # (x, y, w, h) - required
-    points: list[tuple[float, float, float]] = field(default_factory=list)
+    points: list[Point] = field(default_factory=list)
     color: int = 0
     tool: int = 0
     thickness: float = 2.0
@@ -157,14 +157,41 @@ class StrokeData:
     @classmethod
     def from_stroke(cls, stroke: Stroke) -> "StrokeData":
         """Create StrokeData from a Stroke object."""
-        points = [(p.x, p.y, p.pressure or 0.0) for p in stroke.points]
         bbox = stroke.bounding_box
         return cls(
             bounding_box=(bbox.x, bbox.y, bbox.w, bbox.h),
-            points=points,
+            points=list(stroke.points),  # Copy Point objects directly
             color=stroke.color,
             tool=stroke.tool,
             thickness=stroke.thickness,
+        )
+
+    @classmethod
+    def from_points_and_metadata(
+        cls,
+        points: list[Point],
+        color: int = 0,
+        tool: int = 0,
+        thickness: float = 2.0,
+    ) -> "StrokeData":
+        """Create StrokeData from points, computing bounding box automatically."""
+        if not points:
+            return cls(
+                bounding_box=(0, 0, 0, 0), points=[], color=color, tool=tool, thickness=thickness
+            )
+
+        xs = [p.x for p in points]
+        ys = [p.y for p in points]
+        min_x, max_x = min(xs), max(xs)
+        min_y, max_y = min(ys), max(ys)
+        bbox = (min_x, min_y, max_x - min_x, max_y - min_y)
+
+        return cls(
+            bounding_box=bbox,
+            points=points,
+            color=color,
+            tool=tool,
+            thickness=thickness,
         )
 
 

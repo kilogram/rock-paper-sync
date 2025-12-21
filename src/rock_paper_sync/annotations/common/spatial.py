@@ -22,7 +22,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Default distance threshold for clustering strokes into semantic groups.
+# 80px handles multi-line handwriting well while avoiding over-grouping.
+# Used by both annotation reanchoring and OCR systems.
+DEFAULT_CLUSTER_THRESHOLD = 80.0
+
 __all__ = [
+    "DEFAULT_CLUSTER_THRESHOLD",
     "cluster_by_proximity",
     "find_nearest_paragraph_by_y",
     "StrokeData",
@@ -36,7 +42,7 @@ __all__ = [
 
 def cluster_by_proximity(
     centers: list[tuple[float, float]],
-    distance_threshold: float = 60.0,
+    distance_threshold: float = DEFAULT_CLUSTER_THRESHOLD,
 ) -> list[list[int]]:
     """Cluster points by Euclidean distance using connected components.
 
@@ -173,7 +179,7 @@ def find_nearest_paragraph_by_y(
 
 def cluster_bboxes_kdtree(
     bboxes: list[tuple[float, float, float, float]],
-    distance_threshold: float = 80.0,
+    distance_threshold: float = DEFAULT_CLUSTER_THRESHOLD,
 ) -> list[list[int]]:
     """Cluster bounding boxes using KDTree for O(n log n) efficiency.
 
@@ -301,11 +307,12 @@ class KDTreeProximityStrategy:
         distance_threshold: Maximum distance between bbox centers to cluster
     """
 
-    def __init__(self, distance_threshold: float = 80.0):
+    def __init__(self, distance_threshold: float = DEFAULT_CLUSTER_THRESHOLD):
         """Initialize with distance threshold.
 
         Args:
-            distance_threshold: Maximum distance between bbox centers (default: 80px)
+            distance_threshold: Maximum distance between bbox centers
+                              (default: DEFAULT_CLUSTER_THRESHOLD)
         """
         self.distance_threshold = distance_threshold
 

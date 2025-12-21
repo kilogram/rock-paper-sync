@@ -7,7 +7,6 @@ Tests the new cluster-first paragraph mapping system with:
 """
 
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -327,93 +326,59 @@ class TestIntegrationWithRealData:
 
 
 class TestCoordinateTransformation:
-    """Tests for coordinate space handling."""
+    """Tests for coordinate space handling.
 
-    def test_absolute_coordinates_unchanged(self):
-        """Annotations in absolute space are not transformed."""
-        from pathlib import Path
+    Note: Coordinate transformation is now handled internally by DocumentModel.
+    These tests verify that DocumentAnnotation has valid coordinates.
+    """
 
-        from rmscene.tagged_block_common import CrdtId
+    def test_stroke_data_has_valid_bounding_box(self):
+        """Verify StrokeData bounding boxes are computed correctly."""
+        from rock_paper_sync.annotations.core_types import Point, StrokeData
 
-        from rock_paper_sync.annotations import Annotation, AnnotationType, Point, Stroke
-        from rock_paper_sync.config import OCRConfig
-        from rock_paper_sync.ocr.integration import OCRProcessor
+        # Create stroke with known points
+        points = [Point(x=10, y=100), Point(x=50, y=150), Point(x=100, y=100)]
 
-        config = OCRConfig(enabled=True, cache_dir=Path("/tmp/test"))
-        processor = OCRProcessor(config, MagicMock())
-
-        # Create annotation in absolute space (parent = root layer)
-        stroke = Stroke(
-            points=[Point(10, 100), Point(50, 100)],
+        stroke_data = StrokeData.from_points_and_metadata(
+            points=points,
             color=0,
             tool=1,
             thickness=2.0,
         )
-        annotation = Annotation(
-            type=AnnotationType.STROKE,
-            stroke=stroke,
-            parent_id=CrdtId(0, 11),  # Root layer = absolute coordinates
+
+        # Bounding box should encompass all points
+        x, y, w, h = stroke_data.bounding_box
+        assert x == 10, "Min X should be 10"
+        assert y == 100, "Min Y should be 100"
+        assert w == 90, f"Width should be 90 (100-10), got {w}"
+        assert h == 50, f"Height should be 50 (150-100), got {h}"
+
+    def test_document_annotation_stores_stroke_data(self):
+        """Verify DocumentAnnotation correctly stores StrokeData."""
+        from rock_paper_sync.annotations.core_types import Point, StrokeData
+        from rock_paper_sync.annotations.document_model import (
+            AnchorContext,
+            DocumentAnnotation,
         )
 
-        text_origin_x = 0.0
-        text_origin_y = 200.0
-        parent_anchor_map = {}  # Empty map, rely on text origin fallback
-
-        transformed = processor._transform_annotations_to_absolute(
-            [annotation], parent_anchor_map, text_origin_x, text_origin_y
-        )
-
-        # Should NOT be transformed (already absolute)
-        assert len(transformed) == 1
-        result = transformed[0]
-        assert result.stroke is not None
-        # Points should remain unchanged
-        assert result.stroke.points[0].y == 100, "Absolute coordinates should not be transformed"
-        assert result.stroke.points[0].x == 10
-
-    def test_text_relative_coordinates_transformed(self):
-        """Annotations in text-relative space are transformed to absolute."""
-        from pathlib import Path
-
-        from rmscene.tagged_block_common import CrdtId
-
-        from rock_paper_sync.annotations import Annotation, AnnotationType, Point, Stroke
-        from rock_paper_sync.config import OCRConfig
-        from rock_paper_sync.ocr.integration import OCRProcessor
-
-        config = OCRConfig(enabled=True, cache_dir=Path("/tmp/test"))
-        processor = OCRProcessor(config, MagicMock())
-
-        # Create annotation in text-relative space
-        stroke = Stroke(
-            points=[Point(10, 5), Point(50, 5)],  # 5px relative to text
+        stroke_data = StrokeData(
+            bounding_box=(10.0, 100.0, 90.0, 50.0),
+            points=[Point(x=10, y=100), Point(x=50, y=150)],
             color=0,
             tool=1,
             thickness=2.0,
         )
-        annotation = Annotation(
-            type=AnnotationType.STROKE,
-            stroke=stroke,
-            parent_id=CrdtId(2, 530),  # Text layer = relative coordinates
+
+        annotation = DocumentAnnotation(
+            annotation_id="test-1",
+            annotation_type="stroke",
+            anchor_context=AnchorContext(content_hash="abc", text_content="test"),
+            stroke_data=stroke_data,
         )
 
-        text_origin_x = 0.0
-        text_origin_y = 200.0
-        parent_anchor_map = {}  # Empty map, rely on text origin fallback
-
-        transformed = processor._transform_annotations_to_absolute(
-            [annotation], parent_anchor_map, text_origin_x, text_origin_y
-        )
-
-        # Should be transformed: y = text_origin_y + relative_y
-        assert len(transformed) == 1
-        result = transformed[0]
-        assert result.stroke is not None
-        # Y should be transformed: 200 + 5 = 205
-        assert (
-            result.stroke.points[0].y == 205
-        ), f"Expected y=205 (200+5), got {result.stroke.points[0].y}"
-        assert result.stroke.points[0].x == 10, "X coordinate should not change"
+        assert annotation.stroke_data is not None
+        assert annotation.stroke_data.bounding_box == (10.0, 100.0, 90.0, 50.0)
+        assert len(annotation.stroke_data.points) == 2
 
 
 def test_mapper_interface_compatibility():

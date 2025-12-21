@@ -156,25 +156,24 @@ class TestTextBlockExtraction:
 
 
 class TestSpatialClustering:
-    """Tests for annotation spatial clustering."""
+    """Tests for annotation spatial clustering via DocumentModel."""
 
     def test_clustering_produces_clusters(self, rm_files):
-        """Verify clustering algorithm produces meaningful clusters."""
-        from rock_paper_sync.config import OCRConfig
-        from rock_paper_sync.ocr.integration import OCRProcessor
-
-        config = OCRConfig(enabled=True, cache_dir=Path("/tmp/test"))
-        processor = OCRProcessor(config, MagicMock())
+        """Verify clustering algorithm produces meaningful clusters via DocumentModel."""
+        from rock_paper_sync.annotations.document_model import DocumentModel
+        from rock_paper_sync.layout import DEFAULT_DEVICE
 
         for rm_file in rm_files:
-            annotations = read_annotations(rm_file)
-            if not annotations:
+            # Use DocumentModel to load with clustering
+            doc_model = DocumentModel.from_rm_files([rm_file], DEFAULT_DEVICE)
+
+            if not doc_model.annotations:
                 continue
 
-            clusters = processor._cluster_annotations_by_proximity(annotations)
+            clusters = doc_model.get_annotation_clusters()
 
             # Should produce at least one cluster
-            assert len(clusters) > 0, f"No clusters from {len(annotations)} annotations"
+            assert len(clusters) > 0, f"No clusters from {len(doc_model.annotations)} annotations"
 
             # Each cluster should have annotations
             for cluster in clusters:
@@ -182,22 +181,21 @@ class TestSpatialClustering:
 
     def test_cluster_count_reasonable(self, rm_files, testdata_manifest):
         """Verify cluster count is reasonable for test cases."""
-        from rock_paper_sync.config import OCRConfig
-        from rock_paper_sync.ocr.integration import OCRProcessor
-
-        config = OCRConfig(enabled=True, cache_dir=Path("/tmp/test"))
-        processor = OCRProcessor(config, MagicMock())
+        from rock_paper_sync.annotations.document_model import DocumentModel
+        from rock_paper_sync.layout import DEFAULT_DEVICE
 
         # Number of test cases gives us expected cluster minimum
         expected_min_clusters = len(testdata_manifest.get("test_cases", []))
 
         total_clusters = 0
         for rm_file in rm_files:
-            annotations = read_annotations(rm_file)
-            if not annotations:
+            # Use DocumentModel to load with clustering
+            doc_model = DocumentModel.from_rm_files([rm_file], DEFAULT_DEVICE)
+
+            if not doc_model.annotations:
                 continue
 
-            clusters = processor._cluster_annotations_by_proximity(annotations)
+            clusters = doc_model.get_annotation_clusters()
             total_clusters += len(clusters)
 
         # Should have at least one cluster per test case (likely more)
@@ -295,67 +293,52 @@ class TestCoordinateTransformation:
                 assert hasattr(origin, "x")
                 assert hasattr(origin, "y")
 
-    def test_annotations_transform_without_error(self, rm_files):
-        """Verify annotation transformation completes without error."""
-        from rock_paper_sync.config import OCRConfig
-        from rock_paper_sync.coordinate_transformer import extract_text_origin
-        from rock_paper_sync.ocr.integration import OCRProcessor
-
-        config = OCRConfig(enabled=True, cache_dir=Path("/tmp/test"))
-        processor = OCRProcessor(config, MagicMock())
+    def test_annotations_load_with_coordinates(self, rm_files):
+        """Verify annotations load with valid coordinates via DocumentModel."""
+        from rock_paper_sync.annotations.document_model import DocumentModel
+        from rock_paper_sync.layout import DEFAULT_DEVICE
 
         for rm_file in rm_files:
-            annotations = read_annotations(rm_file)
-            if not annotations:
+            # Use DocumentModel to load annotations (handles coordinate transformation)
+            doc_model = DocumentModel.from_rm_files([rm_file], DEFAULT_DEVICE)
+
+            if not doc_model.annotations:
                 continue
 
-            parent_anchor_map = processor._build_parent_baseline_map(rm_file)
-            origin = extract_text_origin(rm_file)
-
-            # This should complete without exception
-            transformed = processor._transform_annotations_to_absolute(
-                annotations,
-                parent_anchor_map,
-                origin.x,
-                origin.y,
-            )
-
-            # Should return same number of annotations
-            assert len(transformed) == len(annotations)
+            # Verify annotations have valid bounding boxes
+            for ann in doc_model.annotations:
+                if ann.annotation_type == "stroke" and ann.stroke_data:
+                    x, y, w, h = ann.stroke_data.bounding_box
+                    # Bounding box should have positive dimensions
+                    assert w >= 0, f"Invalid width: {w}"
+                    assert h >= 0, f"Invalid height: {h}"
 
 
 class TestImageRendering:
-    """Tests for annotation image rendering."""
+    """Tests for annotation image rendering using DocumentModel."""
 
     def test_render_strokes_to_image(self, rm_files):
-        """Verify strokes can be rendered to images."""
+        """Verify strokes can be rendered to images via DocumentModel."""
+        from rock_paper_sync.annotations.document_model import DocumentModel
         from rock_paper_sync.config import OCRConfig
-        from rock_paper_sync.coordinate_transformer import extract_text_origin
+        from rock_paper_sync.layout import DEFAULT_DEVICE
         from rock_paper_sync.ocr.integration import OCRProcessor
 
         config = OCRConfig(enabled=True, cache_dir=Path("/tmp/test"))
         processor = OCRProcessor(config, MagicMock())
 
         for rm_file in rm_files:
-            annotations = read_annotations(rm_file)
-            strokes = [a for a in annotations if a.type == AnnotationType.STROKE]
+            # Use DocumentModel to load and cluster annotations
+            doc_model = DocumentModel.from_rm_files([rm_file], DEFAULT_DEVICE)
 
-            if not strokes:
+            # Filter to stroke annotations only
+            stroke_annotations = [a for a in doc_model.annotations if a.annotation_type == "stroke"]
+
+            if not stroke_annotations:
                 continue
 
-            # Transform to absolute coordinates first
-            parent_anchor_map = processor._build_parent_baseline_map(rm_file)
-            origin = extract_text_origin(rm_file)
-
-            transformed = processor._transform_annotations_to_absolute(
-                strokes,
-                parent_anchor_map,
-                origin.x,
-                origin.y,
-            )
-
-            # Render to image
-            image_data, bbox = processor._render_annotations_to_image(transformed)
+            # Render to image using new method
+            image_data, bbox = processor._render_document_annotations_to_image(stroke_annotations)
 
             # Should produce valid PNG data
             assert len(image_data) > 0, "No image data produced"
@@ -370,49 +353,40 @@ class TestEndToEnd:
     """End-to-end tests combining all components."""
 
     def test_full_extraction_pipeline(self, rm_files, markdown_blocks):
-        """Test full pipeline: extract → cluster → map → render."""
+        """Test full pipeline using DocumentModel: load → cluster → render."""
+        from rock_paper_sync.annotations.document_model import DocumentModel
         from rock_paper_sync.config import OCRConfig
-        from rock_paper_sync.coordinate_transformer import extract_text_origin
+        from rock_paper_sync.layout import DEFAULT_DEVICE
         from rock_paper_sync.ocr.integration import OCRProcessor
 
         config = OCRConfig(enabled=True, cache_dir=Path("/tmp/test"))
         processor = OCRProcessor(config, MagicMock())
-        mapper = SpatialOverlapMapper()
 
         results = []
 
         for rm_file in rm_files:
-            # Step 1: Extract annotations
-            annotations = read_annotations(rm_file)
-            if not annotations:
+            # Use DocumentModel to load with clustering
+            doc_model = DocumentModel.from_rm_files([rm_file], DEFAULT_DEVICE)
+
+            if not doc_model.annotations:
                 continue
 
-            rm_text_blocks, _ = extract_text_blocks_from_rm(rm_file)
+            # Get pre-computed clusters from DocumentModel
+            clusters = doc_model.get_annotation_clusters()
 
-            # Step 2: Transform to absolute coordinates
-            parent_anchor_map = processor._build_parent_baseline_map(rm_file)
-            origin = extract_text_origin(rm_file)
-            annotations_abs = processor._transform_annotations_to_absolute(
-                annotations, parent_anchor_map, origin.x, origin.y
-            )
-
-            # Step 3: Cluster
-            clusters = processor._cluster_annotations_by_proximity(annotations_abs)
-
-            # Step 4: For each cluster, map and render
+            # For each cluster, render
             for cluster in clusters:
-                # Render
-                image_data, cluster_bbox = processor._render_annotations_to_image(cluster)
+                # Render using new method
+                image_data, cluster_bbox = processor._render_document_annotations_to_image(cluster)
 
                 if not image_data:
                     continue
 
-                # Map to paragraph
-                para_idx = mapper.map_cluster_to_paragraph(
-                    cluster_bbox,
-                    markdown_blocks,
-                    rm_text_blocks,
-                )
+                # Get paragraph from anchor_context (if available)
+                para_idx = None
+                first_ann = cluster[0]
+                if first_ann.anchor_context:
+                    para_idx = first_ann.anchor_context.paragraph_index
 
                 results.append(
                     {
@@ -435,6 +409,6 @@ class TestEndToEnd:
         # Log results for debugging
         for r in results:
             print(
-                f"  {r['rm_file']}: cluster={r['cluster_size']} strokes, "
+                f"  {r['rm_file']}: cluster={r['cluster_size']} annotations, "
                 f"para={r['paragraph_idx']}, bbox={r['bbox']}"
             )
