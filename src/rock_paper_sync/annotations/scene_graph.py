@@ -83,8 +83,8 @@ class StrokeBundle:
     Missing any block causes the device to fail silently or show errors like
     "Unable to find node with id=X:Y".
 
-    This is a data container that simplifies the work of StrokeHandler/AnnotationPreserver.
-    Those units own the mutation logic; StrokeBundle just ensures blocks are grouped.
+    This is a data container for stroke block grouping.
+    Used by generator._apply_annotations_to_page() for atomic stroke migration.
 
     Example:
         index = SceneGraphIndex.from_file(rm_path)

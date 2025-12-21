@@ -216,7 +216,7 @@ class AnnotationHandler(Protocol):
         """Get absolute (x, y) position for an annotation block.
 
         Encapsulates type-specific coordinate transformation logic.
-        Used by AnnotationPreserver for routing decisions during
+        Used by DocumentModel for routing decisions during
         document regeneration.
 
         Args:
@@ -247,7 +247,7 @@ class AnnotationHandler(Protocol):
         """Relocate annotation when content changes.
 
         Adjusts annotation coordinates when document text shifts. Used by
-        AnnotationPreserver during document regeneration.
+        the generator during document regeneration.
 
         Args:
             block: Raw rmscene annotation block

@@ -169,33 +169,36 @@ The system automatically routes annotations to the correct handler and applies t
    - Protocol ensures handlers implement required interface
    - Type changes support cross-handler workflows
 
-## Planned Architecture: AnchorContext (V2)
+## Architecture: AnchorContext (V2) — PRODUCTION
 
-The current architecture anchors annotations using **character offsets** into RootTextBlock text. While functional, this is fragile when content changes. A revised architecture has been designed:
+The annotation system uses content-based anchoring via `AnchorContext` and `DocumentModel`.
+This replaced the fragile character-offset approach that was prone to bugs when content changed.
 
-**See**: `docs/ANNOTATION_ARCHITECTURE_V2.md`
+**Implementation**: `document_model.py` — used by `generator.py:generate_document()`
 
 ### Key Concepts
 
-| Current | V2 |
-|---------|------|
-| Character offset anchor | **AnchorContext**: Multi-signal stable identifier |
-| Page-first routing | **DocumentModel**: Document-level with page projection |
-| `HeuristicTextAnchor` as fallback | **ContextResolver**: Fuzzy matching as primary strategy |
-| Delta-based offset updates | **DiffAnchor**: Anchor relative to unchanged text |
+| Concept | Description |
+|---------|-------------|
+| **AnchorContext** | Multi-signal stable identifier (content hash, fuzzy text, context before/after) |
+| **DocumentModel** | Document-level abstraction; pages are projections, not primary structure |
+| **ContextResolver** | Fuzzy matching with explicit confidence scores |
+| **DiffAnchor** | Anchor relative to unchanged text for edit resilience |
 
-### AnchorContext Signals
+### How It Works
 
-```python
-@dataclass
-class AnchorContext:
-    content_hash: str       # Hash of normalized content
-    text_content: str       # Actual text for fuzzy matching
-    context_before: str     # ~50 chars before
-    context_after: str      # ~50 chars after
-    paragraph_index: int    # Structural position
-    line_range: tuple       # Spatial hint
-    diff_anchor: DiffAnchor # Anchor relative to stable text
+```
+[Old .rm files] → DocumentModel.from_rm_files()
+                        ↓
+              [Old DocumentModel]
+                        ↓
+              migrate_annotations_to(new_model)
+                        ↓
+              [New DocumentModel with migrated annotations]
+                        ↓
+              project_to_pages()
+                        ↓
+              [PageProjection list] → .rm file generation
 ```
 
 ### Benefits
@@ -205,14 +208,7 @@ class AnchorContext:
 3. **Multi-signal matching**: Falls back gracefully through resolution strategies
 4. **Explicit failures**: No hidden fallback paths that mask bugs
 
-### Implementation Status
-
-- Phase 1 (Core Types): Planned
-- Phase 2 (DocumentModel): Planned
-- Phase 3 (Migration): Planned
-- Phase 4 (Deprecation): Planned
-
-See `docs/ANNOTATION_ARCHITECTURE_V2.md` for full design and implementation roadmap.
+**See**: `docs/ANNOTATION_ARCHITECTURE_V2.md` for detailed design documentation.
 
 ## Debugging
 

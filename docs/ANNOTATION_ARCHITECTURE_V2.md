@@ -1,8 +1,9 @@
 # Annotation Architecture V2: AnchorContext-Based Preservation
 
-**Status**: Planned
-**Date**: 2025-12-08
-**Author**: Architecture Review (for implementation by separate agent)
+**Status**: Production
+**Date**: 2025-12-08 (designed), 2025-12-21 (production)
+**Implementation**: `src/rock_paper_sync/annotations/document_model.py`
+**Entry Point**: `generator.py:generate_document()` calls `DocumentModel.migrate_annotations_to()`
 
 ## Executive Summary
 

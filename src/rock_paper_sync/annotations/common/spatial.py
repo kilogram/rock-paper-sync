@@ -13,13 +13,25 @@ from __future__ import annotations
 import logging
 import math
 from collections import defaultdict
-from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+
+from rock_paper_sync.annotations.core_types import StrokeData
 
 if TYPE_CHECKING:
     pass
 
 logger = logging.getLogger(__name__)
+
+__all__ = [
+    "cluster_by_proximity",
+    "find_nearest_paragraph_by_y",
+    "StrokeData",
+    "cluster_bboxes_kdtree",
+    "ClusteringStrategy",
+    "KDTreeProximityStrategy",
+    "VisualModelStrategy",
+    "get_clustering_strategy",
+]
 
 
 def cluster_by_proximity(
@@ -155,36 +167,8 @@ def find_nearest_paragraph_by_y(
 
 
 # =============================================================================
-# Stroke Data and Efficient Clustering
+# Efficient Clustering
 # =============================================================================
-
-
-@dataclass
-class StrokeData:
-    """Full stroke data for clustering algorithms.
-
-    Contains all information needed for both spatial proximity clustering
-    and future visual model clustering.
-
-    Attributes:
-        bbox: Bounding box as (x, y, width, height)
-        points: Raw stroke points as (x, y) tuples
-        pressure: Per-point pressure values (0.0-1.0)
-        timestamps: Per-point timestamps (milliseconds)
-        color: Stroke color/pen type identifier
-    """
-
-    bbox: tuple[float, float, float, float]  # (x, y, w, h)
-    points: list[tuple[float, float]] = field(default_factory=list)
-    pressure: list[float] = field(default_factory=list)
-    timestamps: list[float] = field(default_factory=list)
-    color: int | None = None
-
-    @property
-    def center(self) -> tuple[float, float]:
-        """Get bounding box center."""
-        x, y, w, h = self.bbox
-        return (x + w / 2, y + h / 2)
 
 
 def cluster_bboxes_kdtree(

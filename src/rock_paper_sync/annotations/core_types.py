@@ -114,6 +114,61 @@ class Stroke:
 
 
 @dataclass
+class StrokeData:
+    """Lightweight stroke data for document model and clustering.
+
+    This is the canonical representation for stroke data used by:
+    - DocumentModel/DocumentAnnotation for annotation storage
+    - ClusteringStrategy implementations for spatial grouping
+
+    Unlike Stroke (which uses Point objects), this uses tuples for efficiency
+    when processing large numbers of strokes.
+
+    For clustering, only bounding_box is required. Other fields are optional
+    and default to sensible values when not provided.
+
+    Attributes:
+        bounding_box: Axis-aligned bounding box as (x, y, w, h) - REQUIRED
+        points: Raw stroke points as (x, y, pressure) tuples
+        color: Stroke color code (0=black, 1=grey, 2=white, etc.)
+        tool: Pen tool type (ballpoint, fineliner, etc.)
+        thickness: Stroke thickness scale
+        timestamps: Optional per-point timestamps (for future visual model)
+    """
+
+    bounding_box: tuple[float, float, float, float]  # (x, y, w, h) - required
+    points: list[tuple[float, float, float]] = field(default_factory=list)
+    color: int = 0
+    tool: int = 0
+    thickness: float = 2.0
+    timestamps: list[float] | None = None  # For future clustering models
+
+    @property
+    def center(self) -> tuple[float, float]:
+        """Get bounding box center (x, y) for clustering."""
+        x, y, w, h = self.bounding_box
+        return (x + w / 2, y + h / 2)
+
+    @property
+    def bbox(self) -> tuple[float, float, float, float]:
+        """Alias for bounding_box (backwards compatibility with spatial.py)."""
+        return self.bounding_box
+
+    @classmethod
+    def from_stroke(cls, stroke: Stroke) -> "StrokeData":
+        """Create StrokeData from a Stroke object."""
+        points = [(p.x, p.y, p.pressure or 0.0) for p in stroke.points]
+        bbox = stroke.bounding_box
+        return cls(
+            bounding_box=(bbox.x, bbox.y, bbox.w, bbox.h),
+            points=points,
+            color=stroke.color,
+            tool=stroke.tool,
+            thickness=stroke.thickness,
+        )
+
+
+@dataclass
 class Highlight:
     """A text highlight annotation.
 

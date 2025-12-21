@@ -38,7 +38,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import rmscene
 
-from .core_types import HeuristicTextAnchor
+from .core_types import HeuristicTextAnchor, StrokeData
 
 if TYPE_CHECKING:
     from rock_paper_sync.layout import DeviceGeometry, LayoutContext, WordWrapLayoutEngine
@@ -504,17 +504,6 @@ class Paragraph:
     char_start: int = 0
     char_end: int = 0
     paragraph_index: int = 0
-
-
-@dataclass
-class StrokeData:
-    """Stroke-specific annotation data."""
-
-    points: list[tuple[float, float, float]]  # (x, y, pressure)
-    color: int
-    tool: int
-    thickness: float
-    bounding_box: tuple[float, float, float, float]  # (x, y, w, h)
 
 
 @dataclass

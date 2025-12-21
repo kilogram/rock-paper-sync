@@ -286,30 +286,33 @@ class TestStrokeData:
     """Tests for StrokeData dataclass."""
 
     def test_basic_creation(self):
-        """StrokeData can be created with just bbox."""
-        stroke = StrokeData(bbox=(10, 20, 30, 40))
+        """StrokeData can be created with just bounding_box."""
+        stroke = StrokeData(bounding_box=(10, 20, 30, 40))
         assert stroke.bbox == (10, 20, 30, 40)
+        assert stroke.bounding_box == (10, 20, 30, 40)
         assert stroke.points == []
-        assert stroke.pressure == []
-        assert stroke.timestamps == []
-        assert stroke.color is None
+        assert stroke.timestamps is None
+        assert stroke.color == 0  # default
 
     def test_full_creation(self):
         """StrokeData can be created with all fields."""
         stroke = StrokeData(
-            bbox=(10, 20, 30, 40),
-            points=[(10, 20), (15, 25), (20, 30)],
-            pressure=[0.5, 0.7, 0.3],
+            bounding_box=(10, 20, 30, 40),
+            points=[(10.0, 20.0, 0.5), (15.0, 25.0, 0.7), (20.0, 30.0, 0.3)],
             timestamps=[100.0, 110.0, 120.0],
             color=2,
+            tool=1,
+            thickness=3.0,
         )
         assert len(stroke.points) == 3
-        assert len(stroke.pressure) == 3
+        assert stroke.points[0] == (10.0, 20.0, 0.5)  # (x, y, pressure)
         assert stroke.color == 2
+        assert stroke.tool == 1
+        assert stroke.thickness == 3.0
 
     def test_center_property(self):
         """Center property calculates bbox center correctly."""
-        stroke = StrokeData(bbox=(10, 20, 30, 40))
+        stroke = StrokeData(bounding_box=(10, 20, 30, 40))
         # Center: (10 + 30/2, 20 + 40/2) = (25, 40)
         assert stroke.center == (25.0, 40.0)
 
@@ -341,7 +344,7 @@ class TestKDTreeProximityStrategy:
     def test_cluster_single(self):
         """Single stroke returns single cluster."""
         strategy = KDTreeProximityStrategy()
-        strokes = [StrokeData(bbox=(0, 0, 10, 10))]
+        strokes = [StrokeData(bounding_box=(0, 0, 10, 10))]
         result = strategy.cluster(strokes)
         assert result == [[0]]
 
@@ -349,9 +352,9 @@ class TestKDTreeProximityStrategy:
         """Strategy uses KDTree clustering internally."""
         strategy = KDTreeProximityStrategy(distance_threshold=40.0)
         strokes = [
-            StrokeData(bbox=(0, 0, 10, 10)),
-            StrokeData(bbox=(30, 0, 10, 10)),
-            StrokeData(bbox=(60, 0, 10, 10)),
+            StrokeData(bounding_box=(0, 0, 10, 10)),
+            StrokeData(bounding_box=(30, 0, 10, 10)),
+            StrokeData(bounding_box=(60, 0, 10, 10)),
         ]
         result = strategy.cluster(strokes)
         # Chain clustering should work
@@ -375,7 +378,7 @@ class TestVisualModelStrategy:
     def test_raises_not_implemented(self):
         """Cluster method raises NotImplementedError."""
         strategy = VisualModelStrategy()
-        strokes = [StrokeData(bbox=(0, 0, 10, 10))]
+        strokes = [StrokeData(bounding_box=(0, 0, 10, 10))]
         with pytest.raises(NotImplementedError):
             strategy.cluster(strokes)
 
