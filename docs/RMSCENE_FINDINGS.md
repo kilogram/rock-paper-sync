@@ -190,6 +190,104 @@ A complete .rm file contains these blocks (in order):
 
 Generated file size: ~350-400 bytes for minimal text, scales with content.
 
+## Block Ordering Requirements (Critical)
+
+**IMPORTANT**: The reMarkable device requires strict block ordering. Blocks must appear
+in a specific sequence or the device will fail with errors like:
+
+```
+rm.scene.tree  Unable to find node with id=0:11, but it should be present
+rm.scene.tree  Unable to find node with id=2:299, but it should be present
+```
+
+### Required Block Order
+
+The device expects blocks in this exact order:
+
+```
+1. Header blocks (must come first):
+   - AuthorIdsBlock
+   - MigrationInfoBlock
+   - PageInfoBlock
+   - SceneInfo (if present)
+
+2. ALL SceneTreeBlocks (declarations):
+   - System nodes first: tree_id=0:11 (Layer 1)
+   - User nodes: tree_id=2:xxx (annotation nodes)
+
+3. RootTextBlock (text content)
+
+4. ALL TreeNodeBlocks (definitions):
+   - System nodes first: node_id=0:1 (root), node_id=0:11 (Layer 1)
+   - User nodes: node_id=2:xxx (annotation nodes)
+
+5. ALL SceneGroupItemBlocks (hierarchy links):
+   - System links first: value=0:11 (links Layer 1 to root)
+   - User links: value=2:xxx (links annotations to Layer 1)
+
+6. ALL annotation blocks (at the end):
+   - SceneLineItemBlock (strokes)
+   - SceneGlyphItemBlock (highlights)
+```
+
+### Why Order Matters
+
+The device processes blocks sequentially. When it encounters a reference to a node:
+- `SceneTreeBlock.parent_id` references parent in scene tree
+- `SceneGroupItemBlock.parent_id` references the parent group
+- `SceneGroupItemBlock.value` references the TreeNodeBlock it links
+- `SceneLineItemBlock.parent_id` references the TreeNodeBlock for the stroke
+
+If these references point to nodes that haven't been declared/defined yet,
+the device fails with "Unable to find node" errors.
+
+### Implementation
+
+We use `_reorder_blocks_for_device()` to ensure correct ordering before serialization:
+
+```python
+def _reorder_blocks_for_device(self, blocks: list) -> list:
+    """Reorder blocks to match device-expected format."""
+    header_blocks = []
+    scene_tree_blocks = []
+    root_text_block = None
+    tree_node_blocks = []
+    scene_group_item_blocks = []
+    annotation_blocks = []
+
+    # Categorize by type...
+    # Reconstruct in correct order...
+```
+
+This is called in both the roundtrip and from-scratch generation paths.
+
+### System Nodes vs User Nodes
+
+Node IDs follow a convention based on `CrdtId.part1`:
+- `part1 == 0`: System nodes (0:1 root, 0:11 Layer 1, 0:13 layer group)
+- `part1 == 1`: Generator-created (text blocks, formatting)
+- `part1 == 2`: User-created (annotations, strokes, highlights)
+
+**Critical**: System nodes must NEVER be excluded during roundtrip filtering.
+Only user nodes (part1 == 2) should be tracked for cross-page migration.
+
+### Scene Graph Relationships
+
+Each stroke requires FOUR interdependent blocks:
+
+```
+SceneTreeBlock(tree_id=2:xxx)       - Declares node exists in scene tree
+     ↓
+TreeNodeBlock(node_id=2:xxx)        - Defines node properties (anchor to text)
+     ↓
+SceneGroupItemBlock(value=2:xxx)    - Links node to Layer 1 (parent_id=0:11)
+     ↓
+SceneLineItemBlock(parent_id=2:xxx) - Actual stroke data
+```
+
+If any of these blocks are missing or incorrectly ordered, the stroke will
+not render on the device ("disappears").
+
 ## Performance
 
 - **Generation speed**: Very fast (~0.001s per page in tests)

@@ -550,6 +550,9 @@ class DocumentAnnotation:
     # Spatial cluster membership (for grouped stroke migration)
     cluster_id: str | None = None
 
+    # Source page index (for page-aware clustering)
+    source_page_idx: int | None = None
+
     @property
     def as_stroke_bundle(self) -> StrokeBundle | None:
         """Get a StrokeBundle for this annotation (strokes only).
@@ -825,6 +828,7 @@ class DocumentModel:
                         original_tree_node=tree_node,
                         original_scene_group_item=scene_group_item,
                         original_scene_tree_block=scene_tree_block,
+                        source_page_idx=page_idx,  # Track source page for clustering
                     )
                     all_annotations.append(annotation)
 
@@ -985,32 +989,43 @@ class DocumentModel:
 
         from .common.spatial import DEFAULT_CLUSTER_THRESHOLD, KDTreeProximityStrategy
 
-        # Get stroke annotations with valid stroke_data
-        stroke_annos = [
-            (i, anno)
-            for i, anno in enumerate(self.annotations)
-            if anno.annotation_type == "stroke" and anno.stroke_data
-        ]
+        # Get stroke annotations with valid stroke_data, grouped by source page
+        # Strokes on different pages should NEVER be in the same cluster
+        strokes_by_page: dict[int | None, list[tuple[int, DocumentAnnotation]]] = {}
+        for i, anno in enumerate(self.annotations):
+            if anno.annotation_type == "stroke" and anno.stroke_data:
+                page_idx = anno.source_page_idx
+                strokes_by_page.setdefault(page_idx, []).append((i, anno))
 
-        if not stroke_annos:
+        if not strokes_by_page:
             return
 
-        # Cluster by bounding box proximity
-        strokes = [anno.stroke_data for _, anno in stroke_annos]
-        strategy = KDTreeProximityStrategy(distance_threshold=DEFAULT_CLUSTER_THRESHOLD)
-        clusters = strategy.cluster(strokes)
+        total_clusters = 0
+        total_strokes = 0
 
-        # Assign cluster IDs (only for actual clusters with >1 member)
-        for cluster_indices in clusters:
-            if len(cluster_indices) > 1:
-                cluster_id = str(uuid.uuid4())[:8]
-                for idx in cluster_indices:
-                    anno_idx, _ = stroke_annos[idx]
-                    self.annotations[anno_idx].cluster_id = cluster_id
+        # Cluster strokes separately for each source page
+        strategy = KDTreeProximityStrategy(distance_threshold=DEFAULT_CLUSTER_THRESHOLD)
+        for page_idx, stroke_annos in strokes_by_page.items():
+            total_strokes += len(stroke_annos)
+
+            if len(stroke_annos) < 2:
+                continue  # Need at least 2 strokes to form a cluster
+
+            strokes = [anno.stroke_data for _, anno in stroke_annos]
+            clusters = strategy.cluster(strokes)
+
+            # Assign cluster IDs (only for actual clusters with >1 member)
+            for cluster_indices in clusters:
+                if len(cluster_indices) > 1:
+                    cluster_id = str(uuid.uuid4())[:8]
+                    for idx in cluster_indices:
+                        anno_idx, _ = stroke_annos[idx]
+                        self.annotations[anno_idx].cluster_id = cluster_id
+                    total_clusters += 1
 
         logger.debug(
-            f"Assigned {sum(1 for c in clusters if len(c) > 1)} clusters "
-            f"to {len(stroke_annos)} stroke annotations"
+            f"Assigned {total_clusters} clusters to {total_strokes} stroke annotations "
+            f"across {len(strokes_by_page)} pages"
         )
 
     def get_annotation_clusters(self) -> list[list[DocumentAnnotation]]:
@@ -1131,6 +1146,7 @@ class DocumentModel:
             original_scene_group_item=annotation.original_scene_group_item,
             original_scene_tree_block=annotation.original_scene_tree_block,
             cluster_id=cluster_id,
+            source_page_idx=annotation.source_page_idx,
         )
 
     def migrate_annotations_to(
@@ -1199,7 +1215,9 @@ class DocumentModel:
                     logger.debug(
                         f"Migrated clustered {annotation.annotation_type} "
                         f"(cluster={cluster_id}) with {leader_resolution.match_type} "
-                        f"match (confidence={leader_resolution.confidence:.2f})"
+                        f"match (confidence={leader_resolution.confidence:.2f}): "
+                        f"old_text='{annotation.anchor_context.text_content[:30]}...' -> "
+                        f"new_text='{new_annotation.anchor_context.text_content[:30]}...'"
                     )
                 else:
                     report.add_orphan(annotation)
@@ -1225,6 +1243,11 @@ class DocumentModel:
                 )
                 migrated_annotations.append(new_annotation)
                 report.add_migration(annotation, new_annotation, resolved)
+                logger.debug(
+                    f"Migration: {annotation.annotation_type} "
+                    f"old_text='{annotation.anchor_context.text_content[:30]}...' -> "
+                    f"new_text='{new_annotation.anchor_context.text_content[:30]}...'"
+                )
 
                 logger.debug(
                     f"Migrated {annotation.annotation_type} with {resolved.match_type} "
@@ -1375,12 +1398,21 @@ class DocumentModel:
             anno_start = self._find_anchor_position(anchor)
 
             if anno_start is None:
+                logger.warning(
+                    f"Could not find anchor position for {annotation.annotation_type}: {anchor.text_content[:30] if anchor.text_content else 'N/A'}..."
+                )
                 continue
 
             target_page_idx = None
+            logger.debug(
+                f"Processing {annotation.annotation_type}: anno_start={anno_start}, y_hint={anchor.y_position_hint}, text_content='{anchor.text_content[:50] if anchor.text_content else 'N/A'}'..."
+            )
 
             # For strokes with Y-position hints, check if they should spill to next page
-            # (e.g., margin notes drawn below text that's at the end of a page)
+            # (e.g., margin notes drawn below the visible text area)
+            # NOTE: We only spill if the stroke's Y position is actually near the page bottom,
+            # NOT based on character progress through the text (which was causing bugs
+            # for cross-page annotation preservation).
             if (
                 annotation.annotation_type == "stroke"
                 and anchor.y_position_hint is not None
@@ -1394,18 +1426,21 @@ class DocumentModel:
                         break
 
                 if text_page_idx is not None:
-                    # Check if anchor is near the end of the page
-                    page = pages[text_page_idx]
-                    page_offset = anno_start - page.doc_char_start
-
-                    # Calculate how far through the page this anchor is (as fraction)
-                    page_progress = page_offset / max(1, len(page.page_text))
-
-                    # If anchor is in the last 30% of the page AND there's a next page,
-                    # assign stroke to next page (it's likely a margin note below the text)
-                    if page_progress > 0.7 and text_page_idx + 1 < len(pages):
+                    # Check if stroke is drawn below the visible page area (margin note)
+                    # Page height is approximately 1870 pixels on reMarkable
+                    # Only spill if Y position is near the bottom (>1700px)
+                    page_height = 1870  # Device-specific constant
+                    if anchor.y_position_hint > page_height * 0.9 and text_page_idx + 1 < len(
+                        pages
+                    ):
+                        # Stroke is at the very bottom - likely a margin note
                         target_page_idx = text_page_idx + 1
+                        logger.debug(
+                            f"Spilling margin note to page {target_page_idx} "
+                            f"(y_position_hint={anchor.y_position_hint:.1f})"
+                        )
                     else:
+                        # Stroke follows its anchor text
                         target_page_idx = text_page_idx
 
             if target_page_idx is None:
@@ -1418,6 +1453,13 @@ class DocumentModel:
             # Assign to the determined page
             if target_page_idx is not None:
                 pages[target_page_idx].annotations.append(annotation)
+                # Debug: Log stroke page assignments
+                if annotation.annotation_type == "stroke":
+                    logger.warning(
+                        f"STROKE -> page {target_page_idx}: "
+                        f"anno_start={anno_start}, "
+                        f"page_range=[{pages[target_page_idx].doc_char_start}, {pages[target_page_idx].doc_char_end})"
+                    )
 
         return pages
 

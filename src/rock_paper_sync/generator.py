@@ -600,6 +600,17 @@ class RemarkableGenerator:
                     )
                     # Store ORIGINAL TreeNodeBlock, SceneGroupItemBlock, and SceneTreeBlock - roundtrip code will reanchor/inject them
                     # (Don't reanchor here to avoid double-reanchoring)
+                    node_id = (
+                        doc_anno.original_tree_node.group.node_id
+                        if hasattr(doc_anno.original_tree_node, "group")
+                        and doc_anno.original_tree_node.group
+                        else None
+                    )
+                    logger.debug(
+                        f"Adding to ctx.tree_nodes for page {projection.page_index}: "
+                        f"node_id={node_id}, scene_tree_block={'YES' if doc_anno.original_scene_tree_block else 'MISSING'}, "
+                        f"scene_group_item={'YES' if doc_anno.original_scene_group_item else 'MISSING'}"
+                    )
                     ctx.tree_nodes.append(
                         (
                             doc_anno.original_tree_node,
@@ -633,12 +644,13 @@ class RemarkableGenerator:
                         if hasattr(block, "item") and hasattr(block.item, "item_id"):
                             source_annotation_ids.add(block.item.item_id)
 
-                        # Collect TreeNodeBlock node IDs
+                        # Collect user TreeNodeBlock node IDs (part1 == 2)
+                        # System nodes (0:1, 0:11) should never be excluded
                         block_type = type(block).__name__
                         if block_type == "TreeNodeBlock":
                             if hasattr(block, "group") and block.group:
                                 node_id = block.group.node_id
-                                if node_id:
+                                if node_id and node_id.part1 == 2:  # Only user nodes
                                     source_tree_node_ids.add(node_id)
 
                     # Annotations in source but not in projection have moved to other pages
@@ -950,10 +962,7 @@ class RemarkableGenerator:
 
         new_model = DocumentModel.from_paragraphs(new_paragraphs, self.geometry)
 
-        # Get old/new text for block adjustment
-        old_text = old_model.full_text
-        new_text = new_model.full_text
-        old_origin = (self.geometry.text_pos_x, self.geometry.text_pos_y)
+        # Text origin for block adjustment
         new_origin = (self.geometry.text_pos_x, self.geometry.text_pos_y)
 
         # Migrate annotations from old to new
@@ -1059,9 +1068,7 @@ class RemarkableGenerator:
                     # Handle TreeNodeBlock for strokes
                     if doc_anno.original_tree_node:
                         # Calculate target char offset in page text
-                        target_offset = self._calculate_annotation_offset(
-                            doc_anno, page, projection
-                        )
+                        target_offset = self._calculate_annotation_offset(doc_anno, page)
                         ctx.tree_nodes.append(
                             (
                                 doc_anno.original_tree_node,
@@ -1096,7 +1103,6 @@ class RemarkableGenerator:
         self,
         doc_anno: DocumentAnnotation,
         page: RemarkablePage,
-        projection: PageProjection,
     ) -> int:
         """Calculate character offset for an annotation on a page.
 
@@ -1672,7 +1678,8 @@ class RemarkableGenerator:
         # Check for sentinel anchor (margin notes, non-text-anchored strokes)
         # These have anchor_id.part1 = 0 and part2 = END_OF_DOC_ANCHOR_MARKER
         # They should be preserved unchanged - Y positioning comes from stroke coords
-        if target_char_offset == END_OF_DOC_ANCHOR_MARKER:
+        # NOTE: Check the ORIGINAL anchor, not the target offset!
+        if old_offset == END_OF_DOC_ANCHOR_MARKER:
             logger.debug(
                 f"Preserving sentinel anchor for cross-page TreeNodeBlock {g.node_id} "
                 f"(margin note or non-text-anchored stroke)"
@@ -1967,6 +1974,59 @@ class RemarkableGenerator:
 
         return items, text_blocks
 
+    def _reorder_blocks_for_device(self, blocks: list) -> list:
+        """Reorder blocks to match device-expected format.
+
+        The reMarkable device requires strict block ordering:
+        1. Header blocks (AuthorIdsBlock, MigrationInfoBlock, PageInfoBlock, SceneInfo)
+        2. All SceneTreeBlocks
+        3. RootTextBlock
+        4. All TreeNodeBlocks
+        5. All SceneGroupItemBlocks
+        6. All annotation blocks (SceneLineItemBlock, SceneGlyphItemBlock)
+
+        This function takes a list of blocks in any order and returns them
+        in the correct order for device compatibility.
+        """
+        # Categorize blocks by type
+        header_blocks = []  # AuthorIds, MigrationInfo, PageInfo, SceneInfo
+        scene_tree_blocks = []
+        root_text_block = None
+        tree_node_blocks = []
+        scene_group_item_blocks = []
+        annotation_blocks = []  # SceneLineItemBlock, SceneGlyphItemBlock
+
+        for block in blocks:
+            block_type = type(block).__name__
+
+            if block_type in ["AuthorIdsBlock", "MigrationInfoBlock", "PageInfoBlock", "SceneInfo"]:
+                header_blocks.append(block)
+            elif block_type == "SceneTreeBlock":
+                scene_tree_blocks.append(block)
+            elif block_type == "RootTextBlock":
+                root_text_block = block
+            elif block_type == "TreeNodeBlock":
+                tree_node_blocks.append(block)
+            elif block_type == "SceneGroupItemBlock":
+                scene_group_item_blocks.append(block)
+            elif block_type in ["SceneLineItemBlock", "SceneGlyphItemBlock"]:
+                annotation_blocks.append(block)
+            else:
+                # Unknown block type - add to header (preserves order)
+                header_blocks.append(block)
+
+        # Reconstruct in correct order
+        result = []
+        result.extend(header_blocks)
+        result.extend(scene_tree_blocks)
+        if root_text_block:
+            result.append(root_text_block)
+        result.extend(tree_node_blocks)
+        result.extend(scene_group_item_blocks)
+        result.extend(annotation_blocks)
+
+        return result
+
     def generate_rm_file(self, page: RemarkablePage) -> bytes:
         """Generate binary .rm file content with custom text width.
 
@@ -2162,7 +2222,49 @@ class RemarkableGenerator:
                 else:
                     modified_blocks.append(block)
 
-            # Keep all other blocks (scene tree, groups, etc.) unchanged
+            # Filter SceneTreeBlock for excluded tree node IDs
+            elif block_type == "SceneTreeBlock":
+                # Skip SceneTreeBlocks for nodes that moved to other pages
+                tree_id = block.tree_id if hasattr(block, "tree_id") else None
+                if tree_id and tree_id in ctx.exclude_tree_node_ids:
+                    logger.debug(f"Excluding SceneTreeBlock {tree_id} (moved to another page)")
+                    continue
+                # Also skip if this will be injected as cross-page
+                cross_page_node_ids = {
+                    tn.group.node_id for tn, _, _, _ in ctx.tree_nodes if tn.group
+                }
+                if tree_id and tree_id in cross_page_node_ids:
+                    logger.debug(
+                        f"Skipping SceneTreeBlock {tree_id} (will be injected as cross-page)"
+                    )
+                    continue
+                modified_blocks.append(block)
+
+            # Filter SceneGroupItemBlock for excluded tree node IDs
+            elif block_type == "SceneGroupItemBlock":
+                # Skip SceneGroupItemBlocks for nodes that moved to other pages
+                value_id = (
+                    block.item.value
+                    if hasattr(block, "item") and hasattr(block.item, "value")
+                    else None
+                )
+                if value_id and value_id in ctx.exclude_tree_node_ids:
+                    logger.debug(
+                        f"Excluding SceneGroupItemBlock {value_id} (moved to another page)"
+                    )
+                    continue
+                # Also skip if this will be injected as cross-page
+                cross_page_node_ids = {
+                    tn.group.node_id for tn, _, _, _ in ctx.tree_nodes if tn.group
+                }
+                if value_id and value_id in cross_page_node_ids:
+                    logger.debug(
+                        f"Skipping SceneGroupItemBlock {value_id} (will be injected as cross-page)"
+                    )
+                    continue
+                modified_blocks.append(block)
+
+            # Keep all other blocks unchanged
             else:
                 modified_blocks.append(block)
 
@@ -2218,6 +2320,10 @@ class RemarkableGenerator:
                 modified_blocks.append(inj_block)
                 annotation_count += 1
             logger.info(f"Injected {len(cross_page_to_inject)} cross-page annotations")
+
+        # Reorder blocks for device compatibility
+        # Device requires: SceneTreeBlocks → RootTextBlock → TreeNodeBlocks → SceneGroupItemBlocks → Strokes
+        modified_blocks = self._reorder_blocks_for_device(modified_blocks)
 
         # Serialize to binary
         buffer = io.BytesIO()
@@ -2309,9 +2415,9 @@ class RemarkableGenerator:
         # Add preserved annotations (strokes and highlights) from context
         ctx = page.annotation_context
         if ctx and ctx.annotations:
-            # First add TreeNodeBlocks for strokes (strokes reference them via parent_id)
             if ctx.tree_nodes:
                 logger.warning(f"FROM-SCRATCH: Injecting {len(ctx.tree_nodes)} TreeNodeBlocks")
+
                 for tree_node, target_offset, scene_group_item, scene_tree_block in ctx.tree_nodes:
                     # Reanchor TreeNodeBlock for this page
                     reanchored_node = self._reanchor_tree_node_for_cross_page(
@@ -2322,7 +2428,7 @@ class RemarkableGenerator:
                     if hasattr(tree_node, "group") and tree_node.group:
                         node_id = tree_node.group.node_id
 
-                        # Inject SceneTreeBlock to declare this node in the scene tree
+                        # SceneTreeBlock to declare this node in the scene tree
                         new_scene_tree_block = SceneTreeBlock(
                             tree_id=node_id,
                             node_id=CrdtId(0, 0),
@@ -2331,12 +2437,10 @@ class RemarkableGenerator:
                         )
                         blocks.append(new_scene_tree_block)
                         logger.debug(
-                            f"FROM-SCRATCH: Injected SceneTreeBlock for TreeNode {node_id}"
+                            f"FROM-SCRATCH: Prepared SceneTreeBlock for TreeNode {node_id}"
                         )
 
-                        # Create a NEW SceneGroupItemBlock to link TreeNodeBlock to scene graph
-                        # The original scene_group_item has left_id/right_id referencing nodes
-                        # from the source page that don't exist here. Reset them to (0,0).
+                        # SceneGroupItemBlock to link TreeNodeBlock to scene graph
                         if scene_group_item:
                             new_scene_group_item = SceneGroupItemBlock(
                                 parent_id=CrdtId(0, 11),  # Layer 1
@@ -2350,12 +2454,16 @@ class RemarkableGenerator:
                             )
                             blocks.append(new_scene_group_item)
                             logger.debug(
-                                f"FROM-SCRATCH: Injected SceneGroupItemBlock for TreeNode {node_id}"
+                                f"FROM-SCRATCH: Prepared SceneGroupItemBlock for TreeNode {node_id}"
                             )
 
-            # Then add the annotation blocks (strokes, highlights)
+            # Add the annotation blocks (strokes, highlights)
             blocks.extend(ctx.annotations)
             logger.debug(f"Added {len(ctx.annotations)} preserved annotation blocks to .rm file")
+
+        # Reorder blocks for device compatibility
+        # Device requires: SceneTreeBlocks → RootTextBlock → TreeNodeBlocks → SceneGroupItemBlocks → Strokes
+        blocks = self._reorder_blocks_for_device(blocks)
 
         # Serialize to binary format
         buffer = io.BytesIO()
