@@ -2271,8 +2271,29 @@ class RemarkableGenerator:
         # Inject cross-page TreeNodeBlocks FIRST (strokes reference them via parent_id)
         # Reanchor them to point to correct text positions on this page
         if ctx.tree_nodes:
-            logger.warning(f"INJECTING {len(ctx.tree_nodes)} TreeNodeBlocks to page")
-            for tree_node, target_char_offset, scene_group_item, scene_tree_block in ctx.tree_nodes:
+            # Deduplicate: Multiple strokes may share the same TreeNodeBlock
+            # (e.g., margin notes all use one TreeNodeBlock). Only inject once per node_id.
+            seen_node_ids: set[CrdtId] = set()
+            unique_tree_nodes = []
+            for tree_node, target_offset, scene_group_item, scene_tree_block in ctx.tree_nodes:
+                if hasattr(tree_node, "group") and tree_node.group:
+                    node_id = tree_node.group.node_id
+                    if node_id not in seen_node_ids:
+                        seen_node_ids.add(node_id)
+                        unique_tree_nodes.append(
+                            (tree_node, target_offset, scene_group_item, scene_tree_block)
+                        )
+
+            logger.warning(
+                f"INJECTING {len(unique_tree_nodes)} unique TreeNodeBlocks "
+                f"(from {len(ctx.tree_nodes)} total)"
+            )
+            for (
+                tree_node,
+                target_char_offset,
+                scene_group_item,
+                scene_tree_block,
+            ) in unique_tree_nodes:
                 reanchored_node = self._reanchor_tree_node_for_cross_page(
                     tree_node, target_char_offset, page
                 )
@@ -2309,7 +2330,7 @@ class RemarkableGenerator:
                         modified_blocks.append(new_scene_group_item)
                         logger.debug(f"Injected SceneGroupItemBlock for TreeNode {node_id}")
             logger.info(
-                f"Injected {len(ctx.tree_nodes)} cross-page TreeNodeBlocks (reanchored) with SceneTreeBlocks and SceneGroupItemBlocks"
+                f"Injected {len(unique_tree_nodes)} cross-page TreeNodeBlocks (reanchored) with SceneTreeBlocks and SceneGroupItemBlocks"
             )
         else:
             logger.warning("NO TreeNodeBlocks to inject (ctx.tree_nodes is empty)")
@@ -2416,9 +2437,30 @@ class RemarkableGenerator:
         ctx = page.annotation_context
         if ctx and ctx.annotations:
             if ctx.tree_nodes:
-                logger.warning(f"FROM-SCRATCH: Injecting {len(ctx.tree_nodes)} TreeNodeBlocks")
-
+                # Deduplicate: Multiple strokes may share the same TreeNodeBlock
+                # (e.g., margin notes all use one TreeNodeBlock). Only inject once per node_id.
+                seen_node_ids: set[CrdtId] = set()
+                unique_tree_nodes = []
                 for tree_node, target_offset, scene_group_item, scene_tree_block in ctx.tree_nodes:
+                    if hasattr(tree_node, "group") and tree_node.group:
+                        node_id = tree_node.group.node_id
+                        if node_id not in seen_node_ids:
+                            seen_node_ids.add(node_id)
+                            unique_tree_nodes.append(
+                                (tree_node, target_offset, scene_group_item, scene_tree_block)
+                            )
+
+                logger.warning(
+                    f"FROM-SCRATCH: Injecting {len(unique_tree_nodes)} unique TreeNodeBlocks "
+                    f"(from {len(ctx.tree_nodes)} total)"
+                )
+
+                for (
+                    tree_node,
+                    target_offset,
+                    scene_group_item,
+                    scene_tree_block,
+                ) in unique_tree_nodes:
                     # Reanchor TreeNodeBlock for this page
                     reanchored_node = self._reanchor_tree_node_for_cross_page(
                         tree_node, target_offset, page
