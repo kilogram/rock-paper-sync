@@ -774,27 +774,62 @@ class DocumentModel:
 
                     y_coords = [p.y for p in points]
                     center_y = sum(y_coords) / len(y_coords)
-                    # Transform to absolute Y
-                    abs_y = text_origin_y + center_y + 60  # 60px offset for strokes
-
-                    # Create anchor context
-                    anchor = AnchorContext.from_y_position(
-                        abs_y, page_text, layout_ctx, paragraph_index=None
-                    )
-                    # Adjust char offsets to document-level
-                    anchor = AnchorContext(
-                        content_hash=anchor.content_hash,
-                        text_content=anchor.text_content,
-                        paragraph_index=anchor.paragraph_index,
-                        context_before=anchor.context_before,
-                        context_after=anchor.context_after,
-                        y_position_hint=abs_y,
-                        diff_anchor=anchor.diff_anchor,
-                    )
 
                     # Get tree node for this stroke using scene graph index
                     parent_id = getattr(block, "parent_id", None)
                     tree_node = scene_index.tree_nodes.get(parent_id) if parent_id else None
+
+                    # Compute absolute Y position from TreeNodeBlock anchor
+                    # Stroke Y coordinates are RELATIVE to the anchor position, not the page origin
+                    # The TreeNodeBlock's anchor_id.part2 is the character offset in page text
+                    abs_y = text_origin_y + center_y + 60  # Default fallback
+                    anchor_char_offset = None
+
+                    if tree_node and hasattr(tree_node, "group") and tree_node.group:
+                        g = tree_node.group
+                        if hasattr(g, "anchor_id") and g.anchor_id and g.anchor_id.value:
+                            anchor_val = g.anchor_id.value
+                            # anchor_id.part2 is the character offset (unless it's the sentinel)
+                            if anchor_val.part2 != 281474976710655:  # Not END_OF_DOC sentinel
+                                anchor_char_offset = anchor_val.part2
+                                # Get Y position of the anchor text
+                                if layout_ctx and anchor_char_offset < len(page_text):
+                                    _, anchor_y = layout_ctx.offset_to_position(anchor_char_offset)
+                                    # Stroke Y is relative to anchor Y
+                                    abs_y = anchor_y + center_y
+
+                    # Create anchor context - use anchor_char_offset if available
+                    if anchor_char_offset is not None and anchor_char_offset < len(page_text):
+                        # Use the TreeNodeBlock's anchor directly
+                        anchor = AnchorContext.from_text_span(
+                            page_text,
+                            anchor_char_offset,
+                            min(anchor_char_offset + 50, len(page_text)),
+                        )
+                        # Preserve Y hint for page routing
+                        anchor = AnchorContext(
+                            content_hash=anchor.content_hash,
+                            text_content=anchor.text_content,
+                            paragraph_index=anchor.paragraph_index,
+                            context_before=anchor.context_before,
+                            context_after=anchor.context_after,
+                            y_position_hint=abs_y,
+                            diff_anchor=anchor.diff_anchor,
+                        )
+                    else:
+                        # Fallback to Y-position based anchor
+                        anchor = AnchorContext.from_y_position(
+                            abs_y, page_text, layout_ctx, paragraph_index=None
+                        )
+                        anchor = AnchorContext(
+                            content_hash=anchor.content_hash,
+                            text_content=anchor.text_content,
+                            paragraph_index=anchor.paragraph_index,
+                            context_before=anchor.context_before,
+                            context_after=anchor.context_after,
+                            y_position_hint=abs_y,
+                            diff_anchor=anchor.diff_anchor,
+                        )
 
                     # Get SceneGroupItemBlock and SceneTreeBlock using scene graph index
                     scene_group_item = None
@@ -1391,28 +1426,22 @@ class DocumentModel:
             doc_char_offset = doc_char_end + 1  # +1 for page separator
 
         # Assign annotations to pages (done after all pages are created)
-        # For strokes, Y position is the PRIMARY indicator of page assignment
+        # IMPORTANT: Strokes in the same cluster (same parent TreeNodeBlock) must go to the same page
+        # We use cluster_id for grouped strokes, and parent_id as fallback
 
-        for annotation in self.annotations:
+        # Helper to determine target page for an annotation
+        def _determine_page_for_annotation(
+            annotation: DocumentAnnotation,
+        ) -> int | None:
             anchor = annotation.anchor_context
             anno_start = self._find_anchor_position(anchor)
 
             if anno_start is None:
-                logger.warning(
-                    f"Could not find anchor position for {annotation.annotation_type}: {anchor.text_content[:30] if anchor.text_content else 'N/A'}..."
-                )
-                continue
+                return None
 
             target_page_idx = None
-            logger.debug(
-                f"Processing {annotation.annotation_type}: anno_start={anno_start}, y_hint={anchor.y_position_hint}, text_content='{anchor.text_content[:50] if anchor.text_content else 'N/A'}'..."
-            )
 
             # For strokes with Y-position hints, check if they should spill to next page
-            # (e.g., margin notes drawn below the visible text area)
-            # NOTE: We only spill if the stroke's Y position is actually near the page bottom,
-            # NOT based on character progress through the text (which was causing bugs
-            # for cross-page annotation preservation).
             if (
                 annotation.annotation_type == "stroke"
                 and anchor.y_position_hint is not None
@@ -1426,21 +1455,12 @@ class DocumentModel:
                         break
 
                 if text_page_idx is not None:
-                    # Check if stroke is drawn below the visible page area (margin note)
-                    # Page height is approximately 1870 pixels on reMarkable
-                    # Only spill if Y position is near the bottom (>1700px)
                     page_height = 1870  # Device-specific constant
                     if anchor.y_position_hint > page_height * 0.9 and text_page_idx + 1 < len(
                         pages
                     ):
-                        # Stroke is at the very bottom - likely a margin note
                         target_page_idx = text_page_idx + 1
-                        logger.debug(
-                            f"Spilling margin note to page {target_page_idx} "
-                            f"(y_position_hint={anchor.y_position_hint:.1f})"
-                        )
                     else:
-                        # Stroke follows its anchor text
                         target_page_idx = text_page_idx
 
             if target_page_idx is None:
@@ -1450,16 +1470,81 @@ class DocumentModel:
                         target_page_idx = idx
                         break
 
-            # Assign to the determined page
+            return target_page_idx
+
+        # Group stroke annotations by cluster_id
+        # Clusters are assigned in _assign_stroke_clusters() using spatial proximity
+        # ALL strokes in a cluster MUST go to the same page - never split clusters
+        stroke_clusters: dict[str, list[DocumentAnnotation]] = {}
+        unclustered_strokes: list[DocumentAnnotation] = []
+        non_stroke_annotations: list[DocumentAnnotation] = []
+
+        for annotation in self.annotations:
+            if annotation.annotation_type == "stroke":
+                if annotation.cluster_id:
+                    stroke_clusters.setdefault(annotation.cluster_id, []).append(annotation)
+                else:
+                    unclustered_strokes.append(annotation)
+            else:
+                non_stroke_annotations.append(annotation)
+
+        # Route stroke clusters to pages (entire cluster goes to same page)
+        for cluster_id, cluster_strokes in stroke_clusters.items():
+            # Find the stroke with the LOWEST Y position (cluster leader) to determine page
+            leader = min(
+                cluster_strokes,
+                key=lambda a: a.anchor_context.y_position_hint
+                if a.anchor_context.y_position_hint is not None
+                else float("inf"),
+            )
+
+            target_page_idx = _determine_page_for_annotation(leader)
+
+            if target_page_idx is not None:
+                # Assign ALL strokes in this cluster to the same page
+                for annotation in cluster_strokes:
+                    pages[target_page_idx].annotations.append(annotation)
+
+                logger.warning(
+                    f"STROKE CLUSTER ({cluster_id}) -> page {target_page_idx}: "
+                    f"{len(cluster_strokes)} strokes, leader_y={leader.anchor_context.y_position_hint}"
+                )
+            else:
+                logger.warning(
+                    f"Could not find page for stroke cluster {cluster_id} "
+                    f"({len(cluster_strokes)} strokes)"
+                )
+
+        # Route unclustered strokes individually (single-stroke "clusters")
+        for annotation in unclustered_strokes:
+            target_page_idx = _determine_page_for_annotation(annotation)
             if target_page_idx is not None:
                 pages[target_page_idx].annotations.append(annotation)
-                # Debug: Log stroke page assignments
-                if annotation.annotation_type == "stroke":
-                    logger.warning(
-                        f"STROKE -> page {target_page_idx}: "
-                        f"anno_start={anno_start}, "
-                        f"page_range=[{pages[target_page_idx].doc_char_start}, {pages[target_page_idx].doc_char_end})"
-                    )
+                logger.debug(
+                    f"UNCLUSTERED STROKE -> page {target_page_idx}: "
+                    f"y={annotation.anchor_context.y_position_hint}"
+                )
+
+        # Route non-stroke annotations individually
+        for annotation in non_stroke_annotations:
+            anchor = annotation.anchor_context
+            anno_start = self._find_anchor_position(anchor)
+
+            if anno_start is None:
+                logger.warning(
+                    f"Could not find anchor position for {annotation.annotation_type}: "
+                    f"{anchor.text_content[:30] if anchor.text_content else 'N/A'}..."
+                )
+                continue
+
+            target_page_idx = _determine_page_for_annotation(annotation)
+
+            if target_page_idx is not None:
+                pages[target_page_idx].annotations.append(annotation)
+                logger.debug(
+                    f"{annotation.annotation_type.upper()} -> page {target_page_idx}: "
+                    f"anno_start={anno_start}"
+                )
 
         return pages
 

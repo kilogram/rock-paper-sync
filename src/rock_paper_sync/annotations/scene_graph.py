@@ -388,16 +388,17 @@ def validate_scene_graph(rm_bytes: bytes) -> SceneGraphValidationResult:
     """Validate scene graph structure for device compatibility.
 
     Checks:
-    1. Every SceneGroupItemBlock.value has a corresponding TreeNodeBlock
-    2. Every user-created TreeNodeBlock has a corresponding SceneTreeBlock
-    3. All parent_id references resolve to existing nodes
-    4. All stroke parent_ids reference existing TreeNodeBlocks
+    1. No duplicate TreeNodeBlocks (same node_id appears multiple times)
+    2. Every SceneGroupItemBlock.value has a corresponding TreeNodeBlock
+    3. Every user-created TreeNodeBlock has a corresponding SceneTreeBlock
+    4. All parent_id references resolve to existing nodes
+    5. All stroke parent_ids reference existing TreeNodeBlocks
     """
     errors: list[ValidationError] = []
     warnings: list[ValidationError] = []
 
     try:
-        index = SceneGraphIndex.from_bytes(rm_bytes)
+        blocks = list(rmscene.read_blocks(io.BytesIO(rm_bytes)))
     except Exception as e:
         errors.append(
             ValidationError(
@@ -406,6 +407,28 @@ def validate_scene_graph(rm_bytes: bytes) -> SceneGraphValidationResult:
             )
         )
         return SceneGraphValidationResult(errors=errors, warnings=warnings)
+
+    # Validation 0: Check for duplicate TreeNodeBlocks (before building index)
+    # This catches bugs where the same TreeNodeBlock is injected multiple times
+    tree_node_occurrences: dict[CrdtId, int] = {}
+    for block in blocks:
+        if isinstance(block, TreeNodeBlock):
+            node_id = block.group.node_id
+            tree_node_occurrences[node_id] = tree_node_occurrences.get(node_id, 0) + 1
+
+    for node_id, count in tree_node_occurrences.items():
+        if count > 1:
+            errors.append(
+                ValidationError(
+                    error_type="DUPLICATE_TREE_NODE",
+                    message=f"TreeNodeBlock {format_crdt_id(node_id)} appears {count} times (should be 1)",
+                    node_id=node_id,
+                    details={"count": count},
+                )
+            )
+
+    # Now build the index for remaining validations
+    index = SceneGraphIndex.from_blocks(blocks)
 
     # Validation 1: Every SceneGroupItemBlock.value must have a TreeNodeBlock
     for value, sgi in index.scene_group_items.items():
@@ -474,4 +497,4 @@ def validate_scene_graph(rm_bytes: bytes) -> SceneGraphValidationResult:
 def validate_scene_graph_file(rm_path: Path) -> SceneGraphValidationResult:
     """Validate scene graph from a file path."""
     with rm_path.open("rb") as f:
-        return validate_scene_graph(f.read(), str(rm_path))
+        return validate_scene_graph(f.read())

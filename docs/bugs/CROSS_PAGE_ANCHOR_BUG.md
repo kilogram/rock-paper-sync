@@ -1,6 +1,6 @@
 # Cross-Page TreeNodeBlock Anchor Bug
 
-**Status: FIXED** (Phase 1-3 complete)
+**Status: FIXED** (Phase 1-4 complete)
 
 ## Summary
 
@@ -357,9 +357,138 @@ After the fix:
 
 Device logs no longer show "Unable to find node" errors, and strokes render correctly.
 
-### Remaining Issue
+### Remaining Issue (Addressed in Phase 3.5)
 
-Highlight rectangles have a 17.6px X-position delta vs golden data. This is a **separate issue** from the stroke rendering bug - strokes now work correctly. The highlight positioning issue may be related to font metrics or coordinate transformation differences.
+Strokes were being anchored to wrong text because AnchorContext was computed from Y position instead of the TreeNodeBlock's actual anchor.
+
+---
+
+## Phase 3.5: Anchor Resolution from TreeNodeBlock (2025-12-21)
+
+**Status: FIXED**
+
+### Symptoms
+
+Strokes on the device appeared on the wrong page or at the wrong position, even though the TreeNodeBlock was correctly injected. For example, margin notes near "Write margin note here:" were being anchored to text like "Yet another paragraph" because that's where their Y coordinate mapped to.
+
+### Root Cause
+
+When extracting annotations in `DocumentModel.from_rm_files()`, the `AnchorContext` was computed from the stroke's **Y position** alone:
+
+```python
+# OLD: Y-position based anchor (WRONG)
+abs_y = text_origin_y + center_y + 60
+anchor = AnchorContext.from_y_position(abs_y, page_text, layout_ctx)
+```
+
+This ignored the TreeNodeBlock's `anchor_id`, which contains the **actual character offset** where the stroke is anchored. Stroke Y coordinates are RELATIVE to their TreeNodeBlock anchor, not to the page origin.
+
+### Fix
+
+Use the TreeNodeBlock's `anchor_id.part2` (character offset) to create the AnchorContext:
+
+```python
+# NEW: Use TreeNodeBlock's actual anchor
+if tree_node and hasattr(tree_node, "group") and tree_node.group:
+    g = tree_node.group
+    if hasattr(g, "anchor_id") and g.anchor_id and g.anchor_id.value:
+        anchor_val = g.anchor_id.value
+        if anchor_val.part2 != END_OF_DOC_ANCHOR_MARKER:
+            anchor_char_offset = anchor_val.part2
+
+            # Create anchor from actual text position
+            anchor = AnchorContext.from_text_span(
+                page_text,
+                anchor_char_offset,
+                min(anchor_char_offset + 50, len(page_text)),
+            )
+```
+
+### Key Changes
+
+**`document_model.py` - `from_rm_files()` (lines ~774-830):**
+
+1. Extract `anchor_char_offset` from TreeNodeBlock's `anchor_id.part2`
+2. Skip sentinel anchors (`END_OF_DOC_ANCHOR_MARKER = 281474976710655`)
+3. Create AnchorContext from the actual character offset, not Y position
+4. Preserve Y hint for page routing fallback
+
+### Remaining Issue (Addressed in Phase 4)
+
+Strokes rendered on the device but their relative X positions were wrong. See Phase 4 below.
+
+---
+
+## Phase 4: Stroke Relative Positioning (2025-12-21)
+
+**Status: FIXED**
+
+### Symptoms
+
+After Phase 3, strokes appeared on the correct page but their **relative X positions were wrong**. Multiple strokes that should appear together were "shredded" - scattered horizontally across the page.
+
+Debug output showed all TreeNodeBlocks getting the same `anchor_id`:
+```
+TreeNodeBlock node_id=2-929: anchor_id=715, anchor_x=28.73
+TreeNodeBlock node_id=2-935: anchor_id=715, anchor_x=105.97
+TreeNodeBlock node_id=2-944: anchor_id=715, anchor_x=121.42
+TreeNodeBlock node_id=2-950: anchor_id=715, anchor_x=152.33
+```
+
+Original anchors were different (837, 842, 843, 845) but after reanchoring they all became 715.
+
+### Root Cause
+
+The reanchoring logic searched for each stroke's anchor TEXT on the target page and set `anchor_id` to where that text was found. Since nearby strokes had overlapping anchor text (50-char spans starting at close offsets), `page_text.find()` returned the **same position** for all of them.
+
+This destroyed the **relative spacing** between strokes:
+- Original: 837, 842, 843, 845 (spacing: 5, 1, 2)
+- After reanchoring: 715, 715, 715, 715 (spacing: 0, 0, 0)
+
+### Fix: Delta-Based Reanchoring
+
+Instead of setting each TreeNodeBlock to an independently-calculated position, use a **delta approach**:
+
+1. Find where the FIRST TreeNodeBlock's anchor text appears on the target page
+2. Calculate `offset_delta = target_position - original_anchor_id`
+3. Apply the **same delta** to ALL TreeNodeBlocks
+
+This preserves relative spacing:
+- Original: 837, 842, 843, 845
+- Delta: 715 - 837 = -122
+- Result: 715, 720, 721, 723 (spacing preserved!)
+
+### Key Changes
+
+**`generator.py` - Round-trip generation (lines ~2297-2340):**
+
+```python
+# Compute offset_delta from FIRST TreeNodeBlock
+offset_delta = 0
+if unique_tree_nodes:
+    first_tree_node, first_target_offset, _, _ = unique_tree_nodes[0]
+    if hasattr(first_tree_node, "group") and first_tree_node.group:
+        g = first_tree_node.group
+        if hasattr(g, "anchor_id") and g.anchor_id and g.anchor_id.value:
+            original_anchor = g.anchor_id.value.part2
+            # Only compute delta for non-sentinel anchors
+            if original_anchor != END_OF_DOC_ANCHOR_MARKER:
+                offset_delta = first_target_offset - original_anchor
+
+# Apply delta to ALL TreeNodeBlocks (preserves relative spacing)
+for tree_node, _, scene_group_item, scene_tree_block in unique_tree_nodes:
+    reanchored_node = self._update_tree_node_anchor(tree_node, offset_delta)
+    modified_blocks.append(reanchored_node)
+```
+
+### Verification
+
+After the fix, strokes maintain their relative positions:
+```
+INJECTING 5 unique TreeNodeBlocks (from 7 total) with offset_delta=-122
+```
+
+Device testing confirmed strokes appear correctly positioned relative to each other.
 
 ---
 

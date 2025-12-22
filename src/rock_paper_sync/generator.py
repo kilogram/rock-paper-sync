@@ -30,6 +30,7 @@ from rmscene.tagged_block_common import LwwValue
 from .annotations import (
     HeuristicTextAnchor,
     TextBlock,
+    validate_scene_graph,
 )
 from .annotations.document_model import (
     AnchorContext,
@@ -595,11 +596,12 @@ class RemarkableGenerator:
                 # Handle TreeNodeBlock for strokes
                 if doc_anno.original_tree_node:
                     # Calculate target char offset in page text
+                    # Each stroke uses its own anchor to preserve relative X positions
                     target_offset = self._calculate_annotation_page_offset(
                         doc_anno.anchor_context, page_text
                     )
+
                     # Store ORIGINAL TreeNodeBlock, SceneGroupItemBlock, and SceneTreeBlock - roundtrip code will reanchor/inject them
-                    # (Don't reanchor here to avoid double-reanchoring)
                     node_id = (
                         doc_anno.original_tree_node.group.node_id
                         if hasattr(doc_anno.original_tree_node, "group")
@@ -608,8 +610,8 @@ class RemarkableGenerator:
                     )
                     logger.debug(
                         f"Adding to ctx.tree_nodes for page {projection.page_index}: "
-                        f"node_id={node_id}, scene_tree_block={'YES' if doc_anno.original_scene_tree_block else 'MISSING'}, "
-                        f"scene_group_item={'YES' if doc_anno.original_scene_group_item else 'MISSING'}"
+                        f"node_id={node_id}, target_offset={target_offset}, "
+                        f"cluster={doc_anno.cluster_id or 'none'}"
                     )
                     ctx.tree_nodes.append(
                         (
@@ -2269,10 +2271,9 @@ class RemarkableGenerator:
                 modified_blocks.append(block)
 
         # Inject cross-page TreeNodeBlocks FIRST (strokes reference them via parent_id)
-        # Reanchor them to point to correct text positions on this page
+        # Use DELTA approach: shift all anchors by the same amount to preserve relative spacing
         if ctx.tree_nodes:
             # Deduplicate: Multiple strokes may share the same TreeNodeBlock
-            # (e.g., margin notes all use one TreeNodeBlock). Only inject once per node_id.
             seen_node_ids: set[CrdtId] = set()
             unique_tree_nodes = []
             for tree_node, target_offset, scene_group_item, scene_tree_block in ctx.tree_nodes:
@@ -2284,19 +2285,35 @@ class RemarkableGenerator:
                             (tree_node, target_offset, scene_group_item, scene_tree_block)
                         )
 
-            logger.warning(
+            # Compute offset_delta from FIRST TreeNodeBlock
+            # delta = target_position - original_anchor_id
+            # This preserves relative spacing between all anchor points
+            offset_delta = 0
+            if unique_tree_nodes:
+                first_tree_node, first_target_offset, _, _ = unique_tree_nodes[0]
+                if hasattr(first_tree_node, "group") and first_tree_node.group:
+                    g = first_tree_node.group
+                    if hasattr(g, "anchor_id") and g.anchor_id and g.anchor_id.value:
+                        original_anchor = g.anchor_id.value.part2
+                        # Only compute delta for non-sentinel anchors
+                        if original_anchor != END_OF_DOC_ANCHOR_MARKER:
+                            offset_delta = first_target_offset - original_anchor
+                            logger.debug(
+                                f"Cross-page offset_delta: {first_target_offset} - {original_anchor} = {offset_delta}"
+                            )
+
+            logger.info(
                 f"INJECTING {len(unique_tree_nodes)} unique TreeNodeBlocks "
-                f"(from {len(ctx.tree_nodes)} total)"
+                f"(from {len(ctx.tree_nodes)} total) with offset_delta={offset_delta}"
             )
             for (
                 tree_node,
-                target_char_offset,
+                _target_offset,  # Unused - we use delta instead
                 scene_group_item,
                 scene_tree_block,
             ) in unique_tree_nodes:
-                reanchored_node = self._reanchor_tree_node_for_cross_page(
-                    tree_node, target_char_offset, page
-                )
+                # Apply delta to preserve relative spacing between anchors
+                reanchored_node = self._update_tree_node_anchor(tree_node, offset_delta)
                 modified_blocks.append(reanchored_node)
 
                 if hasattr(tree_node, "group") and tree_node.group:
@@ -2350,6 +2367,16 @@ class RemarkableGenerator:
         buffer = io.BytesIO()
         rmscene.write_blocks(buffer, modified_blocks)
         rm_bytes = buffer.getvalue()
+
+        # Validate scene graph integrity before returning
+        validation = validate_scene_graph(rm_bytes)
+        if not validation.is_valid:
+            for error in validation.errors:
+                logger.error(f"Scene graph validation error: {error}")
+            raise ValueError(
+                f"Generated .rm file failed validation with {len(validation.errors)} errors: "
+                f"{[str(e) for e in validation.errors]}"
+            )
 
         logger.info(
             f"Generated .rm file via round-trip: {len(rm_bytes)} bytes, "
@@ -2511,6 +2538,16 @@ class RemarkableGenerator:
         buffer = io.BytesIO()
         rmscene.write_blocks(buffer, blocks)
         rm_bytes = buffer.getvalue()
+
+        # Validate scene graph integrity before returning
+        validation = validate_scene_graph(rm_bytes)
+        if not validation.is_valid:
+            for error in validation.errors:
+                logger.error(f"Scene graph validation error: {error}")
+            raise ValueError(
+                f"Generated .rm file failed validation with {len(validation.errors)} errors: "
+                f"{[str(e) for e in validation.errors]}"
+            )
 
         logger.debug(
             f"Generated .rm file: {len(rm_bytes)} bytes, "
