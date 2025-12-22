@@ -247,7 +247,7 @@ class SyncEngine:
             logger.info(f"OCR processor initialized (provider: {config.ocr.provider})")
 
         # Initialize annotation processor with handlers
-        self.annotation_processor = AnnotationProcessor(db_path=state.db_path)
+        self.annotation_processor = AnnotationProcessor()
         self.annotation_processor.register_handler(HighlightHandler())
         self.annotation_processor.register_handler(StrokeHandler(self.ocr_processor))
         logger.debug("Annotation processor initialized with highlight and stroke handlers")

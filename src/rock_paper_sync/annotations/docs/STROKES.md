@@ -297,47 +297,6 @@ Corrections are used for:
 - Tracking model performance
 - User feedback loop
 
-## State Management
-
-`StrokeHandler` manages OCR-specific state:
-
-**Schema**:
-```sql
-CREATE TABLE stroke_ocr_state (
-    document_id TEXT NOT NULL,
-    annotation_id TEXT NOT NULL,
-    image_hash TEXT,          -- Visual fingerprint for matching
-    ocr_text TEXT,            -- Recognized text
-    confidence REAL,          -- OCR confidence score
-    model_version TEXT,       -- Model version used
-    last_processed TIMESTAMP,
-    PRIMARY KEY (document_id, annotation_id)
-);
-
-CREATE INDEX idx_stroke_image_hash ON stroke_ocr_state(image_hash);
-```
-
-**Usage**:
-```python
-# Store OCR result
-handler.store_state(
-    db_connection,
-    document_id=doc_id,
-    annotation_id=stroke_id,
-    state_data={
-        "image_hash": hash_image(png_bytes),
-        "ocr_text": recognized_text,
-        "confidence": 0.95,
-        "model_version": "trocr-v1",
-    }
-)
-
-# Load cached result
-cached = handler.load_state(db_connection, doc_id, stroke_id)
-if cached and cached["image_hash"] == current_hash:
-    return cached["ocr_text"]  # Skip re-processing
-```
-
 ## Key Modules
 
 **Coordinate Transformation**:

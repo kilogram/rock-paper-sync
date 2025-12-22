@@ -38,6 +38,7 @@ from rock_paper_sync.annotations import AnnotationType, read_annotations
 from rock_paper_sync.annotations.core.data_types import RenderConfig
 from rock_paper_sync.annotations.handlers.highlight_handler import HighlightHandler
 from rock_paper_sync.annotations.handlers.stroke_handler import StrokeHandler
+from rock_paper_sync.annotations.ocr_corrections import detect_single_ocr_correction
 
 
 @pytest.mark.device
@@ -227,7 +228,7 @@ def test_full_integration(device, workspace, fixtures_dir, tmp_path):
 
     corrections_found = 0
     for i, test_case in enumerate(test_corrections):
-        correction = stroke_handler.detect_ocr_corrections(
+        correction = detect_single_ocr_correction(
             vault_name="test",
             file_path="doc.md",
             paragraph_index=i,

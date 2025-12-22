@@ -28,6 +28,7 @@ import pytest
 from rock_paper_sync.annotations import AnnotationType, read_annotations
 from rock_paper_sync.annotations.core.data_types import RenderConfig
 from rock_paper_sync.annotations.handlers.stroke_handler import StrokeHandler
+from rock_paper_sync.annotations.ocr_corrections import detect_single_ocr_correction
 from rock_paper_sync.state import StateManager
 
 
@@ -76,7 +77,6 @@ def test_ocr_correction_workflow(device, workspace, fixtures_dir, tmp_path):
     # Step 4-7: Comprehensive correction detection and storage workflow
     # Initialize state manager for correction storage
     state_manager = StateManager(tmp_path / "state.db")
-    handler = StrokeHandler()
 
     # Test comprehensive correction scenarios
     test_cases = [
@@ -157,7 +157,7 @@ def test_ocr_correction_workflow(device, workspace, fixtures_dir, tmp_path):
     for i, test_case in enumerate(test_cases):
         config = RenderConfig(stroke_style=test_case["style"])
 
-        correction = handler.detect_ocr_corrections(
+        correction = detect_single_ocr_correction(
             vault_name="test",
             file_path="doc.md",
             paragraph_index=i,
@@ -215,6 +215,7 @@ def test_ocr_correction_workflow(device, workspace, fixtures_dir, tmp_path):
 
     # Test integration with actual stroke anchors from testdata
     # Extract first stroke and create anchor
+    stroke_handler = StrokeHandler()
     for page_uuid, rm_data in initial_state.rm_files.items():
         annotations = read_annotations(io.BytesIO(rm_data))
         strokes = [a for a in annotations if a.type == AnnotationType.STROKE]
@@ -223,7 +224,7 @@ def test_ocr_correction_workflow(device, workspace, fixtures_dir, tmp_path):
             first_stroke = strokes[0]
 
             # Create anchor for stroke
-            anchor = handler.create_anchor(
+            anchor = stroke_handler.create_anchor(
                 annotation=first_stroke,
                 paragraph_text="Sample paragraph text",
                 paragraph_index=0,

@@ -49,28 +49,6 @@ Different annotation types use different transformation strategies:
 
 See [docs/STROKES.md](docs/STROKES.md) and [docs/HIGHLIGHTS.md](docs/HIGHLIGHTS.md) for details.
 
-### State Management
-
-Each handler manages its own state schema via Protocol methods:
-
-```python
-class AnnotationHandler(Protocol):
-    def init_state_schema(self, db_connection) -> None:
-        """Initialize handler-specific state tables."""
-
-    def store_state(self, db_connection, document_id, annotation_id, state_data):
-        """Store handler-specific state."""
-
-    def load_state(self, db_connection, document_id, annotation_id):
-        """Load handler-specific state."""
-```
-
-**Examples**:
-- `HighlightHandler`: Tracks text hashes for change detection
-- `StrokeHandler`: Caches OCR results with image hashes and confidence scores
-
-The common `StateManager` provides database connection; handlers define their own schemas.
-
 ### Corrections System
 
 **Generic, type-agnostic** corrections work for all annotation types:
@@ -134,21 +112,14 @@ To add a new annotation type (e.g., sketches, diagrams):
        def render(self, paragraph_index, matches, content) -> str:
            # Render as SVG embedded in markdown
 
-       def init_state_schema(self, db_connection):
-           # Create sketch-specific state tables
-
-       # ... other Protocol methods
+       # ... other Protocol methods (create_anchor, get_position, relocate, extract_from_markdown)
    ```
 
 2. **Register with `AnnotationProcessor`**:
    ```python
-   processor = AnnotationProcessor(db_path)
+   processor = AnnotationProcessor()
    processor.register_handler(SketchHandler())
    ```
-
-3. **Define Handler-Specific State** (optional):
-   - Create state tables in `init_state_schema()`
-   - Store/load state via Protocol methods
 
 The system automatically routes annotations to the correct handler and applies type-specific processing.
 
@@ -158,7 +129,7 @@ The system automatically routes annotations to the correct handler and applies t
    - Coordinate transformation: Pure math operations (`coordinate_transformer.py`)
    - Annotation mapping: Position → paragraph index (handler `map()`)
    - Rendering: Markdown generation (handler `render()`)
-   - State: Handler-specific persistence (Protocol methods)
+   - Corrections: OCR-specific correction detection (`ocr_corrections.py`)
 
 2. **Pure Functions**:
    - Coordinate transformers are stateless and deterministic

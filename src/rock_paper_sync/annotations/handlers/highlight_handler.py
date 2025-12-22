@@ -262,70 +262,6 @@ class HighlightHandler:
 
         return f"{comment}\n{original_content}"
 
-    def init_state_schema(self, db_connection) -> None:
-        """Initialize highlight-specific state schema.
-
-        Highlights track text hashes for change detection.
-        """
-        db_connection.execute("""
-            CREATE TABLE IF NOT EXISTS highlight_state (
-                document_id TEXT NOT NULL,
-                annotation_id TEXT NOT NULL,
-                text_hash TEXT,
-                highlighted_text TEXT,
-                last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (document_id, annotation_id)
-            )
-        """)
-        db_connection.commit()
-
-    def store_state(
-        self,
-        db_connection,
-        document_id: str,
-        annotation_id: str,
-        state_data: dict,
-    ) -> None:
-        """Store highlight state (text hash for change detection)."""
-        db_connection.execute(
-            """
-            INSERT OR REPLACE INTO highlight_state
-            (document_id, annotation_id, text_hash, highlighted_text)
-            VALUES (?, ?, ?, ?)
-            """,
-            (
-                document_id,
-                annotation_id,
-                state_data.get("text_hash"),
-                state_data.get("highlighted_text"),
-            ),
-        )
-        db_connection.commit()
-
-    def load_state(
-        self,
-        db_connection,
-        document_id: str,
-        annotation_id: str,
-    ) -> dict | None:
-        """Load highlight state."""
-        cursor = db_connection.execute(
-            """
-            SELECT text_hash, highlighted_text, last_seen
-            FROM highlight_state
-            WHERE document_id = ? AND annotation_id = ?
-            """,
-            (document_id, annotation_id),
-        )
-        row = cursor.fetchone()
-        if row:
-            return {
-                "text_hash": row[0],
-                "highlighted_text": row[1],
-                "last_seen": row[2],
-            }
-        return None
-
     def create_anchor(
         self,
         annotation: Annotation,
@@ -608,9 +544,9 @@ class HighlightHandler:
         # cancels out these errors by using the same (flawed) model for both positions.
         # TODO: Fix the model to properly handle paragraph spacing, then re-enable reflow.
         offset_change = abs(new_offset - old_offset)
-        SIGNIFICANT_OFFSET_CHANGE = 100000  # Effectively disabled - was 100
+        significant_offset_change = 100000  # Effectively disabled - was 100
 
-        if offset_change > SIGNIFICANT_OFFSET_CHANGE:
+        if offset_change > significant_offset_change:
             # Significant content reflow - use model position directly
             # Calculate old device offset (how much device drew away from model)
             old_device_x_offset = old_x - old_x_model

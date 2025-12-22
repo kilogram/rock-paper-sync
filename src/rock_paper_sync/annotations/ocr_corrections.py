@@ -1,14 +1,17 @@
-"""OCR correction detection coordinator.
+"""OCR correction detection for stroke annotations.
 
-Simple coordinator function for detecting OCR corrections in markdown files.
-This is a minimal, focused implementation for collecting training data only.
+This module provides OCR-specific correction detection for handwriting-to-text
+conversions. Corrections are detected by comparing OCR text between snapshot
+versions and current markdown.
+
+This is a focused implementation for collecting training data - not for
+bidirectional sync.
 """
 
 import logging
 
 from rock_paper_sync.annotations.common.snapshots import SnapshotStore
 from rock_paper_sync.annotations.core.data_types import OCRCorrection, RenderConfig
-from rock_paper_sync.annotations.handlers.stroke_handler import StrokeHandler
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +42,58 @@ def parse_paragraphs(markdown: str) -> list[str]:
         paragraphs.append("\n".join(current))
 
     return paragraphs
+
+
+def detect_single_ocr_correction(
+    vault_name: str,
+    file_path: str,
+    paragraph_index: int,
+    old_paragraph: str,
+    new_paragraph: str,
+    annotation_id: str,
+    image_hash: str,
+    config: RenderConfig,
+) -> OCRCorrection | None:
+    """Detect OCR correction for a single paragraph.
+
+    Compares OCR text in old vs new paragraph versions to detect user edits.
+    This is a simple, focused function for collecting training data.
+
+    Args:
+        vault_name: Vault name
+        file_path: File path
+        paragraph_index: Paragraph index
+        old_paragraph: Paragraph from snapshot
+        new_paragraph: Current paragraph
+        annotation_id: Annotation UUID
+        image_hash: Image hash for training
+        config: Rendering configuration
+
+    Returns:
+        OCRCorrection if text changed, None otherwise
+    """
+    # Import here to avoid circular dependency
+    from rock_paper_sync.annotations.handlers.stroke_handler import StrokeHandler
+
+    stroke_handler = StrokeHandler()
+
+    # Extract OCR text from both versions
+    old_texts = stroke_handler.extract_from_markdown(old_paragraph, config)
+    new_texts = stroke_handler.extract_from_markdown(new_paragraph, config)
+
+    # Simple comparison (assumes one OCR annotation per paragraph)
+    # For multiple annotations per paragraph, we'd need more sophisticated matching
+    if old_texts and new_texts and old_texts[0].text != new_texts[0].text:
+        return OCRCorrection(
+            image_hash=image_hash,
+            original_text=old_texts[0].text,
+            corrected_text=new_texts[0].text,
+            paragraph_context=new_paragraph,
+            document_id=f"{vault_name}/{file_path}",
+            annotation_id=annotation_id,
+        )
+
+    return None
 
 
 def detect_ocr_corrections_for_file(
@@ -83,7 +138,6 @@ def detect_ocr_corrections_for_file(
         config = RenderConfig()
 
     corrections = []
-    stroke_handler = StrokeHandler()
 
     # Parse current markdown into paragraphs
     current_paragraphs = parse_paragraphs(current_markdown)
@@ -110,7 +164,7 @@ def detect_ocr_corrections_for_file(
 
         # Check each stroke in this paragraph
         for stroke_info in strokes:
-            correction = stroke_handler.detect_ocr_corrections(
+            correction = detect_single_ocr_correction(
                 vault_name=vault_name,
                 file_path=file_path,
                 paragraph_index=para_idx,

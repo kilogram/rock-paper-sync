@@ -44,17 +44,15 @@ class AnnotationHandler(Protocol):
     """Protocol for annotation type handlers.
 
     Each annotation type (highlights, strokes, sketches, etc.) implements
-    this protocol to provide type-specific detection, mapping, rendering,
-    and state management.
+    this protocol to provide type-specific detection, mapping, and rendering.
 
     Handler responsibilities:
     1. Detection: Extract annotations from .rm files
     2. Mapping: Associate annotations with markdown paragraphs
     3. Rendering: Generate markdown output with annotation markers
-    4. State: Manage handler-specific stateful concerns
 
     Coordinate transformation and generic corrections are handled by
-    shared utilities. Handlers encapsulate type-specific state operations.
+    shared utilities.
     """
 
     @property
@@ -115,60 +113,6 @@ class AnnotationHandler(Protocol):
 
         Returns:
             Markdown text with annotation markers/content
-        """
-        ...
-
-    def init_state_schema(self, db_connection: Any) -> None:
-        """Initialize handler-specific state schema in database.
-
-        Called once at startup to ensure handler's state tables exist.
-        Handlers can create their own tables for type-specific concerns.
-
-        Example (StrokeHandler):
-            CREATE TABLE stroke_ocr_cache (
-                annotation_id TEXT PRIMARY KEY,
-                image_hash TEXT,
-                ocr_text TEXT,
-                confidence REAL
-            )
-
-        Args:
-            db_connection: SQLite database connection
-        """
-        ...
-
-    def store_state(
-        self,
-        db_connection: Any,
-        document_id: str,
-        annotation_id: str,
-        state_data: dict[str, Any],
-    ) -> None:
-        """Store handler-specific state for an annotation.
-
-        Args:
-            db_connection: SQLite database connection
-            document_id: Document UUID
-            annotation_id: Annotation identifier
-            state_data: Type-specific state data to store
-        """
-        ...
-
-    def load_state(
-        self,
-        db_connection: Any,
-        document_id: str,
-        annotation_id: str,
-    ) -> dict[str, Any] | None:
-        """Load handler-specific state for an annotation.
-
-        Args:
-            db_connection: SQLite database connection
-            document_id: Document UUID
-            annotation_id: Annotation identifier
-
-        Returns:
-            Type-specific state data, or None if not found
         """
         ...
 

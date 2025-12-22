@@ -16,20 +16,10 @@ from rock_paper_sync.parser import BlockType, ContentBlock
 class TestAnnotationProcessorInit:
     """Tests for processor initialization."""
 
-    def test_init_without_db(self):
-        """Processor initializes without database."""
+    def test_init(self):
+        """Processor initializes with empty handlers."""
         processor = AnnotationProcessor()
         assert processor.handlers == {}
-        assert processor.db_path is None
-        assert processor.db_connection is None
-
-    def test_init_with_db(self, tmp_path):
-        """Processor creates database connection when path provided."""
-        db_path = tmp_path / "test.db"
-        processor = AnnotationProcessor(db_path=db_path)
-        assert processor.db_path == db_path
-        assert processor.db_connection is not None
-        processor.close()
 
 
 class TestHandlerRegistration:
@@ -62,19 +52,6 @@ class TestHandlerRegistration:
         assert len(processor.handlers) == 2
         assert "highlight" in processor.handlers
         assert "stroke" in processor.handlers
-
-    def test_register_handler_initializes_schema(self, tmp_path):
-        """Handler schema is initialized when db connection exists."""
-        db_path = tmp_path / "test.db"
-        processor = AnnotationProcessor(db_path=db_path)
-
-        mock_handler = MagicMock()
-        mock_handler.annotation_type = "test"
-
-        processor.register_handler(mock_handler)
-
-        mock_handler.init_state_schema.assert_called_once_with(processor.db_connection)
-        processor.close()
 
 
 class TestMapAnnotationsToParagraphs:
@@ -229,22 +206,3 @@ class TestMapAnnotationsToParagraphs:
         mock_handler.map.assert_called_once()
         call_args = mock_handler.map.call_args
         assert call_args[0][3] == mock_layout  # 4th positional arg
-
-
-class TestProcessorClose:
-    """Tests for processor cleanup."""
-
-    def test_close_without_db(self):
-        """Close works without database."""
-        processor = AnnotationProcessor()
-        processor.close()  # Should not raise
-
-    def test_close_with_db(self, tmp_path):
-        """Close closes database connection."""
-        db_path = tmp_path / "test.db"
-        processor = AnnotationProcessor(db_path=db_path)
-        assert processor.db_connection is not None
-
-        processor.close()
-
-        assert processor.db_connection is None

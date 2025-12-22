@@ -349,8 +349,5 @@ class TestHandlerIntegration:
             assert hasattr(handler, "detect")
             assert hasattr(handler, "map")
             assert hasattr(handler, "render")
-            assert hasattr(handler, "init_state_schema")
-            assert hasattr(handler, "store_state")
-            assert hasattr(handler, "load_state")
             assert hasattr(handler, "create_anchor")
             assert hasattr(handler, "extract_from_markdown")

@@ -32,7 +32,7 @@ class AnnotationProcessor:
 
     Example:
         # Initialize with handlers
-        processor = AnnotationProcessor(db_path)
+        processor = AnnotationProcessor()
         processor.register_handler(HighlightHandler())
         processor.register_handler(StrokeHandler(ocr_processor))
 
@@ -43,22 +43,9 @@ class AnnotationProcessor:
         )
     """
 
-    def __init__(self, db_path: Path | None = None):
-        """Initialize annotation processor.
-
-        Args:
-            db_path: Optional path to SQLite database for state management
-        """
+    def __init__(self):
+        """Initialize annotation processor."""
         self.handlers: dict[str, AnnotationHandler] = {}
-        self.db_path = db_path
-
-        # Initialize database connection if provided
-        if db_path:
-            import sqlite3
-
-            self.db_connection = sqlite3.connect(db_path)
-        else:
-            self.db_connection = None
 
     def register_handler(self, handler: AnnotationHandler) -> None:
         """Register an annotation handler.
@@ -68,11 +55,6 @@ class AnnotationProcessor:
         """
         handler_type = handler.annotation_type
         self.handlers[handler_type] = handler
-
-        # Initialize handler's state schema
-        if self.db_connection:
-            handler.init_state_schema(self.db_connection)
-
         logger.debug(f"Registered handler for annotation type: {handler_type}")
 
     def map_annotations_to_paragraphs(
@@ -147,9 +129,3 @@ class AnnotationProcessor:
         )
 
         return paragraph_annotations
-
-    def close(self) -> None:
-        """Close database connection."""
-        if self.db_connection:
-            self.db_connection.close()
-            self.db_connection = None

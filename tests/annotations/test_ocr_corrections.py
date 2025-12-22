@@ -3,15 +3,15 @@
 Tests the simple, focused OCR correction detection system for training data
 collection. Tests cover:
 - OCRCorrection dataclass
-- StrokeHandler.detect_ocr_corrections()
+- detect_single_ocr_correction() function
 - detect_ocr_corrections_for_file() coordinator
 """
 
 from rock_paper_sync.annotations.common.snapshots import ContentStore, SnapshotStore
 from rock_paper_sync.annotations.core.data_types import OCRCorrection, RenderConfig
-from rock_paper_sync.annotations.handlers.stroke_handler import StrokeHandler
 from rock_paper_sync.annotations.ocr_corrections import (
     detect_ocr_corrections_for_file,
+    detect_single_ocr_correction,
     parse_paragraphs,
 )
 from rock_paper_sync.state import StateManager
@@ -39,18 +39,17 @@ class TestOCRCorrection:
         assert correction.annotation_id == "anno-456"
 
 
-class TestStrokeHandlerDetection:
-    """Tests for StrokeHandler.detect_ocr_corrections()."""
+class TestDetectSingleOcrCorrection:
+    """Tests for detect_single_ocr_correction() function."""
 
     def test_detect_correction_comment_style(self):
         """Test detecting correction with comment style OCR."""
-        handler = StrokeHandler()
         config = RenderConfig(stroke_style="comment")
 
         old_paragraph = "Text before <!-- OCR: helo world --> text after."
         new_paragraph = "Text before <!-- OCR: hello world --> text after."
 
-        correction = handler.detect_ocr_corrections(
+        correction = detect_single_ocr_correction(
             vault_name="MyVault",
             file_path="notes/example.md",
             paragraph_index=0,
@@ -71,13 +70,12 @@ class TestStrokeHandlerDetection:
 
     def test_detect_correction_footnote_style(self):
         """Test detecting correction with footnote style OCR."""
-        handler = StrokeHandler()
         config = RenderConfig(stroke_style="footnote")
 
         old_paragraph = "Text before helo world[^1]\n\n[^1]: OCR confidence 0.95"
         new_paragraph = "Text before hello world[^1]\n\n[^1]: OCR confidence 0.95"
 
-        correction = handler.detect_ocr_corrections(
+        correction = detect_single_ocr_correction(
             vault_name="Vault",
             file_path="file.md",
             paragraph_index=1,
@@ -95,12 +93,11 @@ class TestStrokeHandlerDetection:
 
     def test_no_correction_when_unchanged(self):
         """Test no correction when OCR text unchanged."""
-        handler = StrokeHandler()
         config = RenderConfig(stroke_style="comment")
 
         paragraph = "Text with <!-- OCR: same text --> here."
 
-        correction = handler.detect_ocr_corrections(
+        correction = detect_single_ocr_correction(
             vault_name="Vault",
             file_path="file.md",
             paragraph_index=0,
@@ -115,13 +112,12 @@ class TestStrokeHandlerDetection:
 
     def test_no_correction_when_no_ocr(self):
         """Test no correction when no OCR text present."""
-        handler = StrokeHandler()
         config = RenderConfig(stroke_style="comment")
 
         old_paragraph = "Plain text without OCR."
         new_paragraph = "Plain text without OCR."
 
-        correction = handler.detect_ocr_corrections(
+        correction = detect_single_ocr_correction(
             vault_name="Vault",
             file_path="file.md",
             paragraph_index=0,
@@ -136,13 +132,12 @@ class TestStrokeHandlerDetection:
 
     def test_detect_multiple_changes(self):
         """Test detecting significant text changes."""
-        handler = StrokeHandler()
         config = RenderConfig(stroke_style="comment")
 
         old_paragraph = "<!-- OCR: The quck brown fox -->"
         new_paragraph = "<!-- OCR: The quick brown fox -->"
 
-        correction = handler.detect_ocr_corrections(
+        correction = detect_single_ocr_correction(
             vault_name="Vault",
             file_path="file.md",
             paragraph_index=0,

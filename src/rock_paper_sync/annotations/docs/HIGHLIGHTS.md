@@ -86,49 +86,6 @@ def render(self, paragraph_index, matches, original_content):
     return f"{comment}\n{original_content}"
 ```
 
-## State Management
-
-Highlights track **text hashes** to detect when highlighted content changes.
-
-### Schema
-
-```sql
-CREATE TABLE highlight_state (
-    document_id TEXT NOT NULL,
-    annotation_id TEXT NOT NULL,
-    text_hash TEXT,           -- Hash of highlighted text
-    highlighted_text TEXT,    -- Original text content
-    last_seen TIMESTAMP,
-    PRIMARY KEY (document_id, annotation_id)
-);
-```
-
-### Usage
-
-```python
-# Store highlight state
-handler.store_state(
-    db_connection,
-    document_id=doc_id,
-    annotation_id=highlight_id,
-    state_data={
-        "text_hash": hash_text(highlight.text),
-        "highlighted_text": highlight.text,
-    }
-)
-
-# Load cached state
-cached = handler.load_state(db_connection, doc_id, highlight_id)
-if cached and cached["text_hash"] == current_hash:
-    # Highlight unchanged, skip reprocessing
-    pass
-```
-
-**Change detection**:
-- If text hash differs: Highlighted text was edited on device
-- If annotation_id missing: Highlight was deleted
-- If new annotation_id: New highlight created
-
 ## Comparison with Strokes
 
 | Feature | Highlights | Strokes |
@@ -136,7 +93,7 @@ if cached and cached["text_hash"] == current_hash:
 | Coordinates | Simple text-relative | Dual-anchor with 60px offset |
 | Matching | Text content (reliable) | Spatial clustering + OCR |
 | Processing | Instant | Requires OCR service |
-| State | Text hash only | Image hash, OCR text, confidence |
+| Corrections | N/A (binary on/off) | OCR text corrections tracked |
 | Rendering | HTML comments | OCR text blocks |
 
 ## Key Modules
