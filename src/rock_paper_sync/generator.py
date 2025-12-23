@@ -950,10 +950,6 @@ class RemarkableGenerator:
 
         new_model = DocumentModel.from_paragraphs(new_paragraphs, self.geometry)
 
-        # Get old/new text for block adjustment
-        old_text = old_model.full_text
-        new_text = new_model.full_text
-        old_origin = (self.geometry.text_pos_x, self.geometry.text_pos_y)
         new_origin = (self.geometry.text_pos_x, self.geometry.text_pos_y)
 
         # Migrate annotations from old to new
@@ -1059,9 +1055,7 @@ class RemarkableGenerator:
                     # Handle TreeNodeBlock for strokes
                     if doc_anno.original_tree_node:
                         # Calculate target char offset in page text
-                        target_offset = self._calculate_annotation_offset(
-                            doc_anno, page, projection
-                        )
+                        target_offset = self._calculate_annotation_offset(doc_anno, page)
                         ctx.tree_nodes.append(
                             (
                                 doc_anno.original_tree_node,
@@ -1096,7 +1090,6 @@ class RemarkableGenerator:
         self,
         doc_anno: DocumentAnnotation,
         page: RemarkablePage,
-        projection: PageProjection,
     ) -> int:
         """Calculate character offset for an annotation on a page.
 
@@ -2166,46 +2159,50 @@ class RemarkableGenerator:
             else:
                 modified_blocks.append(block)
 
-        # Inject cross-page TreeNodeBlocks FIRST (strokes reference them via parent_id)
-        # Reanchor them to point to correct text positions on this page
+        # Inject cross-page TreeNodeBlocks with their scene tree declarations
+        # Order matters: SceneTreeBlock must come BEFORE TreeNodeBlock that references it
+        # Track which nodes we've already declared to avoid duplicates
         if ctx.tree_nodes:
             logger.warning(f"INJECTING {len(ctx.tree_nodes)} TreeNodeBlocks to page")
+            declared_node_ids: set = set()
             for tree_node, target_char_offset, scene_group_item, scene_tree_block in ctx.tree_nodes:
+                if hasattr(tree_node, "group") and tree_node.group:
+                    node_id = tree_node.group.node_id
+
+                    # Only add SceneTreeBlock once per unique node_id
+                    if node_id not in declared_node_ids:
+                        declared_node_ids.add(node_id)
+
+                        # 1. First: SceneTreeBlock declares this node in the scene tree
+                        new_scene_tree_block = SceneTreeBlock(
+                            tree_id=node_id,
+                            node_id=CrdtId(0, 0),
+                            is_update=True,
+                            parent_id=CrdtId(0, 11),  # Layer 1
+                        )
+                        modified_blocks.append(new_scene_tree_block)
+                        logger.debug(f"Injected SceneTreeBlock for TreeNode {node_id}")
+
+                        # 2. Second: SceneGroupItemBlock links the node to scene graph
+                        if scene_group_item:
+                            new_scene_group_item = SceneGroupItemBlock(
+                                parent_id=CrdtId(0, 11),  # Layer 1
+                                item=CrdtSequenceItem(
+                                    item_id=scene_group_item.item.item_id,  # Keep original ID
+                                    left_id=CrdtId(0, 0),  # Reset - no left neighbor
+                                    right_id=CrdtId(0, 0),  # Reset - no right neighbor
+                                    deleted_length=0,
+                                    value=node_id,  # The TreeNodeBlock we're linking
+                                ),
+                            )
+                            modified_blocks.append(new_scene_group_item)
+                            logger.debug(f"Injected SceneGroupItemBlock for TreeNode {node_id}")
+
+                # 3. Third: TreeNodeBlock references the now-declared node
                 reanchored_node = self._reanchor_tree_node_for_cross_page(
                     tree_node, target_char_offset, page
                 )
                 modified_blocks.append(reanchored_node)
-
-                if hasattr(tree_node, "group") and tree_node.group:
-                    node_id = tree_node.group.node_id
-
-                    # Inject SceneTreeBlock to declare this node in the scene tree
-                    # This MUST come before SceneGroupItemBlock that references it
-                    new_scene_tree_block = SceneTreeBlock(
-                        tree_id=node_id,
-                        node_id=CrdtId(0, 0),
-                        is_update=True,
-                        parent_id=CrdtId(0, 11),  # Layer 1
-                    )
-                    modified_blocks.append(new_scene_tree_block)
-                    logger.debug(f"Injected SceneTreeBlock for TreeNode {node_id}")
-
-                    # Create a NEW SceneGroupItemBlock to link TreeNodeBlock to scene graph
-                    # The original scene_group_item has left_id/right_id referencing nodes
-                    # from the source page that don't exist here. Reset them to (0,0).
-                    if scene_group_item:
-                        new_scene_group_item = SceneGroupItemBlock(
-                            parent_id=CrdtId(0, 11),  # Layer 1
-                            item=CrdtSequenceItem(
-                                item_id=scene_group_item.item.item_id,  # Keep original ID
-                                left_id=CrdtId(0, 0),  # Reset - no left neighbor
-                                right_id=CrdtId(0, 0),  # Reset - no right neighbor
-                                deleted_length=0,
-                                value=node_id,  # The TreeNodeBlock we're linking
-                            ),
-                        )
-                        modified_blocks.append(new_scene_group_item)
-                        logger.debug(f"Injected SceneGroupItemBlock for TreeNode {node_id}")
             logger.info(
                 f"Injected {len(ctx.tree_nodes)} cross-page TreeNodeBlocks (reanchored) with SceneTreeBlocks and SceneGroupItemBlocks"
             )
@@ -2309,49 +2306,54 @@ class RemarkableGenerator:
         # Add preserved annotations (strokes and highlights) from context
         ctx = page.annotation_context
         if ctx and ctx.annotations:
-            # First add TreeNodeBlocks for strokes (strokes reference them via parent_id)
+            # Add TreeNodeBlocks for strokes with their scene tree declarations
+            # Order matters: SceneTreeBlock must come BEFORE TreeNodeBlock that references it
+            # Track which nodes we've already declared to avoid duplicates
             if ctx.tree_nodes:
                 logger.warning(f"FROM-SCRATCH: Injecting {len(ctx.tree_nodes)} TreeNodeBlocks")
+                declared_node_ids: set = set()
                 for tree_node, target_offset, scene_group_item, scene_tree_block in ctx.tree_nodes:
-                    # Reanchor TreeNodeBlock for this page
+                    if hasattr(tree_node, "group") and tree_node.group:
+                        node_id = tree_node.group.node_id
+
+                        # Only add SceneTreeBlock once per unique node_id
+                        if node_id not in declared_node_ids:
+                            declared_node_ids.add(node_id)
+
+                            # 1. First: SceneTreeBlock declares this node in the scene tree
+                            new_scene_tree_block = SceneTreeBlock(
+                                tree_id=node_id,
+                                node_id=CrdtId(0, 0),
+                                is_update=True,
+                                parent_id=CrdtId(0, 11),  # Layer 1
+                            )
+                            blocks.append(new_scene_tree_block)
+                            logger.debug(
+                                f"FROM-SCRATCH: Injected SceneTreeBlock for TreeNode {node_id}"
+                            )
+
+                            # 2. Second: SceneGroupItemBlock links the node to scene graph
+                            if scene_group_item:
+                                new_scene_group_item = SceneGroupItemBlock(
+                                    parent_id=CrdtId(0, 11),  # Layer 1
+                                    item=CrdtSequenceItem(
+                                        item_id=scene_group_item.item.item_id,  # Keep original ID
+                                        left_id=CrdtId(0, 0),  # Reset - no left neighbor
+                                        right_id=CrdtId(0, 0),  # Reset - no right neighbor
+                                        deleted_length=0,
+                                        value=node_id,  # The TreeNodeBlock we're linking
+                                    ),
+                                )
+                                blocks.append(new_scene_group_item)
+                                logger.debug(
+                                    f"FROM-SCRATCH: Injected SceneGroupItemBlock for TreeNode {node_id}"
+                                )
+
+                    # 3. Third: TreeNodeBlock references the now-declared node
                     reanchored_node = self._reanchor_tree_node_for_cross_page(
                         tree_node, target_offset, page
                     )
                     blocks.append(reanchored_node)
-
-                    if hasattr(tree_node, "group") and tree_node.group:
-                        node_id = tree_node.group.node_id
-
-                        # Inject SceneTreeBlock to declare this node in the scene tree
-                        new_scene_tree_block = SceneTreeBlock(
-                            tree_id=node_id,
-                            node_id=CrdtId(0, 0),
-                            is_update=True,
-                            parent_id=CrdtId(0, 11),  # Layer 1
-                        )
-                        blocks.append(new_scene_tree_block)
-                        logger.debug(
-                            f"FROM-SCRATCH: Injected SceneTreeBlock for TreeNode {node_id}"
-                        )
-
-                        # Create a NEW SceneGroupItemBlock to link TreeNodeBlock to scene graph
-                        # The original scene_group_item has left_id/right_id referencing nodes
-                        # from the source page that don't exist here. Reset them to (0,0).
-                        if scene_group_item:
-                            new_scene_group_item = SceneGroupItemBlock(
-                                parent_id=CrdtId(0, 11),  # Layer 1
-                                item=CrdtSequenceItem(
-                                    item_id=scene_group_item.item.item_id,  # Keep original ID
-                                    left_id=CrdtId(0, 0),  # Reset - no left neighbor
-                                    right_id=CrdtId(0, 0),  # Reset - no right neighbor
-                                    deleted_length=0,
-                                    value=node_id,  # The TreeNodeBlock we're linking
-                                ),
-                            )
-                            blocks.append(new_scene_group_item)
-                            logger.debug(
-                                f"FROM-SCRATCH: Injected SceneGroupItemBlock for TreeNode {node_id}"
-                            )
 
             # Then add the annotation blocks (strokes, highlights)
             blocks.extend(ctx.annotations)
