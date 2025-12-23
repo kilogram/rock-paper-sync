@@ -50,6 +50,17 @@ from .testdata import TestArtifacts, TestdataStore, TestManifest
 from .vault_manager import VaultInteractionManager, VaultOperation
 from .vault_offline import OfflineVault
 from .vault_online import OnlineVault
+from .visual_comparison import (
+    ClusterMatch,
+    StrokeCluster,
+    VisualComparisonResult,
+    assert_rm_files_match_visually,
+    cluster_strokes,
+    compare_rm_files_visually,
+    get_default_debug_dir,
+    print_visual_comparison,
+    save_comparison_debug_images,
+)
 from .workspace import WorkspaceManager
 
 __all__ = [
@@ -85,4 +96,14 @@ __all__ = [
     # OCR integration
     "OCRIntegrationMixin",
     "OCRTestRecording",
+    # Visual comparison
+    "ClusterMatch",
+    "StrokeCluster",
+    "VisualComparisonResult",
+    "cluster_strokes",
+    "compare_rm_files_visually",
+    "assert_rm_files_match_visually",
+    "get_default_debug_dir",
+    "print_visual_comparison",
+    "save_comparison_debug_images",
 ]

@@ -190,7 +190,7 @@ class OnlineDevice(DeviceInteractionManager):
             self.testdata_store.save_trip_diagnostic(
                 self._current_test_id,
                 trip_number=1,
-                diagnostic_name="uploaded_rm",
+                diagnostic_name="online/uploaded_rm",
                 rm_files=uploaded_rm,
             )
             self.bench.observe(f"Trip 1: Saved diagnostic ({len(uploaded_rm)} uploaded .rm files)")
@@ -289,8 +289,29 @@ class OnlineDevice(DeviceInteractionManager):
         return state
 
     def trigger_sync(self) -> None:
-        """Run sync command."""
+        """Run sync command and capture uploaded rm files as diagnostic.
+
+        After syncing, downloads the rm files from cloud to capture what
+        was uploaded. This is critical for visual comparison tests that
+        need to compare our generated output vs golden.
+        """
         self.workspace.run_sync("Sync")
+
+        # Capture uploaded rm files if we have a document UUID
+        if self._doc_uuid and self._current_test_id:
+            self._download_rm_files_to_cache(self._doc_uuid)
+            uploaded_rm = self._get_cached_rm_files_as_dict()
+            if uploaded_rm:
+                self.testdata_store.save_trip_diagnostic(
+                    self._current_test_id,
+                    trip_number=self._current_trip,
+                    diagnostic_name="online/uploaded_rm",
+                    rm_files=uploaded_rm,
+                )
+                self.bench.observe(
+                    f"Trip {self._current_trip}: Saved diagnostic "
+                    f"({len(uploaded_rm)} uploaded .rm files)"
+                )
 
     def capture_phase(self, phase_name: str, action: str = "capture") -> None:
         """Manually capture vault state for next trip.
@@ -683,6 +704,9 @@ class OnlineDevice(DeviceInteractionManager):
         This ensures we can capture the rm files that were uploaded,
         even though the sync process doesn't save uploaded files to cache.
 
+        Clears the cache directory first to avoid mixing files from
+        different sync operations.
+
         Args:
             doc_uuid: Document UUID
         """
@@ -695,8 +719,10 @@ class OnlineDevice(DeviceInteractionManager):
         try:
             page_uuids = sync.get_existing_page_uuids(doc_uuid)
             if page_uuids:
-                # Create cache directory matching get_cached_rm_files() expectations
+                # Clear and recreate cache directory to avoid stale files
                 cache_dir = self.workspace.cache_dir / "annotations" / doc_uuid
+                if cache_dir.exists():
+                    shutil.rmtree(cache_dir)
                 cache_dir.mkdir(parents=True, exist_ok=True)
 
                 # Download rm files directly to cache
