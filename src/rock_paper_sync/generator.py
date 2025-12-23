@@ -5,32 +5,20 @@ It handles pagination, text positioning, and generates binary .rm files using
 the rmscene library.
 """
 
-import io
 import logging
 import time
 import uuid as uuid_module
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
-from uuid import uuid4
 
 import rmscene
 from rmscene import scene_items as si
-from rmscene.crdt_sequence import CrdtId, CrdtSequence, CrdtSequenceItem
-from rmscene.scene_stream import (
-    AuthorIdsBlock,
-    MigrationInfoBlock,
-    PageInfoBlock,
-    RootTextBlock,
-    SceneGroupItemBlock,
-    SceneTreeBlock,
-    TreeNodeBlock,
-)
+from rmscene.crdt_sequence import CrdtId
 from rmscene.tagged_block_common import LwwValue
 
 from .annotations import (
     HeuristicTextAnchor,
     TextBlock,
-    validate_scene_graph,
 )
 from .annotations.document_model import (
     AnchorContext,
@@ -39,10 +27,16 @@ from .annotations.document_model import (
     DocumentModel,
     PageProjection,
 )
-from .config import LayoutConfig as AppLayoutConfig
-from .coordinate_transformer import (
-    END_OF_DOC_ANCHOR_MARKER,
+from .annotations.domain import (
+    HighlightPlacement,
+    PageTransformPlan,
+    StrokePlacement,
 )
+from .annotations.scene_adapter import (
+    PageTransformExecutor,
+    StrokeBundle,
+)
+from .config import LayoutConfig as AppLayoutConfig
 from .layout import DeviceGeometry, WordWrapLayoutEngine
 from .layout.device import DEFAULT_DEVICE
 from .parser import BlockType, ContentBlock, MarkdownDocument, TextFormat
@@ -523,6 +517,13 @@ class RemarkableGenerator:
             # Add annotations from projection
             if projection.annotations:
                 self._apply_annotations_to_page(page, projection, uuid_to_rm_path)
+
+            # Always set source_rm_path if available (for preserving unreplaced strokes)
+            if projection.page_uuid in uuid_to_rm_path:
+                if page.annotation_context is None:
+                    page.annotation_context = PageAnnotationContext()
+                if page.annotation_context.source_rm_path is None:
+                    page.annotation_context.source_rm_path = uuid_to_rm_path[projection.page_uuid]
 
             pages.append(page)
 
@@ -1541,172 +1542,6 @@ class RemarkableGenerator:
 
         return glyph_block
 
-    # =========================================================================
-    # TreeNodeBlock Anchor Update
-    # =========================================================================
-
-    def _compute_anchor_offset_delta(self, old_text: str, new_text: str) -> int:
-        """Compute the character offset delta between old and new text.
-
-        This determines how much to adjust TreeNodeBlock anchor_ids when text
-        changes. The anchor_id.part2 is a character offset into the text content.
-        When text is inserted before anchor points, the offset must increase.
-
-        Uses a simple heuristic: finds where old text content appears in new text
-        to determine the insertion offset.
-
-        Args:
-            old_text: Original text content from RootTextBlock
-            new_text: New text content to be written
-
-        Returns:
-            Offset delta to add to anchor_id values (positive = text inserted)
-        """
-        if not old_text or not new_text:
-            return 0
-
-        # Simple case: text length changed
-        len_delta = len(new_text) - len(old_text)
-        if len_delta == 0:
-            return 0
-
-        # Try to find where old text starts in new text
-        # This handles the common case of text prepended at the beginning
-        # Use first 100 chars of old text as a signature
-        signature_len = min(100, len(old_text))
-        signature = old_text[:signature_len]
-
-        if signature in new_text:
-            insertion_offset = new_text.find(signature)
-            if insertion_offset >= 0:
-                logger.debug(
-                    f"Anchor offset delta: found old text at position {insertion_offset} "
-                    f"(text grew by {len_delta} chars)"
-                )
-                return insertion_offset
-
-        # Fallback: assume text was prepended (delta = length difference)
-        # This is correct when new content is added at the beginning
-        if len_delta > 0:
-            logger.debug(
-                f"Anchor offset delta: using length delta {len_delta} (signature not found)"
-            )
-            return len_delta
-
-        # Text was shortened - more complex case, use 0 for now
-        logger.debug("Anchor offset delta: text shortened, using 0")
-        return 0
-
-    def _update_tree_node_anchor(self, block, offset_delta: int):
-        """Create a new TreeNodeBlock with updated anchor_id offset.
-
-        The anchor_id.value.part2 is a character offset into the text content.
-        When text is inserted before the anchor point, the offset must be
-        increased to maintain the correct text reference.
-
-        Args:
-            block: Original TreeNodeBlock
-            offset_delta: Amount to add to anchor_id.part2
-
-        Returns:
-            New TreeNodeBlock with updated anchor_id (or original if no anchor)
-        """
-        if not hasattr(block, "group") or not block.group:
-            return block
-
-        g = block.group
-        if not hasattr(g, "anchor_id") or not g.anchor_id or not g.anchor_id.value:
-            return block
-
-        old_anchor = g.anchor_id
-        old_offset = old_anchor.value.part2
-
-        # Don't modify end-of-document marker
-        if old_offset == END_OF_DOC_ANCHOR_MARKER:
-            return block
-
-        # Create new anchor_id with updated offset
-        new_offset = old_offset + offset_delta
-        new_anchor_value = CrdtId(old_anchor.value.part1, new_offset)
-        new_anchor_lww = LwwValue(timestamp=old_anchor.timestamp, value=new_anchor_value)
-
-        # Create new Group with updated anchor_id
-        new_group = replace(g, anchor_id=new_anchor_lww)
-
-        # Create new TreeNodeBlock with updated group
-        new_block = replace(block, group=new_group)
-
-        logger.debug(f"Updated TreeNodeBlock {g.node_id} anchor_id: {old_offset} -> {new_offset}")
-
-        return new_block
-
-    def _reanchor_tree_node_for_cross_page(
-        self,
-        tree_node,
-        target_char_offset: int,
-        target_page: "RemarkablePage",
-    ):
-        """Recalculate TreeNodeBlock anchor_id for cross-page stroke movement.
-
-        When a stroke moves to a different page, its TreeNodeBlock anchor_id
-        needs to point to text on the NEW page, not the old page. This method
-        sets the anchor to the pre-calculated character offset.
-
-        The anchor_id.value is CrdtId(part1, part2) where:
-        - part1: Author/origin ID (typically 1 for text-anchored, 0 for sentinel)
-        - part2: Character offset into the RootTextBlock text (NOT combined with CRDT base)
-
-        Special case: Margin notes use sentinel anchor_id with part1=0 and
-        part2=END_OF_DOC_ANCHOR_MARKER. These must be preserved unchanged.
-
-        Args:
-            tree_node: Original TreeNodeBlock
-            target_char_offset: Pre-calculated character offset for target page
-            target_page: Target page to anchor to
-
-        Returns:
-            New TreeNodeBlock with recalculated anchor_id
-        """
-        if not hasattr(tree_node, "group") or not tree_node.group:
-            return tree_node
-
-        g = tree_node.group
-        if not hasattr(g, "anchor_id") or not g.anchor_id or not g.anchor_id.value:
-            return tree_node
-
-        old_anchor = g.anchor_id
-        old_offset = old_anchor.value.part2
-
-        # Check for sentinel anchor (margin notes, non-text-anchored strokes)
-        # These have anchor_id.part1 = 0 and part2 = END_OF_DOC_ANCHOR_MARKER
-        # They should be preserved unchanged - Y positioning comes from stroke coords
-        # NOTE: Check the ORIGINAL anchor, not the target offset!
-        if old_offset == END_OF_DOC_ANCHOR_MARKER:
-            logger.debug(
-                f"Preserving sentinel anchor for cross-page TreeNodeBlock {g.node_id} "
-                f"(margin note or non-text-anchored stroke)"
-            )
-            return tree_node
-
-        # Create new anchor_id with the pre-calculated offset
-        # The anchor's part2 is simply the character offset into the RootTextBlock text,
-        # NOT combined with crdt_base_id (that's for CRDT sequence items, not text anchors)
-        new_anchor_value = CrdtId(old_anchor.value.part1, target_char_offset)
-        new_anchor_lww = LwwValue(timestamp=old_anchor.timestamp, value=new_anchor_value)
-
-        # Create new Group with updated anchor_id
-        new_group = replace(g, anchor_id=new_anchor_lww)
-
-        # Create new TreeNodeBlock with updated group
-        new_block = replace(tree_node, group=new_group)
-
-        logger.debug(
-            f"Reanchored cross-page TreeNodeBlock {g.node_id}: "
-            f"anchor_id {old_offset} -> {target_char_offset}"
-        )
-
-        return new_block
-
     def paginate_content(self, blocks: list[ContentBlock]) -> list[list[ContentBlock]]:
         """Split content blocks into pages based on line count.
 
@@ -1976,65 +1811,102 @@ class RemarkableGenerator:
 
         return items, text_blocks
 
-    def _reorder_blocks_for_device(self, blocks: list) -> list:
-        """Reorder blocks to match device-expected format.
+    def _build_transform_plan(self, page: RemarkablePage) -> PageTransformPlan:
+        """Build a PageTransformPlan from a RemarkablePage.
 
-        The reMarkable device requires strict block ordering:
-        1. Header blocks (AuthorIdsBlock, MigrationInfoBlock, PageInfoBlock, SceneInfo)
-        2. All SceneTreeBlocks
-        3. RootTextBlock
-        4. All TreeNodeBlocks
-        5. All SceneGroupItemBlocks
-        6. All annotation blocks (SceneLineItemBlock, SceneGlyphItemBlock)
+        Converts the legacy PageAnnotationContext into the new domain types:
+        - StrokeBundles for stroke groups (TreeNodeBlock + strokes)
+        - StrokePlacements with anchor offsets
+        - HighlightPlacements for highlight blocks
 
-        This function takes a list of blocks in any order and returns them
-        in the correct order for device compatibility.
+        Args:
+            page: RemarkablePage with text_items and annotation_context
+
+        Returns:
+            PageTransformPlan ready for executor
         """
-        # Categorize blocks by type
-        header_blocks = []  # AuthorIds, MigrationInfo, PageInfo, SceneInfo
-        scene_tree_blocks = []
-        root_text_block = None
-        tree_node_blocks = []
-        scene_group_item_blocks = []
-        annotation_blocks = []  # SceneLineItemBlock, SceneGlyphItemBlock
+        # Build page text from text items
+        page_text = "\n".join(item.text for item in page.text_items)
+        if not page_text.strip():
+            page_text = " "
 
-        for block in blocks:
-            block_type = type(block).__name__
+        ctx = page.annotation_context
+        stroke_placements: list[StrokePlacement] = []
+        highlight_placements: list[HighlightPlacement] = []
 
-            if block_type in ["AuthorIdsBlock", "MigrationInfoBlock", "PageInfoBlock", "SceneInfo"]:
-                header_blocks.append(block)
-            elif block_type == "SceneTreeBlock":
-                scene_tree_blocks.append(block)
-            elif block_type == "RootTextBlock":
-                root_text_block = block
-            elif block_type == "TreeNodeBlock":
-                tree_node_blocks.append(block)
-            elif block_type == "SceneGroupItemBlock":
-                scene_group_item_blocks.append(block)
-            elif block_type in ["SceneLineItemBlock", "SceneGlyphItemBlock"]:
-                annotation_blocks.append(block)
-            else:
-                # Unknown block type - add to header (preserves order)
-                header_blocks.append(block)
+        if ctx:
+            # Build StrokeBundles from ctx.tree_nodes
+            # Each entry: (TreeNodeBlock, target_offset, SceneGroupItemBlock, SceneTreeBlock)
+            # We need to find matching strokes from ctx.annotations by parent_id
 
-        # Reconstruct in correct order
-        result = []
-        result.extend(header_blocks)
-        result.extend(scene_tree_blocks)
-        if root_text_block:
-            result.append(root_text_block)
-        result.extend(tree_node_blocks)
-        result.extend(scene_group_item_blocks)
-        result.extend(annotation_blocks)
+            # Index strokes by parent_id
+            strokes_by_parent: dict[CrdtId, list] = {}
+            highlight_blocks: list = []
 
-        return result
+            for block in ctx.annotations:
+                block_type = type(block).__name__
+                if block_type == "SceneLineItemBlock":
+                    parent_id = block.parent_id
+                    if parent_id not in strokes_by_parent:
+                        strokes_by_parent[parent_id] = []
+                    strokes_by_parent[parent_id].append(block)
+                elif block_type == "SceneGlyphItemBlock":
+                    highlight_blocks.append(block)
+
+            # Build StrokeBundles from tree_nodes + matching strokes
+            seen_node_ids: set[CrdtId] = set()
+            for tree_node, target_offset, scene_group_item, scene_tree_block in ctx.tree_nodes:
+                if not hasattr(tree_node, "group") or not tree_node.group:
+                    continue
+
+                node_id = tree_node.group.node_id
+
+                # Deduplicate - multiple strokes may reference same TreeNodeBlock
+                if node_id in seen_node_ids:
+                    continue
+                seen_node_ids.add(node_id)
+
+                # Get strokes for this TreeNodeBlock
+                strokes = strokes_by_parent.get(node_id, [])
+
+                # Create StrokeBundle
+                bundle = StrokeBundle(
+                    node_id=node_id,
+                    tree_node=tree_node,
+                    scene_tree=scene_tree_block,
+                    scene_group_item=scene_group_item,
+                    strokes=strokes,
+                )
+
+                # Create StrokePlacement
+                placement = StrokePlacement(
+                    opaque_handle=bundle,
+                    anchor_char_offset=target_offset,
+                )
+                stroke_placements.append(placement)
+
+            # Create HighlightPlacements
+            for block in highlight_blocks:
+                placement = HighlightPlacement(
+                    opaque_handle=block,
+                    start_offset=0,  # Will be computed by executor
+                    end_offset=0,
+                )
+                highlight_placements.append(placement)
+
+        return PageTransformPlan(
+            page_uuid=page.uuid,
+            page_text=page_text,
+            stroke_placements=stroke_placements,
+            highlight_placements=highlight_placements,
+            source_rm_path=ctx.source_rm_path if ctx else None,
+        )
 
     def generate_rm_file(self, page: RemarkablePage) -> bytes:
         """Generate binary .rm file content with custom text width.
 
-        Uses annotation_context to determine generation strategy:
-        - If context has source_rm_path: roundtrip to preserve scene tree
-        - Otherwise: create from scratch
+        Uses PageTransformExecutor for unified .rm generation.
+        This is the SINGLE code path for all .rm file generation.
 
         Args:
             page: RemarkablePage with positioned text items
@@ -2047,512 +1919,20 @@ class RemarkableGenerator:
             which displays at 1.0x zoom on the Paper Pro (vs 0.8x with the
             default 936px width from simple_text_document).
         """
+        # Build transformation plan from page data
+        plan = self._build_transform_plan(page)
+
+        # Execute plan to generate .rm bytes
+        executor = PageTransformExecutor(self.geometry)
+        rm_bytes = executor.execute(plan)
+
         ctx = page.annotation_context
-
-        # Roundtrip if we have a source file (for annotation preservation)
-        if ctx and ctx.source_rm_path and ctx.source_rm_path.exists():
-            return self._generate_rm_file_roundtrip(page)
-
-        # Create from scratch (no annotations or no source file)
-        return self._generate_rm_file_from_scratch(page)
-
-    def _generate_rm_file_roundtrip(self, page: RemarkablePage) -> bytes:
-        """Modify existing .rm file preserving scene tree structure.
-
-        This preserves the original scene tree structure (TreeNodes, SceneGroups,
-        SceneInfo, etc.) which is critical for annotations to display correctly.
-        Only modifies the text content and annotation positions.
-
-        IMPORTANT: When text changes, TreeNodeBlock anchor_ids must be updated
-        to track the original text content. The anchor_id.value.part2 is a
-        character offset into the text. If text is inserted before an anchor,
-        the offset must be adjusted. See docs/STROKE_ANCHORING.md for details.
-
-        Args:
-            page: RemarkablePage with annotation_context
-
-        Returns:
-            Binary .rm file content with preserved structure
-        """
-        ctx = page.annotation_context
-
-        # Read all blocks from original file
-        with open(str(ctx.source_rm_path), "rb") as f:
-            blocks = list(rmscene.read_blocks(f))
-
-        # Prepare new text content
-        combined_text = "\n".join(item.text for item in page.text_items)
-        if not combined_text.strip():
-            combined_text = " "
-
-        # Extract old text from original RootTextBlock for anchor_id adjustment
-        old_text = ""
-        for block in blocks:
-            if type(block).__name__ == "RootTextBlock":
-                for item in block.value.items.sequence_items():
-                    if hasattr(item, "value") and isinstance(item.value, str):
-                        old_text += item.value
-                break
-
-        # Compute anchor offset delta for TreeNodeBlock anchor_id updates
-        # This handles the case where text is inserted before anchor points
-        anchor_offset_delta = self._compute_anchor_offset_delta(old_text, combined_text)
-
-        # Build index of original annotation blocks by block_id for matching
-        original_annotation_ids = set()
-        for block in blocks:
-            block_type = type(block).__name__
-            if block_type in ["SceneLineItemBlock", "SceneGlyphItemBlock"]:
-                if hasattr(block, "item") and hasattr(block.item, "item_id"):
-                    original_annotation_ids.add(block.item.item_id)
-
-        # Get IDs of annotations that moved OUT of this page (should be excluded)
-        if ctx.exclude_ids:
-            logger.debug(f"Excluding {len(ctx.exclude_ids)} annotations that moved to other pages")
-
-        # Build index of adjusted annotations by item_id
-        # Also track which are from the same file (can be matched) vs cross-page (must inject)
-        adjusted_by_id = {}
-        cross_page_to_inject = []
-        for adj_block in ctx.annotations:
-            if hasattr(adj_block, "item") and hasattr(adj_block.item, "item_id"):
-                item_id = adj_block.item.item_id
-                if item_id in original_annotation_ids:
-                    # Same file - can match by ID
-                    adjusted_by_id[item_id] = adj_block
-                else:
-                    # Cross-page - needs injection
-                    cross_page_to_inject.append(adj_block)
-            else:
-                # No item_id - inject as cross-page
-                cross_page_to_inject.append(adj_block)
-
-        if cross_page_to_inject:
-            logger.debug(f"Cross-page annotations to inject: {len(cross_page_to_inject)}")
-
-        # Modify blocks in place
-        modified_blocks = []
-        annotation_count = 0
-
-        for block in blocks:
-            block_type = type(block).__name__
-
-            # Replace text content in RootTextBlock
-            if block_type == "RootTextBlock":
-                # Build styles dictionary with newline markers
-                styles = self._build_text_styles(combined_text)
-
-                # Create new RootTextBlock with updated text but same structure
-                modified_block = RootTextBlock(
-                    block_id=block.block_id,
-                    value=si.Text(
-                        items=CrdtSequence(
-                            [
-                                CrdtSequenceItem(
-                                    item_id=CrdtId(1, 16),
-                                    left_id=CrdtId(0, 0),
-                                    right_id=CrdtId(0, 0),
-                                    deleted_length=0,
-                                    value=combined_text,
-                                )
-                            ]
-                        ),
-                        styles=styles,  # Now includes newline markers
-                        pos_x=block.value.pos_x,
-                        pos_y=block.value.pos_y,
-                        width=block.value.width,
-                    ),
-                )
-                modified_blocks.append(modified_block)
-                logger.debug(
-                    f"Replaced text content in RootTextBlock ({len(combined_text)} chars, {combined_text.count(chr(10))} newlines)"
-                )
-
-            # Replace annotation blocks with adjusted versions
-            elif block_type in ["SceneLineItemBlock", "SceneGlyphItemBlock"]:
-                # Try to find adjusted version by item_id
-                if hasattr(block, "item") and hasattr(block.item, "item_id"):
-                    item_id = block.item.item_id
-                    # Skip annotations that moved to other pages
-                    if item_id in ctx.exclude_ids:
-                        logger.debug(f"Excluding annotation {item_id} (moved to another page)")
-                        continue
-                    if item_id in adjusted_by_id:
-                        modified_blocks.append(adjusted_by_id[item_id])
-                        annotation_count += 1
-                    else:
-                        # No adjusted version, keep original
-                        modified_blocks.append(block)
-                        annotation_count += 1
-                else:
-                    # Can't match, keep original
-                    modified_blocks.append(block)
-                    annotation_count += 1
-
-            # Update PageInfoBlock with new text stats
-            elif block_type == "PageInfoBlock":
-                modified_block = PageInfoBlock(
-                    loads_count=block.loads_count,
-                    merges_count=block.merges_count,
-                    text_chars_count=len(combined_text) + 1,
-                    text_lines_count=combined_text.count("\n") + 1,
-                )
-                modified_blocks.append(modified_block)
-
-            # Update TreeNodeBlock anchor_ids to track text content
-            elif block_type == "TreeNodeBlock":
-                # Skip TreeNodeBlocks that moved to other pages
-                node_id = block.group.node_id if hasattr(block, "group") and block.group else None
-                if node_id and node_id in ctx.exclude_tree_node_ids:
-                    logger.debug(f"Excluding TreeNodeBlock {node_id} (moved to another page)")
-                    continue
-
-                # Also skip if this TreeNodeBlock will be injected as cross-page
-                # (to avoid duplicates with different anchor values)
-                cross_page_node_ids = {
-                    tn.group.node_id for tn, _, _, _ in ctx.tree_nodes if tn.group
-                }
-                if node_id and node_id in cross_page_node_ids:
-                    logger.debug(
-                        f"Skipping TreeNodeBlock {node_id} (will be injected as cross-page)"
-                    )
-                    continue
-
-                if anchor_offset_delta != 0:
-                    modified_block = self._update_tree_node_anchor(block, anchor_offset_delta)
-                    modified_blocks.append(modified_block)
-                else:
-                    modified_blocks.append(block)
-
-            # Filter SceneTreeBlock for excluded tree node IDs
-            elif block_type == "SceneTreeBlock":
-                # Skip SceneTreeBlocks for nodes that moved to other pages
-                tree_id = block.tree_id if hasattr(block, "tree_id") else None
-                if tree_id and tree_id in ctx.exclude_tree_node_ids:
-                    logger.debug(f"Excluding SceneTreeBlock {tree_id} (moved to another page)")
-                    continue
-                # Also skip if this will be injected as cross-page
-                cross_page_node_ids = {
-                    tn.group.node_id for tn, _, _, _ in ctx.tree_nodes if tn.group
-                }
-                if tree_id and tree_id in cross_page_node_ids:
-                    logger.debug(
-                        f"Skipping SceneTreeBlock {tree_id} (will be injected as cross-page)"
-                    )
-                    continue
-                modified_blocks.append(block)
-
-            # Filter SceneGroupItemBlock for excluded tree node IDs
-            elif block_type == "SceneGroupItemBlock":
-                # Skip SceneGroupItemBlocks for nodes that moved to other pages
-                value_id = (
-                    block.item.value
-                    if hasattr(block, "item") and hasattr(block.item, "value")
-                    else None
-                )
-                if value_id and value_id in ctx.exclude_tree_node_ids:
-                    logger.debug(
-                        f"Excluding SceneGroupItemBlock {value_id} (moved to another page)"
-                    )
-                    continue
-                # Also skip if this will be injected as cross-page
-                cross_page_node_ids = {
-                    tn.group.node_id for tn, _, _, _ in ctx.tree_nodes if tn.group
-                }
-                if value_id and value_id in cross_page_node_ids:
-                    logger.debug(
-                        f"Skipping SceneGroupItemBlock {value_id} (will be injected as cross-page)"
-                    )
-                    continue
-                modified_blocks.append(block)
-
-            # Keep all other blocks unchanged
-            else:
-                modified_blocks.append(block)
-
-        # Inject cross-page TreeNodeBlocks FIRST (strokes reference them via parent_id)
-        # Use DELTA approach: shift all anchors by the same amount to preserve relative spacing
-        if ctx.tree_nodes:
-            # Deduplicate: Multiple strokes may share the same TreeNodeBlock
-            seen_node_ids: set[CrdtId] = set()
-            unique_tree_nodes = []
-            for tree_node, target_offset, scene_group_item, scene_tree_block in ctx.tree_nodes:
-                if hasattr(tree_node, "group") and tree_node.group:
-                    node_id = tree_node.group.node_id
-                    if node_id not in seen_node_ids:
-                        seen_node_ids.add(node_id)
-                        unique_tree_nodes.append(
-                            (tree_node, target_offset, scene_group_item, scene_tree_block)
-                        )
-
-            # Compute offset_delta from FIRST TreeNodeBlock
-            # delta = target_position - original_anchor_id
-            # This preserves relative spacing between all anchor points
-            offset_delta = 0
-            if unique_tree_nodes:
-                first_tree_node, first_target_offset, _, _ = unique_tree_nodes[0]
-                if hasattr(first_tree_node, "group") and first_tree_node.group:
-                    g = first_tree_node.group
-                    if hasattr(g, "anchor_id") and g.anchor_id and g.anchor_id.value:
-                        original_anchor = g.anchor_id.value.part2
-                        # Only compute delta for non-sentinel anchors
-                        if original_anchor != END_OF_DOC_ANCHOR_MARKER:
-                            offset_delta = first_target_offset - original_anchor
-                            logger.debug(
-                                f"Cross-page offset_delta: {first_target_offset} - {original_anchor} = {offset_delta}"
-                            )
-
+        if ctx and ctx.source_rm_path:
             logger.info(
-                f"INJECTING {len(unique_tree_nodes)} unique TreeNodeBlocks "
-                f"(from {len(ctx.tree_nodes)} total) with offset_delta={offset_delta}"
-            )
-            for (
-                tree_node,
-                _target_offset,  # Unused - we use delta instead
-                scene_group_item,
-                scene_tree_block,
-            ) in unique_tree_nodes:
-                # Apply delta to preserve relative spacing between anchors
-                reanchored_node = self._update_tree_node_anchor(tree_node, offset_delta)
-                modified_blocks.append(reanchored_node)
-
-                if hasattr(tree_node, "group") and tree_node.group:
-                    node_id = tree_node.group.node_id
-
-                    # Inject SceneTreeBlock to declare this node in the scene tree
-                    # This MUST come before SceneGroupItemBlock that references it
-                    new_scene_tree_block = SceneTreeBlock(
-                        tree_id=node_id,
-                        node_id=CrdtId(0, 0),
-                        is_update=True,
-                        parent_id=CrdtId(0, 11),  # Layer 1
-                    )
-                    modified_blocks.append(new_scene_tree_block)
-                    logger.debug(f"Injected SceneTreeBlock for TreeNode {node_id}")
-
-                    # Create a NEW SceneGroupItemBlock to link TreeNodeBlock to scene graph
-                    # The original scene_group_item has left_id/right_id referencing nodes
-                    # from the source page that don't exist here. Reset them to (0,0).
-                    if scene_group_item:
-                        new_scene_group_item = SceneGroupItemBlock(
-                            parent_id=CrdtId(0, 11),  # Layer 1
-                            item=CrdtSequenceItem(
-                                item_id=scene_group_item.item.item_id,  # Keep original ID
-                                left_id=CrdtId(0, 0),  # Reset - no left neighbor
-                                right_id=CrdtId(0, 0),  # Reset - no right neighbor
-                                deleted_length=0,
-                                value=node_id,  # The TreeNodeBlock we're linking
-                            ),
-                        )
-                        modified_blocks.append(new_scene_group_item)
-                        logger.debug(f"Injected SceneGroupItemBlock for TreeNode {node_id}")
-            logger.info(
-                f"Injected {len(unique_tree_nodes)} cross-page TreeNodeBlocks (reanchored) with SceneTreeBlocks and SceneGroupItemBlocks"
+                f"Generated .rm file via executor: {len(rm_bytes)} bytes "
+                f"({len(plan.stroke_placements)} strokes, {len(plan.highlight_placements)} highlights)"
             )
         else:
-            logger.warning("NO TreeNodeBlocks to inject (ctx.tree_nodes is empty)")
-
-        # Inject cross-page annotations that couldn't be matched by item_id
-        if cross_page_to_inject:
-            for inj_block in cross_page_to_inject:
-                modified_blocks.append(inj_block)
-                annotation_count += 1
-            logger.info(f"Injected {len(cross_page_to_inject)} cross-page annotations")
-
-        # Reorder blocks for device compatibility
-        # Device requires: SceneTreeBlocks → RootTextBlock → TreeNodeBlocks → SceneGroupItemBlocks → Strokes
-        modified_blocks = self._reorder_blocks_for_device(modified_blocks)
-
-        # Serialize to binary
-        buffer = io.BytesIO()
-        rmscene.write_blocks(buffer, modified_blocks)
-        rm_bytes = buffer.getvalue()
-
-        # Validate scene graph integrity before returning
-        validation = validate_scene_graph(rm_bytes)
-        if not validation.is_valid:
-            for error in validation.errors:
-                logger.error(f"Scene graph validation error: {error}")
-            raise ValueError(
-                f"Generated .rm file failed validation with {len(validation.errors)} errors: "
-                f"{[str(e) for e in validation.errors]}"
-            )
-
-        logger.info(
-            f"Generated .rm file via round-trip: {len(rm_bytes)} bytes, "
-            f"{len(modified_blocks)} blocks ({annotation_count} annotations, preserved scene tree)"
-        )
-
-        return rm_bytes
-
-    def _generate_rm_file_from_scratch(self, page: RemarkablePage) -> bytes:
-        """Create new .rm file from scratch (original generate_rm_file logic).
-
-        Used when there are no annotations to preserve.
-        """
-        # Combine all text items into a single text block
-        combined_text = "\n".join(item.text for item in page.text_items)
-
-        if not combined_text.strip():
-            combined_text = " "  # At least one space for empty pages
-
-        # Build styles dictionary with newline markers
-        styles = self._build_text_styles(combined_text)
-
-        # Generate blocks manually with custom text width
-        author_uuid = uuid4()
-
-        blocks = [
-            AuthorIdsBlock(author_uuids={1: author_uuid}),
-            MigrationInfoBlock(migration_id=CrdtId(1, 1), is_device=True),
-            PageInfoBlock(
-                loads_count=1,
-                merges_count=0,
-                text_chars_count=len(combined_text) + 1,
-                text_lines_count=combined_text.count("\n") + 1,
-            ),
-            SceneTreeBlock(
-                tree_id=CrdtId(0, 11),
-                node_id=CrdtId(0, 0),
-                is_update=True,
-                parent_id=CrdtId(0, 1),
-            ),
-            RootTextBlock(
-                block_id=CrdtId(0, 0),
-                value=si.Text(
-                    items=CrdtSequence(
-                        [
-                            CrdtSequenceItem(
-                                item_id=CrdtId(1, 16),
-                                left_id=CrdtId(0, 0),
-                                right_id=CrdtId(0, 0),
-                                deleted_length=0,
-                                value=combined_text,
-                            )
-                        ]
-                    ),
-                    styles=styles,  # Now includes newline markers at format code 10
-                    pos_x=self.geometry.text_pos_x,
-                    pos_y=self.geometry.text_pos_y,
-                    width=self.geometry.text_width,
-                ),
-            ),
-            TreeNodeBlock(
-                si.Group(
-                    node_id=CrdtId(0, 1),
-                )
-            ),
-            TreeNodeBlock(
-                si.Group(
-                    node_id=CrdtId(0, 11),
-                    label=LwwValue(timestamp=CrdtId(0, 12), value="Layer 1"),
-                )
-            ),
-            SceneGroupItemBlock(
-                parent_id=CrdtId(0, 1),
-                item=CrdtSequenceItem(
-                    item_id=CrdtId(0, 13),
-                    left_id=CrdtId(0, 0),
-                    right_id=CrdtId(0, 0),
-                    deleted_length=0,
-                    value=CrdtId(0, 11),
-                ),
-            ),
-        ]
-
-        # Add preserved annotations (strokes and highlights) from context
-        ctx = page.annotation_context
-        if ctx and ctx.annotations:
-            if ctx.tree_nodes:
-                # Deduplicate: Multiple strokes may share the same TreeNodeBlock
-                # (e.g., margin notes all use one TreeNodeBlock). Only inject once per node_id.
-                seen_node_ids: set[CrdtId] = set()
-                unique_tree_nodes = []
-                for tree_node, target_offset, scene_group_item, scene_tree_block in ctx.tree_nodes:
-                    if hasattr(tree_node, "group") and tree_node.group:
-                        node_id = tree_node.group.node_id
-                        if node_id not in seen_node_ids:
-                            seen_node_ids.add(node_id)
-                            unique_tree_nodes.append(
-                                (tree_node, target_offset, scene_group_item, scene_tree_block)
-                            )
-
-                logger.warning(
-                    f"FROM-SCRATCH: Injecting {len(unique_tree_nodes)} unique TreeNodeBlocks "
-                    f"(from {len(ctx.tree_nodes)} total)"
-                )
-
-                for (
-                    tree_node,
-                    target_offset,
-                    scene_group_item,
-                    scene_tree_block,
-                ) in unique_tree_nodes:
-                    # Reanchor TreeNodeBlock for this page
-                    reanchored_node = self._reanchor_tree_node_for_cross_page(
-                        tree_node, target_offset, page
-                    )
-                    blocks.append(reanchored_node)
-
-                    if hasattr(tree_node, "group") and tree_node.group:
-                        node_id = tree_node.group.node_id
-
-                        # SceneTreeBlock to declare this node in the scene tree
-                        new_scene_tree_block = SceneTreeBlock(
-                            tree_id=node_id,
-                            node_id=CrdtId(0, 0),
-                            is_update=True,
-                            parent_id=CrdtId(0, 11),  # Layer 1
-                        )
-                        blocks.append(new_scene_tree_block)
-                        logger.debug(
-                            f"FROM-SCRATCH: Prepared SceneTreeBlock for TreeNode {node_id}"
-                        )
-
-                        # SceneGroupItemBlock to link TreeNodeBlock to scene graph
-                        if scene_group_item:
-                            new_scene_group_item = SceneGroupItemBlock(
-                                parent_id=CrdtId(0, 11),  # Layer 1
-                                item=CrdtSequenceItem(
-                                    item_id=scene_group_item.item.item_id,  # Keep original ID
-                                    left_id=CrdtId(0, 0),  # Reset - no left neighbor
-                                    right_id=CrdtId(0, 0),  # Reset - no right neighbor
-                                    deleted_length=0,
-                                    value=node_id,  # The TreeNodeBlock we're linking
-                                ),
-                            )
-                            blocks.append(new_scene_group_item)
-                            logger.debug(
-                                f"FROM-SCRATCH: Prepared SceneGroupItemBlock for TreeNode {node_id}"
-                            )
-
-            # Add the annotation blocks (strokes, highlights)
-            blocks.extend(ctx.annotations)
-            logger.debug(f"Added {len(ctx.annotations)} preserved annotation blocks to .rm file")
-
-        # Reorder blocks for device compatibility
-        # Device requires: SceneTreeBlocks → RootTextBlock → TreeNodeBlocks → SceneGroupItemBlocks → Strokes
-        blocks = self._reorder_blocks_for_device(blocks)
-
-        # Serialize to binary format
-        buffer = io.BytesIO()
-        rmscene.write_blocks(buffer, blocks)
-        rm_bytes = buffer.getvalue()
-
-        # Validate scene graph integrity before returning
-        validation = validate_scene_graph(rm_bytes)
-        if not validation.is_valid:
-            for error in validation.errors:
-                logger.error(f"Scene graph validation error: {error}")
-            raise ValueError(
-                f"Generated .rm file failed validation with {len(validation.errors)} errors: "
-                f"{[str(e) for e in validation.errors]}"
-            )
-
-        logger.debug(
-            f"Generated .rm file: {len(rm_bytes)} bytes, "
-            f"{len(page.text_items)} text items, "
-            f"{len(combined_text)} characters"
-        )
+            logger.debug(f"Generated .rm file from scratch: {len(rm_bytes)} bytes")
 
         return rm_bytes
