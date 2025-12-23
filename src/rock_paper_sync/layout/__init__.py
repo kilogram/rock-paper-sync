@@ -41,6 +41,7 @@ from .constants import LayoutConstants
 from .context import LayoutContext, TextAreaConfig
 from .device import DEFAULT_DEVICE, PAPER_PRO_MOVE, DeviceGeometry
 from .engine import WordWrapLayoutEngine
+from .paginator import HEADER_ORPHAN_THRESHOLD_LINES, ContentPaginator
 
 __all__ = [
     # Primary exports (use these for new code)
@@ -50,6 +51,8 @@ __all__ = [
     "LayoutContext",
     "TextAreaConfig",
     "WordWrapLayoutEngine",
+    "ContentPaginator",
+    "HEADER_ORPHAN_THRESHOLD_LINES",
     # Backward compatibility
     "LayoutConstants",
 ]

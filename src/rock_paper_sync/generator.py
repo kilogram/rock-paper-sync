@@ -1709,8 +1709,9 @@ class RemarkableGenerator:
     def paginate_content(self, blocks: list[ContentBlock]) -> list[list[ContentBlock]]:
         """Split content blocks into pages based on line count.
 
-        This method estimates how many lines each block will take and breaks
-        content into pages that fit within the configured lines_per_page limit.
+        This method uses ContentPaginator for consistent pagination logic shared
+        with DocumentModel. It also sets page_index and page_y_start on each
+        block for annotation mapping.
 
         Args:
             blocks: List of content blocks to paginate
@@ -1720,107 +1721,26 @@ class RemarkableGenerator:
 
         Note:
             - Headers near the bottom of a page start a new page
-            - Blocks are never split mid-way
+            - Oversized paragraphs (>1 page) are always split
             - Empty content results in one empty page
         """
-        if not blocks:
-            # At least one empty page
-            return [[]]
+        from rock_paper_sync.layout import ContentPaginator
 
-        pages: list[list[ContentBlock]] = []
-        current_page: list[ContentBlock] = []
-        current_lines = 0
-        y_position = float(self.geometry.text_pos_y)  # Track Y for annotation mapping
+        paginator = ContentPaginator(
+            layout_engine=self.layout_engine,
+            lines_per_page=self.geometry.lines_per_page,
+            allow_paragraph_splitting=self.layout.allow_paragraph_splitting,
+        )
+        pages = paginator.paginate(blocks)
 
-        for block in blocks:
-            block_lines = self.estimate_block_lines(block)
-            block.page_y_start = y_position  # Set Y position for annotation mapping
-            block.page_index = len(pages)  # Track which page this block is on
-
-            # Check if header should start new page (avoid orphan headers)
-            if block.type == BlockType.HEADER and current_page:
-                remaining_space = self.geometry.lines_per_page - current_lines
-                if remaining_space < 10:  # Less than 10 lines remaining
-                    pages.append(current_page)
-                    current_page = []
-                    current_lines = 0
-                    y_position = float(self.geometry.text_pos_y)
-                    block.page_y_start = y_position
-                    block.page_index = len(pages)  # Update to new page
-
-            # Check if block fits on current page
-            if current_lines + block_lines > self.geometry.lines_per_page:
-                # Block doesn't fit on current page
-                is_paragraph = block.type == BlockType.PARAGRAPH
-                is_oversized = block_lines > self.geometry.lines_per_page
-                should_split = is_paragraph and (
-                    self.layout.allow_paragraph_splitting or is_oversized
-                )
-
-                if should_split:
-                    # Split paragraph using layout engine
-                    # Only fill remaining page space when splitting is explicitly allowed
-                    # For forced oversized splits, start on a new page
-                    if self.layout.allow_paragraph_splitting:
-                        remaining_lines = self.geometry.lines_per_page - current_lines
-                        chunks = self.layout_engine.split_for_pages(
-                            block.text,
-                            self.geometry.lines_per_page,
-                            first_chunk_lines=remaining_lines,
-                        )
-                    else:
-                        # Forced split (oversized) - start on new page with full-page chunks
-                        if current_page:
-                            pages.append(current_page)
-                        current_page = []
-                        current_lines = 0
-                        y_position = float(self.geometry.text_pos_y)
-                        chunks = self.layout_engine.split_for_pages(
-                            block.text, self.geometry.lines_per_page
-                        )
-
-                    for i, chunk_text in enumerate(chunks):
-                        chunk_lines = len(
-                            self.layout_engine.calculate_line_breaks(
-                                chunk_text, self.geometry.text_width
-                            )
-                        )
-
-                        # Start new page after first chunk (first chunk fits by design)
-                        if i > 0:
-                            if current_page:
-                                pages.append(current_page)
-                            current_page = []
-                            current_lines = 0
-                            y_position = float(self.geometry.text_pos_y)
-
-                        chunk_block = ContentBlock(
-                            type=block.type,
-                            level=block.level,
-                            text=chunk_text,
-                            formatting=block.formatting if i == 0 else [],
-                            page_index=len(pages),  # Track which page this chunk is on
-                        )
-                        current_page.append(chunk_block)
-                        current_lines += chunk_lines
-                        y_position += chunk_lines * self.line_height
-                else:
-                    # Atomic block placement - start new page
-                    if current_page:
-                        pages.append(current_page)
-                    current_page = [block]
-                    current_lines = block_lines
-                    y_position = float(self.geometry.text_pos_y) + block_lines * self.line_height
-                    block.page_y_start = float(self.geometry.text_pos_y)
-                    block.page_index = len(pages)  # Update to new page
-            else:
-                current_page.append(block)
-                current_lines += block_lines
+        # Post-process: set page_index and page_y_start on each block
+        for page_idx, page_blocks in enumerate(pages):
+            y_position = float(self.geometry.text_pos_y)
+            for block in page_blocks:
+                block.page_index = page_idx
+                block.page_y_start = y_position
+                block_lines = self.estimate_block_lines(block)
                 y_position += block_lines * self.line_height
-
-        # Don't forget the last page
-        if current_page:
-            pages.append(current_page)
 
         logger.info(
             f"Paginated {len(blocks)} blocks into {len(pages)} page(s), "

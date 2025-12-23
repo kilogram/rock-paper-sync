@@ -1379,7 +1379,6 @@ class DocumentModel:
             layout_engine: Optional layout engine for line estimation (created if not provided)
         """
         from rock_paper_sync.layout import WordWrapLayoutEngine
-        from rock_paper_sync.parser import BlockType, ContentBlock
 
         if not self.geometry:
             raise ValueError("DocumentModel requires geometry for page projection")
@@ -1407,109 +1406,15 @@ class DocumentModel:
                 )
             ]
 
-        # Paginate content blocks (mirrors generator.paginate_content)
-        page_block_lists: list[list[ContentBlock]] = []
-        current_page_blocks: list[ContentBlock] = []
-        current_lines = 0
+        # Use shared paginator for consistent pagination with generator
+        from rock_paper_sync.layout import ContentPaginator
 
-        for block in self.content_blocks:
-            block_lines = self._estimate_block_lines(block, layout_engine)
-
-            # Header orphan prevention: headers near bottom start new page
-            if block.type == BlockType.HEADER and current_page_blocks:
-                remaining_space = self.lines_per_page - current_lines
-                if remaining_space < 10:  # Less than 10 lines remaining
-                    page_block_lists.append(current_page_blocks)
-                    current_page_blocks = []
-                    current_lines = 0
-
-            # Check if block fits on current page
-            if current_lines + block_lines > self.lines_per_page:
-                # Block doesn't fit on current page
-                is_paragraph = block.type == BlockType.PARAGRAPH
-                is_oversized = block_lines > self.lines_per_page
-                should_split = is_paragraph and (self.allow_paragraph_splitting or is_oversized)
-
-                if should_split and current_page_blocks:
-                    # Split paragraph using layout engine
-                    remaining_lines = self.lines_per_page - current_lines
-                    if self.allow_paragraph_splitting and remaining_lines > 0:
-                        # Fill remaining space on current page, then full pages
-                        chunks = layout_engine.split_for_pages(
-                            block.text,
-                            self.lines_per_page,
-                            first_chunk_lines=remaining_lines,
-                        )
-                    else:
-                        # Forced split (oversized) - start on new page with full-page chunks
-                        page_block_lists.append(current_page_blocks)
-                        current_page_blocks = []
-                        current_lines = 0
-                        chunks = layout_engine.split_for_pages(block.text, self.lines_per_page)
-
-                    for i, chunk_text in enumerate(chunks):
-                        chunk_lines = len(
-                            layout_engine.calculate_line_breaks(
-                                chunk_text, layout_engine.text_width
-                            )
-                        )
-
-                        # Start new page after first chunk (first chunk fits by design)
-                        if i > 0:
-                            if current_page_blocks:
-                                page_block_lists.append(current_page_blocks)
-                            current_page_blocks = []
-                            current_lines = 0
-
-                        chunk_block = ContentBlock(
-                            type=block.type,
-                            level=block.level,
-                            text=chunk_text,
-                            formatting=block.formatting if i == 0 else [],
-                            page_index=len(page_block_lists),
-                        )
-                        current_page_blocks.append(chunk_block)
-                        current_lines += chunk_lines
-                elif should_split and not current_page_blocks:
-                    # Oversized paragraph on empty page - split across pages
-                    chunks = layout_engine.split_for_pages(block.text, self.lines_per_page)
-                    for i, chunk_text in enumerate(chunks):
-                        chunk_lines = len(
-                            layout_engine.calculate_line_breaks(
-                                chunk_text, layout_engine.text_width
-                            )
-                        )
-                        if i > 0:
-                            if current_page_blocks:
-                                page_block_lists.append(current_page_blocks)
-                            current_page_blocks = []
-                            current_lines = 0
-
-                        chunk_block = ContentBlock(
-                            type=block.type,
-                            level=block.level,
-                            text=chunk_text,
-                            formatting=block.formatting if i == 0 else [],
-                            page_index=len(page_block_lists),
-                        )
-                        current_page_blocks.append(chunk_block)
-                        current_lines += chunk_lines
-                elif current_page_blocks:
-                    # Atomic block placement - start new page
-                    page_block_lists.append(current_page_blocks)
-                    current_page_blocks = [block]
-                    current_lines = block_lines
-                else:
-                    # First block on page, just add it
-                    current_page_blocks.append(block)
-                    current_lines = block_lines
-            else:
-                current_page_blocks.append(block)
-                current_lines += block_lines
-
-        # Don't forget the last page
-        if current_page_blocks:
-            page_block_lists.append(current_page_blocks)
+        paginator = ContentPaginator(
+            layout_engine=layout_engine,
+            lines_per_page=self.lines_per_page,
+            allow_paragraph_splitting=self.allow_paragraph_splitting,
+        )
+        page_block_lists = paginator.paginate(self.content_blocks)
 
         # Build PageProjections from paginated blocks
         pages: list[PageProjection] = []
@@ -1671,38 +1576,6 @@ class DocumentModel:
                 )
 
         return pages
-
-    def _estimate_block_lines(
-        self,
-        block: ContentBlock,
-        layout_engine: WordWrapLayoutEngine,
-    ) -> int:
-        """Estimate how many lines a block will take.
-
-        Mirrors generator.estimate_block_lines() logic.
-        """
-        from rock_paper_sync.parser import BlockType
-
-        if not self.geometry:
-            return 1
-
-        if block.type == BlockType.HORIZONTAL_RULE:
-            return 1
-
-        # Use layout engine to calculate actual line breaks
-        line_breaks = layout_engine.calculate_line_breaks(
-            block.text,
-            self.geometry.text_width,
-        )
-
-        # Add extra spacing for headers and code blocks
-        extra_lines = 0
-        if block.type == BlockType.HEADER:
-            extra_lines = 1  # Space after header
-        elif block.type == BlockType.CODE_BLOCK:
-            extra_lines = 1  # Space around code
-
-        return len(line_breaks) + extra_lines
 
     def _find_anchor_position(self, anchor: AnchorContext) -> int | None:
         """Find character position of an anchor in the document."""
