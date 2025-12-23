@@ -478,13 +478,20 @@ class RemarkableGenerator:
         existing_page_uuids = existing_page_uuids or []
 
         # Create DocumentModel from content blocks (V2 architecture)
-        new_model = DocumentModel.from_content_blocks(md_doc.content, self.geometry)
+        new_model = DocumentModel.from_content_blocks(
+            md_doc.content,
+            self.geometry,
+            allow_paragraph_splitting=self.layout.allow_paragraph_splitting,
+        )
 
         # If we have existing .rm files, load old model and migrate annotations
         if existing_rm_files:
             valid_rm_files = [p for p in existing_rm_files if p and p.exists()]
             if valid_rm_files:
                 old_model = DocumentModel.from_rm_files(valid_rm_files, self.geometry)
+                logger.info(
+                    f"generate_document: old_model has {len(old_model.annotations)} annotations"
+                )
                 if old_model.annotations:
                     new_model, report = old_model.migrate_annotations_to(new_model)
                     logger.info(
@@ -515,6 +522,9 @@ class RemarkableGenerator:
             )
 
             # Add annotations from projection
+            logger.info(
+                f"Page {projection.page_index}: projection.annotations has {len(projection.annotations) if projection.annotations else 0} items"
+            )
             if projection.annotations:
                 self._apply_annotations_to_page(page, projection, uuid_to_rm_path)
 
@@ -580,13 +590,52 @@ class RemarkableGenerator:
             block_type = type(block).__name__
 
             if "Glyph" in block_type:
-                # Highlight - adjust coordinates for this page
-                adjusted_block = self._adjust_highlight_for_projection(
-                    block,
-                    page_text,
-                    new_origin,
-                    doc_anno.anchor_context,
-                )
+                # Highlight - use HighlightHandler.relocate for delta-based positioning
+                # This preserves original rectangle precision while correctly shifting positions
+                from rock_paper_sync.annotations.handlers.highlight_handler import HighlightHandler
+
+                # Get old text from source page using source_page_idx
+                source_page_idx = doc_anno.source_page_idx
+                old_text = ""
+                old_origin = new_origin  # Default to same origin
+
+                # Find source .rm file from uuid_to_rm_path using page index
+                # The uuid_to_rm_path maps page UUIDs to .rm files
+                if source_page_idx is not None and uuid_to_rm_path:
+                    # Get the rm_path for the source page (UUIDs are ordered by page)
+                    rm_paths = list(uuid_to_rm_path.values())
+                    if source_page_idx < len(rm_paths):
+                        source_rm_path = rm_paths[source_page_idx]
+                        try:
+                            _, old_origin_y, old_text = self._extract_text_blocks_from_rm(
+                                source_rm_path
+                            )
+                            old_origin = (self.geometry.text_pos_x, old_origin_y)
+                        except Exception as e:
+                            logger.warning(f"Could not get old text from {source_rm_path}: {e}")
+
+                if old_text:
+                    # Use HighlightHandler.relocate for delta-based positioning
+                    handler = HighlightHandler()
+                    adjusted_block = handler.relocate(
+                        block,
+                        old_text,
+                        page_text,
+                        old_origin,
+                        new_origin,
+                        self.layout_engine,
+                        self.geometry,
+                        crdt_base_id=16,  # Default CRDT base
+                    )
+                else:
+                    # Fallback to simple projection when no old text available
+                    adjusted_block = self._adjust_highlight_for_projection(
+                        block,
+                        page_text,
+                        new_origin,
+                        doc_anno.anchor_context,
+                    )
+
                 if adjusted_block:
                     ctx.annotations.append(adjusted_block)
 
@@ -721,13 +770,12 @@ class RemarkableGenerator:
             return block
 
         # Find where this highlight is in the page text
-        offset = page_text.find(highlight_text)
+        # Use context disambiguation if there are multiple occurrences
+        offset = self._find_highlight_with_context(highlight_text, page_text, anchor_context)
+
         if offset == -1:
-            # Try anchor context text
-            offset = page_text.find(anchor_context.text_content)
-            if offset == -1:
-                logger.warning(f"Could not find highlight '{highlight_text[:30]}...' in page")
-                return None
+            logger.warning(f"Could not find highlight '{highlight_text[:30]}...' in page")
+            return None
 
         # Get original rectangles for shape preservation
         if not hasattr(glyph_value, "rectangles") or not glyph_value.rectangles:
@@ -738,6 +786,7 @@ class RemarkableGenerator:
 
         # Calculate new highlight rectangles using layout engine
         end_offset = offset + len(highlight_text)
+
         new_rects = self.layout_engine.calculate_highlight_rectangles(
             offset, end_offset, page_text, new_origin, self.geometry.text_width
         )
@@ -748,10 +797,39 @@ class RemarkableGenerator:
             )
             return block
 
-        # Replace rectangles with newly calculated ones (preserving original height)
+        # IMPORTANT: Our layout engine may produce different X positions than the device
+        # because text wrapping can differ between font renderers.
+        # Strategy: Use calculated Y (to handle paragraph insertion), but preserve
+        # original X offset from origin when the text width is similar.
+        orig_rect = original_rects[0]
+        orig_x_offset = orig_rect.x - new_origin[0]  # X offset from origin
+
+        # Check if original was near line start (within ~10px of origin)
+        orig_at_line_start = abs(orig_x_offset) < 15
+
+        # Replace rectangles with calculated Y but potentially preserved X
         glyph_value.rectangles.clear()
-        for x, y, w, h in new_rects:
-            glyph_value.rectangles.append(si.Rectangle(x, y, w, original_height))
+        for i, (calc_x, calc_y, calc_w, calc_h) in enumerate(new_rects):
+            if i < len(original_rects):
+                orig_r = original_rects[i]
+                # Preserve original X if it was meaningful (not a full recalculation)
+                # Use original X when original was at line start and calculated is similar,
+                # or when original X offset was near zero (highlight at line start)
+                if orig_at_line_start:
+                    # Original was at line start - preserve that relationship
+                    # Find where this line starts and position there
+                    final_x = new_origin[0]  # At origin = line start
+                else:
+                    # Original had meaningful X offset - preserve it
+                    # This handles cases where our wrapping differs from device
+                    final_x = orig_r.x
+                final_y = calc_y  # Always use calculated Y for pagination
+                glyph_value.rectangles.append(
+                    si.Rectangle(final_x, final_y, calc_w, original_height)
+                )
+            else:
+                # Extra rectangles (multiline highlight expanded) - use calculated
+                glyph_value.rectangles.append(si.Rectangle(calc_x, calc_y, calc_w, original_height))
 
         # Update offset fields
         glyph_value.start = offset
@@ -770,6 +848,92 @@ class RemarkableGenerator:
         )
 
         return block
+
+    def _find_highlight_with_context(
+        self,
+        highlight_text: str,
+        page_text: str,
+        anchor_context: AnchorContext,
+    ) -> int:
+        """Find highlight text in page using edit-resilient anchoring.
+
+        Uses multiple strategies in order of preference:
+        1. DiffAnchor - finds stable text before/after the highlight
+        2. Context similarity - fuzzy match on context_before/context_after
+        3. Simple find - first occurrence (fallback)
+
+        Args:
+            highlight_text: The highlighted text to find
+            page_text: Full page text content
+            anchor_context: AnchorContext with diff_anchor and context windows
+
+        Returns:
+            Character offset of highlight, or -1 if not found
+        """
+        import difflib
+
+        # Strategy 1: Use DiffAnchor if available (most reliable for edits)
+        if anchor_context.diff_anchor:
+            span = anchor_context.diff_anchor.resolve_in(page_text)
+            if span:
+                logger.debug(
+                    f"Found highlight '{highlight_text[:20]}...' via diff_anchor at {span[0]}"
+                )
+                return span[0]
+
+        # Strategy 2: Find all occurrences and disambiguate
+        candidates: list[int] = []
+        start = 0
+        while True:
+            pos = page_text.find(highlight_text, start)
+            if pos == -1:
+                break
+            candidates.append(pos)
+            start = pos + 1
+
+        if not candidates:
+            # Try anchor context text as fallback
+            start = 0
+            while True:
+                pos = page_text.find(anchor_context.text_content, start)
+                if pos == -1:
+                    break
+                candidates.append(pos)
+                start = pos + 1
+
+        if not candidates:
+            return -1
+
+        if len(candidates) == 1:
+            return candidates[0]
+
+        # Multiple occurrences - disambiguate using context similarity
+        best_score = 0.0
+        best_offset = candidates[0]
+
+        for offset in candidates:
+            # Get context around this occurrence
+            ctx_len = 50
+            before = page_text[max(0, offset - ctx_len) : offset]
+            after = page_text[offset + len(highlight_text) : offset + len(highlight_text) + ctx_len]
+
+            # Compare with anchor context using fuzzy matching
+            before_ratio = difflib.SequenceMatcher(
+                None, before, anchor_context.context_before
+            ).ratio()
+            after_ratio = difflib.SequenceMatcher(None, after, anchor_context.context_after).ratio()
+            score = (before_ratio + after_ratio) / 2
+
+            if score > best_score:
+                best_score = score
+                best_offset = offset
+
+        logger.debug(
+            f"Disambiguated highlight '{highlight_text[:20]}...' "
+            f"from {len(candidates)} candidates, score={best_score:.2f}"
+        )
+
+        return best_offset
 
     def _calculate_annotation_page_offset(
         self,
@@ -1879,9 +2043,12 @@ class RemarkableGenerator:
                 )
 
                 # Create StrokePlacement
+                # Clamp offset to valid range - offset may have been calculated for
+                # a different page_text representation during migration
+                clamped_offset = max(0, min(target_offset, len(page_text)))
                 placement = StrokePlacement(
                     opaque_handle=bundle,
-                    anchor_char_offset=target_offset,
+                    anchor_char_offset=clamped_offset,
                 )
                 stroke_placements.append(placement)
 

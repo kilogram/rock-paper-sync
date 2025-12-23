@@ -672,6 +672,7 @@ class DocumentModel:
     # Layout configuration
     geometry: DeviceGeometry | None = None
     lines_per_page: int = 33
+    allow_paragraph_splitting: bool = False
 
     @classmethod
     def from_rm_files(
@@ -878,7 +879,49 @@ class DocumentModel:
                         continue
 
                     # Create anchor context from highlighted text
-                    text_offset = page_text.find(highlight_text)
+                    # Use rectangle positions to find the correct occurrence when text appears multiple times
+                    rects = glyph.rectangles
+                    text_offset = -1
+
+                    if rects and layout_ctx:
+                        # Use the rectangle X,Y to find which occurrence was highlighted
+                        first_rect = rects[0]
+                        rect_y = first_rect.y
+                        rect_x = first_rect.x
+
+                        # Find all occurrences of the highlight text
+                        candidates = []
+                        search_start = 0
+                        while True:
+                            pos = page_text.find(highlight_text, search_start)
+                            if pos == -1:
+                                break
+                            candidates.append(pos)
+                            search_start = pos + 1
+
+                        if len(candidates) == 1:
+                            text_offset = candidates[0]
+                        elif len(candidates) > 1:
+                            # Disambiguate using rectangle position
+                            # Find which candidate has position closest to rect_x, rect_y
+                            best_offset = candidates[0]
+                            best_distance = float("inf")
+
+                            for candidate_offset in candidates:
+                                # Get position of this candidate
+                                cand_x, cand_y = layout_ctx.offset_to_position(candidate_offset)
+                                # Calculate distance from rectangle position
+                                # Y is more important for line matching
+                                distance = abs(cand_y - rect_y) * 2 + abs(cand_x - rect_x)
+                                if distance < best_distance:
+                                    best_distance = distance
+                                    best_offset = candidate_offset
+
+                            text_offset = best_offset
+                    else:
+                        # No rectangles or layout - fallback to simple find
+                        text_offset = page_text.find(highlight_text)
+
                     if text_offset != -1:
                         anchor = AnchorContext.from_text_span(
                             page_text,
@@ -887,7 +930,6 @@ class DocumentModel:
                         )
                     else:
                         # Fallback to Y position
-                        rects = glyph.rectangles
                         if rects:
                             avg_y = sum(r.y + r.h / 2 for r in rects) / len(rects)
                             abs_y = text_origin_y + avg_y
@@ -911,6 +953,7 @@ class DocumentModel:
                         anchor_context=anchor,
                         highlight_data=highlight_data,
                         original_rm_block=block,
+                        source_page_idx=page_idx,  # Track source page for relocation
                     )
                     all_annotations.append(annotation)
 
@@ -964,12 +1007,18 @@ class DocumentModel:
         cls,
         blocks: list[ContentBlock],
         geometry: DeviceGeometry,
+        allow_paragraph_splitting: bool = False,
     ) -> DocumentModel:
         """Create document model from ContentBlocks (parsed markdown).
 
         This is the primary constructor for new documents from markdown.
         Converts ContentBlocks to Paragraphs while preserving original blocks
         for pagination.
+
+        Args:
+            blocks: ContentBlocks from parsed markdown
+            geometry: Device geometry for layout
+            allow_paragraph_splitting: If True, split long paragraphs across pages
         """
         from rock_paper_sync.parser import BlockType
 
@@ -1010,6 +1059,7 @@ class DocumentModel:
             annotations=[],
             geometry=geometry,
             lines_per_page=geometry.lines_per_page,
+            allow_paragraph_splitting=allow_paragraph_splitting,
         )
 
     def _assign_stroke_clusters(self) -> None:
@@ -1329,7 +1379,7 @@ class DocumentModel:
             layout_engine: Optional layout engine for line estimation (created if not provided)
         """
         from rock_paper_sync.layout import WordWrapLayoutEngine
-        from rock_paper_sync.parser import BlockType
+        from rock_paper_sync.parser import BlockType, ContentBlock
 
         if not self.geometry:
             raise ValueError("DocumentModel requires geometry for page projection")
@@ -1374,14 +1424,88 @@ class DocumentModel:
                     current_lines = 0
 
             # Check if block fits on current page
-            if current_lines + block_lines > self.lines_per_page and current_page_blocks:
-                # Block doesn't fit - start new page
-                page_block_lists.append(current_page_blocks)
-                current_page_blocks = []
-                current_lines = 0
+            if current_lines + block_lines > self.lines_per_page:
+                # Block doesn't fit on current page
+                is_paragraph = block.type == BlockType.PARAGRAPH
+                is_oversized = block_lines > self.lines_per_page
+                should_split = is_paragraph and (self.allow_paragraph_splitting or is_oversized)
 
-            current_page_blocks.append(block)
-            current_lines += block_lines
+                if should_split and current_page_blocks:
+                    # Split paragraph using layout engine
+                    remaining_lines = self.lines_per_page - current_lines
+                    if self.allow_paragraph_splitting and remaining_lines > 0:
+                        # Fill remaining space on current page, then full pages
+                        chunks = layout_engine.split_for_pages(
+                            block.text,
+                            self.lines_per_page,
+                            first_chunk_lines=remaining_lines,
+                        )
+                    else:
+                        # Forced split (oversized) - start on new page with full-page chunks
+                        page_block_lists.append(current_page_blocks)
+                        current_page_blocks = []
+                        current_lines = 0
+                        chunks = layout_engine.split_for_pages(block.text, self.lines_per_page)
+
+                    for i, chunk_text in enumerate(chunks):
+                        chunk_lines = len(
+                            layout_engine.calculate_line_breaks(
+                                chunk_text, layout_engine.text_width
+                            )
+                        )
+
+                        # Start new page after first chunk (first chunk fits by design)
+                        if i > 0:
+                            if current_page_blocks:
+                                page_block_lists.append(current_page_blocks)
+                            current_page_blocks = []
+                            current_lines = 0
+
+                        chunk_block = ContentBlock(
+                            type=block.type,
+                            level=block.level,
+                            text=chunk_text,
+                            formatting=block.formatting if i == 0 else [],
+                            page_index=len(page_block_lists),
+                        )
+                        current_page_blocks.append(chunk_block)
+                        current_lines += chunk_lines
+                elif should_split and not current_page_blocks:
+                    # Oversized paragraph on empty page - split across pages
+                    chunks = layout_engine.split_for_pages(block.text, self.lines_per_page)
+                    for i, chunk_text in enumerate(chunks):
+                        chunk_lines = len(
+                            layout_engine.calculate_line_breaks(
+                                chunk_text, layout_engine.text_width
+                            )
+                        )
+                        if i > 0:
+                            if current_page_blocks:
+                                page_block_lists.append(current_page_blocks)
+                            current_page_blocks = []
+                            current_lines = 0
+
+                        chunk_block = ContentBlock(
+                            type=block.type,
+                            level=block.level,
+                            text=chunk_text,
+                            formatting=block.formatting if i == 0 else [],
+                            page_index=len(page_block_lists),
+                        )
+                        current_page_blocks.append(chunk_block)
+                        current_lines += chunk_lines
+                elif current_page_blocks:
+                    # Atomic block placement - start new page
+                    page_block_lists.append(current_page_blocks)
+                    current_page_blocks = [block]
+                    current_lines = block_lines
+                else:
+                    # First block on page, just add it
+                    current_page_blocks.append(block)
+                    current_lines = block_lines
+            else:
+                current_page_blocks.append(block)
+                current_lines += block_lines
 
         # Don't forget the last page
         if current_page_blocks:

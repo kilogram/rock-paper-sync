@@ -113,8 +113,11 @@ class WordWrapLayoutEngine:
         Returns:
             WordWrapLayoutEngine configured for the device
         """
+        # Use layout_text_width for word wrapping - this is the calibrated width
+        # that matches the device's actual text wrapping behavior (slightly wider
+        # than text_width used in RootTextBlock positioning)
         return cls(
-            text_width=geometry.text_width,
+            text_width=geometry.layout_text_width,
             avg_char_width=geometry.char_width,
             line_height=geometry.line_height,
             use_font_metrics=use_font_metrics,
@@ -423,7 +426,8 @@ class WordWrapLayoutEngine:
                 text_before_highlight = text[line_start:hl_start]
                 highlight_text = text[hl_start:hl_end]
 
-                rect_x = origin[0] + self._get_text_width(text_before_highlight)
+                text_width_before = self._get_text_width(text_before_highlight)
+                rect_x = origin[0] + text_width_before
                 rect_y = origin[1] + line_idx * self.line_height
                 rect_w = self._get_text_width(highlight_text)
                 rect_h = rect_height
