@@ -10,8 +10,19 @@ Design principles:
 - Corrections are managed separately by CorrectionManager
 - Coordinate transformation is a shared utility (not handler-specific)
 - Layout context provides unified access to text positioning (shared infrastructure)
+- CRDT operations delegated to CrdtService (not handler-specific)
 
-Example usage:
+Method categories:
+- REQUIRED: annotation_type, detect(), map(), create_anchor(), extract_from_markdown()
+- OPTIONAL: relocate() - only needed for content-based repositioning (highlights)
+- DEPRECATED: render(), get_position() - unused in current architecture
+
+For stroke handling, StrokeHandler also provides cluster-based methods:
+- detect_clusters() - extract StrokeClusters with CRDT context
+- migrate_clusters() - migrate clusters using ContextResolver
+- serialize_for_page() - serialize clusters for specific page
+
+Example usage (traditional interface):
     class StrokeHandler:
         @property
         def annotation_type(self) -> str:
@@ -25,9 +36,11 @@ Example usage:
             # Map strokes to paragraph indices using layout context
             ...
 
-        def render(self, paragraph_index, matches, content) -> str:
-            # Generate OCR markdown output
-            ...
+Example usage (cluster-based interface for migration):
+    handler = StrokeHandler()
+    clusters = handler.detect_clusters(rm_file_path)
+    migrated = handler.migrate_clusters(clusters, old_text, new_text, resolver)
+    blocks = handler.serialize_for_page(migrated, page_projection)
 """
 
 from pathlib import Path
@@ -44,15 +57,24 @@ class AnnotationHandler(Protocol):
     """Protocol for annotation type handlers.
 
     Each annotation type (highlights, strokes, sketches, etc.) implements
-    this protocol to provide type-specific detection, mapping, and rendering.
+    this protocol to provide type-specific detection, mapping, and anchoring.
 
     Handler responsibilities:
     1. Detection: Extract annotations from .rm files
     2. Mapping: Associate annotations with markdown paragraphs
-    3. Rendering: Generate markdown output with annotation markers
+    3. Anchoring: Create stable anchors for annotation preservation
+    4. Extraction: Parse annotations from rendered markdown
 
-    Coordinate transformation and generic corrections are handled by
-    shared utilities.
+    Method categories:
+    - REQUIRED: annotation_type, detect(), map(), create_anchor(), extract_from_markdown()
+    - OPTIONAL: relocate() - only for content-based repositioning (highlights)
+    - DEPRECATED: render(), get_position() - kept for backward compatibility
+
+    CRDT operations (ID generation, block cloning) are delegated to CrdtService,
+    not handled by individual handlers.
+
+    For stroke-specific cluster operations, see StrokeHandler which extends
+    this protocol with detect_clusters(), migrate_clusters(), serialize_for_page().
     """
 
     @property
@@ -105,6 +127,10 @@ class AnnotationHandler(Protocol):
         original_content: str,
     ) -> str:
         """Generate markdown output for annotations at a paragraph.
+
+        DEPRECATED: This method is not used in the current architecture.
+        Rendering is handled separately from the handler protocol.
+        Kept for backward compatibility.
 
         Args:
             paragraph_index: Index of paragraph in markdown
@@ -159,9 +185,9 @@ class AnnotationHandler(Protocol):
     ) -> tuple[float, float] | None:
         """Get absolute (x, y) position for an annotation block.
 
-        Encapsulates type-specific coordinate transformation logic.
-        Used by DocumentModel for routing decisions during
-        document regeneration.
+        DEPRECATED: This method is not used in the current architecture.
+        Position extraction is handled by DocumentModel.from_rm_files().
+        Kept for backward compatibility.
 
         Args:
             block: Raw rmscene annotation block (SceneGlyphItemBlock or SceneLineItemBlock)
