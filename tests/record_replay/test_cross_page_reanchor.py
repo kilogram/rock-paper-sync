@@ -63,7 +63,7 @@ def find_highlight_by_text(rm_files: dict[str, bytes], text_substring: str):
 
 
 @pytest.mark.device
-def test_cross_page_reanchor(device, workspace, fixtures_dir):
+def test_cross_page_reanchor(device, workspace, fixtures_dir, visual_validator):
     """Test annotations moving across page boundaries when content changes.
 
     Test flow:
@@ -277,6 +277,16 @@ adipisci velit, sed quia non numquam eius modi tempora incidunt.
 
         except ImportError:
             print("\n⚠️  Comparison module not available")
+
+        # Visual comparison: assert uploaded_rm matches golden
+        from tests.record_replay.harness.visual_comparison import check_rmc_installed
+
+        if check_rmc_installed():
+            print("\n📌 VISUAL COMPARISON: Asserting uploaded_rm matches golden")
+            result = visual_validator.assert_uploaded_matches_golden(test_id, trip_number=2)
+            print(f"✅ Visual comparison passed: {len(result.matches)} cluster(s) matched")
+        else:
+            print("\n⚠️  rmc not installed - skipping visual comparison assertion")
     else:
         print("\n⚠️  No golden annotations captured - skipping comparison")
 

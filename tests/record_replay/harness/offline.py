@@ -74,6 +74,7 @@ class OfflineEmulator(DeviceInteractionManager):
         self.testdata_store = testdata_store
         self.bench = bench
         self._current_test_id: str | None = None
+        self._doc_uuid: str | None = None
 
         # Trip-based format (new)
         self._trips: list[TripData] = []
@@ -324,6 +325,8 @@ class OfflineEmulator(DeviceInteractionManager):
         For trip-based format: Just uploads, no phase skipping needed.
         For legacy phase format: Advances past phase_0 and phase_1.
 
+        Also captures uploaded rm files as diagnostic data for visual comparison.
+
         Args:
             markdown_path: Path to markdown file
 
@@ -339,7 +342,24 @@ class OfflineEmulator(DeviceInteractionManager):
         if not doc_uuid:
             raise RuntimeError("Document UUID not found after sync")
 
+        self._doc_uuid = doc_uuid
         self.bench.ok(f"Uploaded document to rmfakecloud: {doc_uuid}")
+
+        # Capture uploaded rm files as diagnostic (for visual comparison)
+        if self._current_test_id:
+            self._download_rm_files_to_cache(doc_uuid)
+            uploaded_rm = self._get_cached_rm_files_as_dict()
+            if uploaded_rm:
+                trip_number = self._current_trip_idx + 1  # Convert 0-indexed to 1-indexed
+                self.testdata_store.save_trip_diagnostic(
+                    self._current_test_id,
+                    trip_number=trip_number,
+                    diagnostic_name="offline/uploaded_rm",
+                    rm_files=uploaded_rm,
+                )
+                self.bench.observe(
+                    f"Trip {trip_number}: Saved diagnostic ({len(uploaded_rm)} uploaded .rm files)"
+                )
 
         if self._is_trip_format:
             # Trip format: no phase skipping needed
@@ -429,8 +449,30 @@ class OfflineEmulator(DeviceInteractionManager):
         return state
 
     def trigger_sync(self) -> None:
-        """Run sync command."""
+        """Run sync command and capture uploaded rm files as diagnostic.
+
+        After syncing, downloads the rm files from cloud to capture what
+        was uploaded. This is critical for visual comparison tests that
+        need to compare our generated output vs golden.
+        """
         self.workspace.run_sync("Sync")
+
+        # Capture uploaded rm files if we have a document UUID
+        if self._doc_uuid and self._current_test_id:
+            self._download_rm_files_to_cache(self._doc_uuid)
+            uploaded_rm = self._get_cached_rm_files_as_dict()
+            if uploaded_rm:
+                trip_number = self._current_trip_idx + 1  # Convert 0-indexed to 1-indexed
+                self.testdata_store.save_trip_diagnostic(
+                    self._current_test_id,
+                    trip_number=trip_number,
+                    diagnostic_name="offline/uploaded_rm",
+                    rm_files=uploaded_rm,
+                )
+                self.bench.observe(
+                    f"Trip {trip_number}: Saved diagnostic "
+                    f"({len(uploaded_rm)} uploaded .rm files)"
+                )
 
     def capture_phase(self, phase_name: str, action: str = "capture") -> None:
         """No-op for offline mode.
@@ -755,3 +797,48 @@ class OfflineEmulator(DeviceInteractionManager):
             f"Testdata validation passed: {len(state.rm_files)} .rm file(s), "
             f"{total_annotations} annotation(s)"
         )
+
+    def _get_cached_rm_files_as_dict(self) -> dict[str, bytes]:
+        """Get cached rm files as a dict.
+
+        Returns:
+            Dict of page_uuid -> rm_bytes
+        """
+        rm_files: dict[str, bytes] = {}
+        for rm_path in self.workspace.get_cached_rm_files():
+            rm_files[rm_path.stem] = rm_path.read_bytes()
+        return rm_files
+
+    def _download_rm_files_to_cache(self, doc_uuid: str) -> None:
+        """Download rm files from cloud and save to cache directory.
+
+        This ensures we can capture the rm files that were uploaded,
+        even though the sync process doesn't save uploaded files to cache.
+
+        Clears the cache directory first to avoid mixing files from
+        different sync operations.
+
+        Args:
+            doc_uuid: Document UUID
+        """
+        from rock_paper_sync.rm_cloud_client import RmCloudClient
+        from rock_paper_sync.rm_cloud_sync import RmCloudSync
+
+        client = RmCloudClient(base_url=self.workspace.cloud_url)
+        sync = RmCloudSync(base_url=self.workspace.cloud_url, client=client)
+
+        try:
+            page_uuids = sync.get_existing_page_uuids(doc_uuid)
+            if page_uuids:
+                # Clear and recreate cache directory to avoid stale files
+                cache_dir = self.workspace.cache_dir / "annotations" / doc_uuid
+                if cache_dir.exists():
+                    shutil.rmtree(cache_dir)
+                cache_dir.mkdir(parents=True, exist_ok=True)
+
+                # Download rm files directly to cache
+                downloaded = sync.download_page_rm_files(doc_uuid, page_uuids, cache_dir)
+                count = sum(1 for p in downloaded if p and p.exists())
+                self.bench.observe(f"Downloaded {count} rm file(s) to cache")
+        except Exception as e:
+            self.bench.warn(f"Failed to download rm files to cache: {e}")

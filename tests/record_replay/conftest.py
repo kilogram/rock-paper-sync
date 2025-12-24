@@ -803,3 +803,273 @@ def ocr_service():
             )
         except Exception:
             pass
+
+
+# =============================================================================
+# Visual Comparison fixtures for stroke validation
+# =============================================================================
+
+
+@pytest.fixture(scope="function")
+def visual_validator(testdata_store, tmp_path):
+    """Provide visual comparison utilities for validating stroke rendering.
+
+    This fixture provides functions to compare .rm files visually using
+    PNG rendering and perceptual hashing. It's useful for validating that
+    strokes are rendered in the correct positions.
+
+    Example:
+        def test_stroke_positions(visual_validator, device, workspace):
+            # ... test code that produces test_rm_files ...
+
+            # Compare against golden
+            result = visual_validator.compare(
+                test_rm_files=test_state.rm_files,
+                golden_rm_files=golden_state.rm_files,
+            )
+            visual_validator.assert_match(result, max_hash_distance=15)
+
+            # Or use the shorthand
+            visual_validator.assert_visual_match(
+                test_state.rm_files,
+                golden_state.rm_files,
+            )
+    """
+    from tests.record_replay.harness.visual_comparison import (
+        VisualComparisonResult,
+        compare_rm_files_visually,
+        print_visual_comparison,
+        save_comparison_debug_images,
+    )
+
+    class VisualValidator:
+        """Helper class for visual validation in tests."""
+
+        def __init__(self, testdata_store, debug_dir: Path):
+            self.testdata_store = testdata_store
+            self.debug_dir = debug_dir
+
+        def compare(
+            self,
+            test_rm_files: dict[str, bytes],
+            golden_rm_files: dict[str, bytes],
+            padding: int = 50,
+            position_tolerance: float = 100.0,
+        ) -> VisualComparisonResult:
+            """Compare test .rm files against golden visually.
+
+            Args:
+                test_rm_files: page_uuid -> .rm bytes from test output
+                golden_rm_files: page_uuid -> .rm bytes from golden reference
+                padding: Pixels to add around each stroke region
+                position_tolerance: Max center distance to match strokes
+
+            Returns:
+                VisualComparisonResult with match details
+            """
+            return compare_rm_files_visually(
+                test_rm_files,
+                golden_rm_files,
+                padding=padding,
+                position_tolerance=position_tolerance,
+            )
+
+        def assert_match(
+            self,
+            result: VisualComparisonResult,
+            max_hash_distance: int = 15,
+        ) -> None:
+            """Assert that visual comparison passed.
+
+            Args:
+                result: Comparison result to validate
+                max_hash_distance: Maximum allowed perceptual hash distance
+
+            Raises:
+                AssertionError: If comparison failed
+            """
+            if result.render_errors:
+                raise AssertionError(
+                    "Failed to render .rm files:\n"
+                    + "\n".join(f"  - {e}" for e in result.render_errors)
+                )
+
+            if not result.all_matched:
+                lines = [f"Missing {len(result.missing_in_test)} stroke(s) in test output:"]
+                for bbox in result.missing_in_test:
+                    lines.append(f"  - bbox at ({bbox.x:.0f}, {bbox.y:.0f})")
+                raise AssertionError("\n".join(lines))
+
+            failures = [m for m in result.matches if not m.within_threshold(max_hash_distance)]
+            if failures:
+                lines = [
+                    f"Visual mismatch for {len(failures)} stroke(s) (threshold={max_hash_distance}):"
+                ]
+                for f in failures:
+                    lines.append(f.format_diff())
+                raise AssertionError("\n".join(lines))
+
+        def assert_visual_match(
+            self,
+            test_rm_files: dict[str, bytes],
+            golden_rm_files: dict[str, bytes],
+            max_hash_distance: int = 15,
+            padding: int = 50,
+            position_tolerance: float = 100.0,
+        ) -> VisualComparisonResult:
+            """Compare and assert visual match in one call.
+
+            Args:
+                test_rm_files: page_uuid -> .rm bytes from test output
+                golden_rm_files: page_uuid -> .rm bytes from golden reference
+                max_hash_distance: Maximum allowed perceptual hash distance
+                padding: Pixels around each stroke region
+                position_tolerance: Max center distance to match strokes
+
+            Returns:
+                VisualComparisonResult on success
+
+            Raises:
+                AssertionError: If comparison failed
+            """
+            result = self.compare(
+                test_rm_files,
+                golden_rm_files,
+                padding=padding,
+                position_tolerance=position_tolerance,
+            )
+            self.assert_match(result, max_hash_distance)
+            return result
+
+        def print_comparison(
+            self,
+            test_rm_files: dict[str, bytes],
+            golden_rm_files: dict[str, bytes],
+        ) -> None:
+            """Print detailed comparison results for debugging."""
+            print_visual_comparison(test_rm_files, golden_rm_files)
+
+        def save_debug_images(
+            self,
+            test_rm_files: dict[str, bytes],
+            golden_rm_files: dict[str, bytes],
+            name: str = "comparison",
+        ) -> list[Path]:
+            """Save debug images for failed comparisons.
+
+            Args:
+                test_rm_files: page_uuid -> .rm bytes from test output
+                golden_rm_files: page_uuid -> .rm bytes from golden reference
+                name: Subdirectory name for debug images
+
+            Returns:
+                List of saved image paths
+            """
+            output_dir = self.debug_dir / name
+            return save_comparison_debug_images(test_rm_files, golden_rm_files, output_dir)
+
+        def compare_with_testdata(
+            self,
+            test_id: str,
+            test_rm_files: dict[str, bytes],
+        ) -> VisualComparisonResult | None:
+            """Compare test output against golden from testdata.
+
+            Automatically loads golden .rm files from testdata and compares.
+
+            Args:
+                test_id: Test identifier
+                test_rm_files: page_uuid -> .rm bytes from test output
+
+            Returns:
+                VisualComparisonResult or None if no golden data
+            """
+            # Try trip-based golden first
+            if self.testdata_store.has_trips(test_id):
+                golden = self.testdata_store.get_golden(test_id)
+                if golden and golden.annotations:
+                    return self.compare(test_rm_files, golden.annotations.rm_files)
+            return None
+
+        def load_uploaded_rm(
+            self,
+            test_id: str,
+            trip_number: int,
+            mode: str = "offline",
+        ) -> dict[str, bytes] | None:
+            """Load uploaded_rm files from trip diagnostic directory.
+
+            Args:
+                test_id: Test identifier
+                trip_number: Trip number (1-indexed)
+                mode: "offline" or "online" diagnostic directory
+
+            Returns:
+                Dict of page_uuid -> .rm bytes, or None if not found
+            """
+            trip = self.testdata_store.get_trip(test_id, trip_number)
+            if not trip or not trip.diagnostic_path:
+                return None
+
+            # Try mode-specific path first, then legacy path
+            uploaded_dir = trip.diagnostic_path / mode / "uploaded_rm" / "rm_files"
+            if not uploaded_dir.exists():
+                uploaded_dir = trip.diagnostic_path / "uploaded_rm" / "rm_files"
+            if not uploaded_dir.exists():
+                return None
+
+            rm_files = {}
+            for rm_file in uploaded_dir.glob("*.rm"):
+                rm_files[rm_file.stem] = rm_file.read_bytes()
+            return rm_files if rm_files else None
+
+        def assert_uploaded_matches_golden(
+            self,
+            test_id: str,
+            trip_number: int,
+            mode: str = "offline",
+            max_hash_distance: int = 15,
+            save_debug: bool = True,
+        ) -> VisualComparisonResult:
+            """Assert that uploaded_rm for a trip matches golden visually.
+
+            This is the primary assertion for visual comparison tests.
+
+            Args:
+                test_id: Test identifier
+                trip_number: Trip number to compare (1-indexed)
+                mode: "offline" or "online" diagnostic directory
+                max_hash_distance: Maximum allowed perceptual hash distance
+                save_debug: Save debug images on failure
+
+            Returns:
+                VisualComparisonResult on success
+
+            Raises:
+                AssertionError: If comparison failed or data missing
+            """
+            # Load uploaded_rm
+            uploaded_rm = self.load_uploaded_rm(test_id, trip_number, mode)
+            if not uploaded_rm:
+                raise AssertionError(
+                    f"No uploaded_rm found for {test_id} trip {trip_number} ({mode} mode). "
+                    f"Run the test to capture diagnostic files."
+                )
+
+            # Load golden
+            golden = self.testdata_store.get_golden(test_id)
+            if not golden or not golden.annotations:
+                raise AssertionError(f"No golden annotations for {test_id}")
+            golden_rm = golden.annotations.rm_files
+
+            # Compare and assert
+            result = self.compare(uploaded_rm, golden_rm)
+
+            # Save debug images before assertion (so they're available on failure)
+            if save_debug:
+                self.save_debug_images(uploaded_rm, golden_rm, name=test_id)
+
+            self.assert_match(result, max_hash_distance)
+            return result
+
+    return VisualValidator(testdata_store, tmp_path / "visual_debug")
