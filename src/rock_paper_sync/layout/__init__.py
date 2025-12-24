@@ -16,13 +16,13 @@ The key abstractions are:
 Usage:
     from rock_paper_sync.layout import (
         DeviceGeometry,
-        PAPER_PRO,
+        DEFAULT_DEVICE,
         LayoutContext,
         WordWrapLayoutEngine,
     )
 
     # Use pre-defined device geometry
-    geometry = PAPER_PRO
+    geometry = DEFAULT_DEVICE
     print(f"Lines per page: {geometry.lines_per_page}")
 
     # Create layout engine from geometry
@@ -31,20 +31,14 @@ Usage:
     # Create context for annotation processing
     context = LayoutContext.from_geometry(text_content, geometry)
     x, y = context.offset_to_position(char_offset)
-
-For backward compatibility, LayoutConstants is still available but should
-be considered deprecated for new code.
 """
 
-# Backward compatibility - prefer DeviceGeometry for new code
-from .constants import LayoutConstants
 from .context import LayoutContext, TextAreaConfig
 from .device import DEFAULT_DEVICE, PAPER_PRO_MOVE, DeviceGeometry
 from .engine import WordWrapLayoutEngine
 from .paginator import HEADER_ORPHAN_THRESHOLD_LINES, ContentPaginator
 
 __all__ = [
-    # Primary exports (use these for new code)
     "DeviceGeometry",
     "PAPER_PRO_MOVE",
     "DEFAULT_DEVICE",
@@ -53,6 +47,4 @@ __all__ = [
     "WordWrapLayoutEngine",
     "ContentPaginator",
     "HEADER_ORPHAN_THRESHOLD_LINES",
-    # Backward compatibility
-    "LayoutConstants",
 ]
