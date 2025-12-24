@@ -1079,6 +1079,18 @@ class SyncEngine:
         total_success = sum(1 for r in results if r.success)
         logger.info(f"Total sync complete: {total_success}/{len(results)} succeeded")
 
+        # Clean up old snapshots (7-day retention)
+        try:
+            deleted_snaps, deleted_content = self.state.snapshots.cleanup_old_snapshots(
+                retention_days=7
+            )
+            if deleted_snaps > 0 or deleted_content > 0:
+                logger.debug(
+                    f"Snapshot cleanup: {deleted_snaps} snapshots, {deleted_content} content blobs"
+                )
+        except Exception as e:
+            logger.warning(f"Snapshot cleanup failed (non-fatal): {e}")
+
         return results
 
     def ensure_folder_hierarchy(self, vault: VaultConfig, obsidian_path: Path) -> str:

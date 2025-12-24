@@ -601,16 +601,21 @@ class HighlightHandler:
         # old page layout. In this case, place highlight at model position directly
         # instead of preserving the old device offset.
         #
-        # NOTE: Reflow detection is currently disabled because the delta-based approach
-        # gives better results. The model position calculation is inaccurate for cross-paragraph
-        # text because joining text_blocks with '\n' creates artificial line breaks that
-        # don't match the device's actual paragraph spacing. The delta-based approach
-        # cancels out these errors by using the same (flawed) model for both positions.
-        # TODO: Fix the model to properly handle paragraph spacing, then re-enable reflow.
+        # KNOWN LIMITATION: Reflow detection is disabled because the layout model's
+        # paragraph spacing doesn't match device rendering. The model joins text_blocks
+        # with '\n' creating artificial line breaks. The delta-based approach cancels
+        # out these errors by using the same model for both old and new positions.
+        #
+        # To properly fix this, we would need:
+        # 1. Per-paragraph Y origins from the layout model
+        # 2. Character offsets relative to paragraph, not document
+        # 3. AnnotationMerger to handle cross-paragraph highlight migration
+        #
+        # For now, the delta-based approach (below) works well enough for most cases.
         offset_change = abs(new_offset - old_offset)
-        SIGNIFICANT_OFFSET_CHANGE = 100000  # Effectively disabled - was 100
+        significant_offset_threshold = 100000  # Disabled - see comment above
 
-        if offset_change > SIGNIFICANT_OFFSET_CHANGE:
+        if offset_change > significant_offset_threshold:
             # Significant content reflow - use model position directly
             # Calculate old device offset (how much device drew away from model)
             old_device_x_offset = old_x - old_x_model
