@@ -16,11 +16,28 @@ Characteristics:
 
 For coordinate transformation details, see docs/STROKE_ANCHORING.md.
 
-Example:
+New Architecture (Phase 2):
+    The handler now supports two APIs:
+    1. Legacy API: detect() returns list[Annotation]
+    2. New API: detect_clusters() returns list[StrokeCluster]
+
+    New methods:
+    - detect_clusters(rm_path) -> list[StrokeCluster]
+    - create_anchor_context(cluster, page_text, ...) -> AnchorContext
+    - serialize(clusters) -> list[Block]
+
+Example (legacy):
     handler = StrokeHandler(ocr_processor)
     annotations = handler.detect(rm_file_path)
     mappings = handler.map(annotations, markdown_blocks, rm_file_path)
     output = handler.render(0, mappings[0], "Original paragraph")
+
+Example (new):
+    handler = StrokeHandler()
+    clusters = handler.detect_clusters(rm_file_path)
+    for cluster in clusters:
+        anchor = handler.create_anchor_context(cluster, page_text, layout_ctx)
+        blocks = handler.serialize([cluster])
 """
 
 import logging
@@ -46,6 +63,8 @@ from rock_paper_sync.coordinate_transformer import (
 )
 
 if TYPE_CHECKING:
+    from rock_paper_sync.annotations.document_model import AnchorContext
+    from rock_paper_sync.annotations.stroke_cluster import StrokeCluster
     from rock_paper_sync.layout import LayoutContext
     from rock_paper_sync.ocr.integration import OCRProcessor
 
@@ -569,3 +588,140 @@ class StrokeHandler:
             )
 
         return None
+
+    # =========================================================================
+    # New Architecture Methods (Phase 2)
+    # =========================================================================
+
+    def detect_clusters(
+        self,
+        rm_file_path: Path,
+        distance_threshold: float = 80.0,
+    ) -> list["StrokeCluster"]:
+        """Extract stroke clusters from .rm file using spatial clustering.
+
+        This is the new API that returns StrokeCluster objects instead of
+        Annotation objects. Each cluster groups spatially related strokes
+        that should move together when content changes.
+
+        Args:
+            rm_file_path: Path to reMarkable v6 .rm file
+            distance_threshold: Maximum distance between stroke centers
+                              to include in same cluster (default: 80px)
+
+        Returns:
+            List of StrokeCluster objects with CRDT structure attached
+        """
+        from rock_paper_sync.annotations.stroke_cluster import StrokeCluster
+
+        clusters = StrokeCluster.from_rm_file(rm_file_path, distance_threshold)
+        logger.debug(
+            f"Detected {len(clusters)} stroke clusters in {rm_file_path.name} "
+            f"(threshold={distance_threshold}px)"
+        )
+        return clusters
+
+    def create_anchor_context(
+        self,
+        cluster: "StrokeCluster",
+        page_text: str,
+        layout_context: "LayoutContext | None" = None,
+        page_num: int = 0,
+    ) -> "AnchorContext":
+        """Create AnchorContext for a stroke cluster.
+
+        The anchor context captures where the cluster belongs in the document,
+        using type-specific signals (Y-position, bounding box, nearby text).
+
+        For strokes, we use:
+        - y_position_hint: Primary spatial anchor
+        - context_before/after: Nearby text for fuzzy matching
+        - content_hash: Hash of bounding box for identity
+
+        Args:
+            cluster: StrokeCluster to create anchor for
+            page_text: Full text content of the page
+            layout_context: Optional layout context for position calculations
+            page_num: Page number (default: 0)
+
+        Returns:
+            AnchorContext with cluster location information
+        """
+        from rock_paper_sync.annotations.document_model import AnchorContext, _content_hash
+
+        x, y, w, h = cluster.bounding_box
+        center_y = cluster.center_y
+
+        # Extract text context around the cluster's Y position
+        # This helps with fuzzy matching when content changes
+        context_window = 100  # characters
+
+        # Try to find approximate character offset using layout context
+        char_offset = None
+        if layout_context is not None:
+            try:
+                char_offset = layout_context.position_to_offset(x + w / 2, center_y)
+            except Exception as e:
+                logger.debug(f"Could not get char offset from layout: {e}")
+
+        # Extract surrounding text context
+        if char_offset is not None and page_text:
+            start = max(0, char_offset - context_window)
+            end = min(len(page_text), char_offset + context_window)
+            context_before = page_text[start:char_offset]
+            context_after = page_text[char_offset:end]
+            text_content = page_text[
+                max(0, char_offset - 20) : min(len(page_text), char_offset + 20)
+            ]
+        else:
+            # Fallback: use beginning/end of page text
+            context_before = page_text[:context_window] if page_text else ""
+            context_after = page_text[-context_window:] if page_text else ""
+            text_content = ""
+
+        # For strokes, create a content hash from the bounding box
+        # This provides identity tracking even without text content
+        bbox_str = f"stroke:{x:.1f},{y:.1f},{w:.1f},{h:.1f}"
+
+        return AnchorContext(
+            content_hash=_content_hash(bbox_str),
+            text_content=text_content if text_content else bbox_str,
+            paragraph_index=None,  # Determined during resolution
+            context_before=context_before,
+            context_after=context_after,
+            y_position_hint=center_y,
+            page_hint=page_num,
+        )
+
+    def serialize(self, clusters: list["StrokeCluster"]) -> list:
+        """Serialize stroke clusters to CRDT blocks.
+
+        Handles deduplication of parent blocks (TreeNodeBlock, SceneTreeBlock,
+        SceneGroupItemBlock) when multiple strokes share the same parent.
+
+        Args:
+            clusters: List of StrokeCluster objects to serialize
+
+        Returns:
+            List of rmscene blocks in correct order for serialization
+        """
+        all_blocks = []
+        seen_nodes: set[tuple[int, int]] = set()
+
+        for cluster in clusters:
+            # Get blocks with internal deduplication
+            cluster_blocks = cluster.to_rm_blocks()
+
+            # Filter out duplicate parent blocks across clusters
+            for block in cluster_blocks:
+                # Check if this is a parent block we've already seen
+                if hasattr(block, "node_id"):
+                    node_key = (block.node_id.part1, block.node_id.part2)
+                    if node_key in seen_nodes:
+                        continue
+                    seen_nodes.add(node_key)
+
+                all_blocks.append(block)
+
+        logger.debug(f"Serialized {len(clusters)} clusters to {len(all_blocks)} blocks")
+        return all_blocks
