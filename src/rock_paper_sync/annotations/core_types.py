@@ -464,33 +464,6 @@ def associate_annotations_with_content(
     return mapping
 
 
-def preserve_strokes_in_scene(strokes: list[Stroke], _scene_blocks: list, _parent_id=None) -> list:
-    """Convert Stroke objects back to rmscene SceneLineItemBlock objects.
-
-    This allows us to preserve strokes when regenerating a document by converting
-    our annotation format back to the rmscene format that can be written to .rm files.
-
-    Args:
-        strokes: List of Stroke objects to preserve
-        scene_blocks: Existing scene blocks to append to
-        parent_id: Optional parent group ID for organization
-
-    Returns:
-        Updated scene_blocks list with new stroke blocks added
-
-    Note:
-        This function requires careful handling of CRDT IDs and block structure.
-        See rmscene documentation for details on the binary format.
-    """
-    # TODO: Implement stroke preservation
-    # This requires:
-    # 1. Converting our Point objects back to rmscene Point objects
-    # 2. Creating SceneLineItemBlock with proper CRDT IDs
-    # 3. Adding to the scene tree structure
-    # 4. Maintaining proper parent/child relationships
-    raise NotImplementedError("Stroke preservation not yet implemented")
-
-
 def calculate_position_mapping(
     old_blocks: list[TextBlock], new_blocks: list[TextBlock]
 ) -> dict[int, int]:

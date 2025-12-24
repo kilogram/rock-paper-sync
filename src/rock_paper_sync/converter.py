@@ -1079,6 +1079,9 @@ class SyncEngine:
         total_success = sum(1 for r in results if r.success)
         logger.info(f"Total sync complete: {total_success}/{len(results)} succeeded")
 
+        # Clean up old snapshots to prevent unbounded storage growth
+        self.state.snapshots.cleanup_old_snapshots()
+
         return results
 
     def ensure_folder_hierarchy(self, vault: VaultConfig, obsidian_path: Path) -> str:

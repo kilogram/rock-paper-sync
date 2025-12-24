@@ -29,7 +29,6 @@ from .core_types import (
     TextBlock,
     associate_annotations_with_content,
     calculate_position_mapping,
-    preserve_strokes_in_scene,
     read_annotations,
 )
 from .handlers.highlight_handler import HighlightHandler
@@ -63,7 +62,6 @@ __all__ = [
     # Core utilities
     "read_annotations",
     "associate_annotations_with_content",
-    "preserve_strokes_in_scene",
     "calculate_position_mapping",
     # Text layout engine
     "TextAnchor",
