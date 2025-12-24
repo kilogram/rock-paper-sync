@@ -15,10 +15,10 @@ All other modules should use DeviceGeometry rather than accessing
 raw constants directly.
 
 Example:
-    from rock_paper_sync.layout.device import PAPER_PRO, DeviceGeometry
+    from rock_paper_sync.layout.device import DEFAULT_DEVICE, DeviceGeometry
 
-    # Use the pre-defined Paper Pro geometry
-    geometry = PAPER_PRO
+    # Use the pre-defined Paper Pro Move geometry
+    geometry = DEFAULT_DEVICE
     print(f"Page size: {geometry.page_width}x{geometry.page_height}")
     print(f"Lines per page: {geometry.lines_per_page}")
 

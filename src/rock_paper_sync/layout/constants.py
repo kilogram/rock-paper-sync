@@ -25,12 +25,12 @@ For text-relative annotations:
 
 Calibration Notes
 -----------------
-These values were calibrated from reMarkable Paper Pro device analysis
+These values were calibrated from reMarkable Paper Pro Move device analysis
 on 2025-11-30. Key findings:
 
 - LINE_HEIGHT of 57px matches actual device highlight positioning
 - CHAR_WIDTH of 15px is average for Noto Sans at the default text size
-- TEXT_WIDTH of 750px gives 1.0x display zoom on Paper Pro
+- TEXT_WIDTH of 750px gives 1.0x display zoom on Paper Pro Move
 
 See docs/RMSCENE_FINDINGS.md for detailed calibration methodology.
 """

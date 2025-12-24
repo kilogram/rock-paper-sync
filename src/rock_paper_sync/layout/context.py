@@ -39,7 +39,7 @@ class TextAreaConfig:
 
     For new code, prefer creating from DeviceGeometry:
 
-        config = TextAreaConfig.from_geometry(PAPER_PRO)
+        config = TextAreaConfig.from_geometry(DEFAULT_DEVICE)
 
     All values default to those from DEFAULT_DEVICE for backward compatibility.
     """
@@ -102,13 +102,13 @@ class LayoutContext:
     - Calculating highlight rectangles
 
     Example:
-        # Create context with default device (Paper Pro)
+        # Create context with default device
         context = LayoutContext.from_text(page_text, use_font_metrics=True)
 
         # Create context with specific device geometry
         context = LayoutContext.from_text(
             page_text,
-            geometry=PAPER_PRO,
+            geometry=DEFAULT_DEVICE,
             use_font_metrics=True
         )
 
@@ -396,8 +396,11 @@ class LayoutContext:
                     text_content = "".join(text_parts)
                     break
 
-        except Exception:
-            # Return empty context on error
+        except (OSError, ValueError, AttributeError):
+            # OSError: file access issues (FileNotFoundError, PermissionError, etc.)
+            # ValueError: rmscene parsing errors (invalid format)
+            # AttributeError: unexpected block structure
+            # Return empty context on error - caller will use defaults
             pass
 
         config = TextAreaConfig(

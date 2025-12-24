@@ -91,8 +91,11 @@ class WordWrapLayoutEngine:
                     )
 
                 self._text_width_fn = _width_with_dpi
-            except Exception:
+            except (ImportError, OSError, RuntimeError):
                 # Fall back to fixed width if font metrics unavailable
+                # ImportError: font_metrics module not installed
+                # OSError: font file not found
+                # RuntimeError: fonttools error
                 self._text_width_fn = None
 
     @classmethod
