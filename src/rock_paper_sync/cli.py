@@ -436,7 +436,7 @@ def status(ctx: click.Context, vault: str | None) -> None:
 def reset(ctx: click.Context) -> None:
     """Clear sync state (force full re-sync).
 
-    Deletes all sync records from the database. The next sync will
+    Clears all sync records from the database. The next sync will
     process all files as if they were new.
 
     Warning: This does not delete files from the reMarkable output directory.
@@ -444,11 +444,16 @@ def reset(ctx: click.Context) -> None:
     config: AppConfig = ctx.obj["config"]
 
     state_db = config.sync.state_database
-    if state_db.exists():
-        state_db.unlink()
-        click.echo("Sync state cleared")
-    else:
+    if not state_db.exists():
         click.echo("No sync state to clear")
+        return
+
+    state = StateManager(state_db)
+    try:
+        state.reset()
+        click.echo("Sync state cleared")
+    finally:
+        state.close()
 
 
 @main.command()
