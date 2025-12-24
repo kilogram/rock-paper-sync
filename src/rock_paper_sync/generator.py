@@ -32,6 +32,7 @@ from .annotations.domain import (
     PageTransformPlan,
     StrokePlacement,
 )
+from .annotations.merging import AnnotationMerger, MergeContext
 from .annotations.scene_adapter import (
     PageTransformExecutor,
     StrokeBundle,
@@ -493,7 +494,11 @@ class RemarkableGenerator:
                     f"generate_document: old_model has {len(old_model.annotations)} annotations"
                 )
                 if old_model.annotations:
-                    new_model, report = old_model.migrate_annotations_to(new_model)
+                    merger = AnnotationMerger(resolver=ContextResolver())
+                    context = MergeContext(old_model=old_model, new_model=new_model)
+                    result = merger.merge(context)
+                    new_model = result.merged_model
+                    report = result.report
                     logger.info(
                         f"Migrated {len(report.migrations)} annotations, "
                         f"{len(report.orphans)} orphaned (success rate: {report.success_rate:.1%})"
@@ -1133,7 +1138,11 @@ class RemarkableGenerator:
         new_origin = (self.geometry.text_pos_x, self.geometry.text_pos_y)
 
         # Migrate annotations from old to new
-        migrated_model, report = old_model.migrate_annotations_to(new_model)
+        merger = AnnotationMerger(resolver=ContextResolver())
+        context = MergeContext(old_model=old_model, new_model=new_model)
+        result = merger.merge(context)
+        migrated_model = result.merged_model
+        report = result.report
 
         logger.info(
             f"Migration report: {len(report.migrations)} migrated, {len(report.orphans)} orphaned "

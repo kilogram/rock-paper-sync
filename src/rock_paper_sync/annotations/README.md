@@ -163,9 +163,9 @@ This replaced the fragile character-offset approach that was prone to bugs when 
                         ↓
               [Old DocumentModel]
                         ↓
-              migrate_annotations_to(new_model)
+              AnnotationMerger.merge(old_model, new_model)
                         ↓
-              [New DocumentModel with migrated annotations]
+              [MergeResult with migrated annotations]
                         ↓
               project_to_pages()
                         ↓

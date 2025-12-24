@@ -5,7 +5,6 @@ migration across document versions. It acts as an orchestration layer that:
 - Works with already-loaded DocumentModels (preserves layer separation)
 - Injects ContextResolver for testability
 - Delegates to handlers for type-specific migration
-- Keeps DocumentModel.migrate_annotations_to() as backward-compatible facade
 
 Layer responsibilities:
 - converter.py: Policy ("should we merge?") + file orchestration
@@ -14,16 +13,14 @@ Layer responsibilities:
 - Handlers: Type-specific migration logic
 
 Example:
-    # Direct usage with explicit dependencies
+    # Create merger with explicit dependencies
     merger = AnnotationMerger(resolver=ContextResolver())
-    result = merger.merge(MergeContext(old_model=old, new_model=new))
+    context = MergeContext(old_model=old, new_model=new)
+    result = merger.merge(context)
 
     # Access results
     merged_model = result.merged_model
     print(f"Success rate: {result.success_rate:.1%}")
-
-    # Or use the backward-compatible facade
-    merged, report = old_model.migrate_annotations_to(new_model, merger=merger)
 """
 
 from __future__ import annotations

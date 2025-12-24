@@ -1,7 +1,7 @@
 """Tests for AnnotationMerger and related merging functionality.
 
-Tests the new AnnotationMerger orchestration layer and its integration
-with DocumentModel.migrate_annotations_to().
+Tests the AnnotationMerger orchestration layer which coordinates
+annotation migration across document versions.
 """
 
 from unittest.mock import MagicMock
@@ -231,8 +231,8 @@ class TestAnnotationMerger:
         assert result.merged_model.annotations[0].cluster_id == "my-cluster"
 
 
-class TestDocumentModelMigrateIntegration:
-    """Tests for DocumentModel.migrate_annotations_to() integration."""
+class TestAnnotationMergerIntegration:
+    """Integration tests for AnnotationMerger usage patterns."""
 
     def _make_document_model(
         self,
@@ -248,37 +248,40 @@ class TestDocumentModelMigrateIntegration:
             geometry=None,
         )
 
-    def test_migrate_delegates_to_merger(self):
-        """Test that migrate_annotations_to delegates to AnnotationMerger."""
+    def test_merge_with_default_resolver(self):
+        """Test merging with default ContextResolver."""
         old_model = self._make_document_model(annotations=[])
         new_model = self._make_document_model()
 
-        # Call without explicit merger
-        merged, report = old_model.migrate_annotations_to(new_model)
+        # Create merger with default resolver
+        merger = AnnotationMerger(resolver=ContextResolver())
+        context = MergeContext(old_model=old_model, new_model=new_model)
+        result = merger.merge(context)
 
-        assert merged is not None
-        assert report is not None
+        assert result.merged_model is not None
+        assert result.report is not None
 
-    def test_migrate_accepts_custom_merger(self):
-        """Test that migrate_annotations_to accepts custom merger."""
+    def test_merge_with_custom_resolver(self):
+        """Test merging with custom resolver."""
         old_model = self._make_document_model(annotations=[])
         new_model = self._make_document_model()
 
         mock_resolver = MagicMock(spec=ContextResolver)
-        custom_merger = AnnotationMerger(resolver=mock_resolver)
+        merger = AnnotationMerger(resolver=mock_resolver)
+        context = MergeContext(old_model=old_model, new_model=new_model)
+        result = merger.merge(context)
 
-        merged, report = old_model.migrate_annotations_to(new_model, merger=custom_merger)
+        assert result.merged_model is not None
 
-        assert merged is not None
-
-    def test_migrate_returns_tuple(self):
-        """Test that migrate_annotations_to returns (model, report) tuple."""
+    def test_merge_result_structure(self):
+        """Test that merge returns a MergeResult with correct structure."""
         old_model = self._make_document_model(annotations=[])
         new_model = self._make_document_model()
 
-        result = old_model.migrate_annotations_to(new_model)
+        merger = AnnotationMerger(resolver=ContextResolver())
+        context = MergeContext(old_model=old_model, new_model=new_model)
+        result = merger.merge(context)
 
-        assert isinstance(result, tuple)
-        assert len(result) == 2
-        assert isinstance(result[0], DocumentModel)
-        assert isinstance(result[1], MigrationReport)
+        assert isinstance(result, MergeResult)
+        assert isinstance(result.merged_model, DocumentModel)
+        assert isinstance(result.report, MigrationReport)

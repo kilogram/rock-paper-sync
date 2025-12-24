@@ -15,10 +15,10 @@ Architecture:
            |   [New DocumentModel (no annotations)]
            |          |
            v          v
-    old_model.migrate_annotations_to(new_model)
+    AnnotationMerger.merge(old_model, new_model)
            |
            v
-    [New DocumentModel with migrated annotations]
+    [MergeResult with migrated annotations]
            |
            v
     new_model.project_to_pages()
@@ -42,7 +42,6 @@ from .core_types import HeuristicTextAnchor, Point, StrokeData
 from .scene_graph import SceneGraphIndex, StrokeBundle
 
 if TYPE_CHECKING:
-    from rock_paper_sync.annotations.merging import AnnotationMerger
     from rock_paper_sync.layout import DeviceGeometry, LayoutContext, WordWrapLayoutEngine
     from rock_paper_sync.parser import ContentBlock
 
@@ -1068,7 +1067,7 @@ class DocumentModel:
 
         Uses KDTree-based proximity clustering with DEFAULT_CLUSTER_THRESHOLD.
         Clusters are assigned during from_rm_files() and used by both:
-        - Annotation reanchoring (migrate_annotations_to)
+        - Annotation reanchoring (via AnnotationMerger.merge)
         - OCR processing (get_annotation_clusters)
         """
         import uuid
@@ -1136,41 +1135,6 @@ class DocumentModel:
         result = list(clusters.values())
         result.extend([[a] for a in unclustered])
         return result
-
-    def migrate_annotations_to(
-        self,
-        new_model: DocumentModel,
-        merger: AnnotationMerger | None = None,
-    ) -> tuple[DocumentModel, MigrationReport]:
-        """Migrate annotations from this model to new content.
-
-        The core operation for annotation preservation. This is a convenience
-        facade that delegates to AnnotationMerger.
-
-        For explicit dependency injection (e.g., testing), pass a custom merger:
-            merger = AnnotationMerger(resolver=mock_resolver)
-            merged, report = old_model.migrate_annotations_to(new_model, merger=merger)
-
-        Args:
-            new_model: Target document model (without annotations)
-            merger: Optional AnnotationMerger instance. If None, creates a
-                default merger with default ContextResolver.
-
-        Returns:
-            Tuple of (merged DocumentModel with annotations, MigrationReport)
-        """
-        from rock_paper_sync.annotations.merging import (
-            AnnotationMerger,
-            MergeContext,
-        )
-
-        if merger is None:
-            merger = AnnotationMerger(resolver=ContextResolver())
-
-        context = MergeContext(old_model=self, new_model=new_model)
-        result = merger.merge(context)
-
-        return result.merged_model, result.report
 
     def project_to_pages(
         self,
