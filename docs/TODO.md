@@ -114,3 +114,69 @@ Proposed consolidation:
 - Keep `HeuristicTextAnchor` as service class (not a data type)
 
 Risk: High - affects migration pipeline and handler protocol. Requires careful testing.
+
+---
+
+## Extract RmFileExtractor
+
+**Files:** `generator.py`, `document_model.py`, `converter.py`, `layout/context.py`
+
+Consolidate .rm file reading logic scattered across modules:
+- `generator.py:_extract_text_blocks_from_rm()`
+- `document_model.py:from_rm_files()`
+- `converter.py:_build_annotation_map()` setup
+- `layout/context.py:from_rm_file()`
+
+Proposed interface:
+```python
+class RmFileExtractor:
+    def extract_text_blocks(self, rm_path: Path) -> list[RmTextBlock]
+    def extract_annotations(self, rm_path: Path) -> list[DocumentAnnotation]
+    def extract_scene_blocks(self, rm_path: Path) -> list[Block]
+```
+
+---
+
+## Extract AnnotationStore from DocumentModel
+
+**File:** `annotations/document_model.py`
+
+DocumentModel is currently ~1200 lines with mixed responsibilities:
+- Paragraph/content storage (keep)
+- `project_to_pages()` (keep)
+- `DocumentAnnotation` storage and retrieval (extract)
+- `_assign_stroke_clusters()` logic (extract)
+- `get_annotation_clusters()` (extract)
+
+Proposed extraction to `annotations/annotation_store.py`.
+
+---
+
+## Standardize annotations/ Submodule Structure
+
+**Current issues:**
+- Root-level files mixed with submodules
+- Inconsistent organization
+
+**Target structure:**
+```
+annotations/
+├── __init__.py           # Public API exports
+├── core/
+│   ├── types.py          # Consolidated types
+│   ├── protocol.py       # AnnotationHandler (cleaned)
+│   └── processor.py      # AnnotationProcessor
+├── model/
+│   ├── document.py       # DocumentModel (slimmed)
+│   └── store.py          # AnnotationStore (extracted)
+├── handlers/
+│   ├── highlight.py      # HighlightHandler
+│   └── stroke.py         # StrokeHandler
+├── services/
+│   ├── crdt_service.py
+│   ├── context_resolver.py
+│   └── merger.py         # Renamed from merging.py
+└── scene_adapter/        # Keep as-is
+```
+
+Per plan: Do all at once in a single commit to avoid broken imports.
