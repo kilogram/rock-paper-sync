@@ -12,7 +12,6 @@ Characteristics:
   - Negative Y: relative to baseline + line height (60px offset)
 - Per-parent X anchors from TreeNodeBlocks
 - Require OCR to extract text content
-- Rendered as OCR blocks in markdown
 
 For coordinate transformation details, see docs/STROKE_ANCHORING.md.
 
@@ -20,7 +19,6 @@ Example (traditional interface):
     handler = StrokeHandler(ocr_processor)
     annotations = handler.detect(rm_file_path)
     mappings = handler.map(annotations, markdown_blocks, rm_file_path)
-    output = handler.render(0, mappings[0], "Original paragraph")
 
 Example (cluster-based interface for migration):
     handler = StrokeHandler()
@@ -45,7 +43,6 @@ from rock_paper_sync.annotations.core.data_types import (
     RenderConfig,
 )
 from rock_paper_sync.coordinate_transformer import (
-    NEGATIVE_Y_OFFSET,
     CoordinateTransformer,
     build_parent_anchor_map,
     extract_text_origin,
@@ -221,41 +218,6 @@ class StrokeHandler:
 
         return mappings
 
-    def render(
-        self,
-        paragraph_index: int,
-        matches: list[Annotation],
-        original_content: str,
-    ) -> str:
-        """Render stroke annotations as OCR blocks.
-
-        If OCR processor is available, performs text extraction.
-        Otherwise, renders as placeholder markers.
-
-        Args:
-            paragraph_index: Index of paragraph in markdown
-            matches: List of stroke annotations for this paragraph
-            original_content: Original paragraph text
-
-        Returns:
-            Markdown text with OCR blocks or placeholder markers
-        """
-        if not matches:
-            return original_content
-
-        # If no OCR processor, render as placeholder
-        if not self.ocr_processor:
-            num_strokes = len(matches)
-            marker = f"<!-- {num_strokes} handwritten annotation(s) -->"
-            return f"{marker}\n{original_content}"
-
-        # With OCR processor, render would be handled by OCRProcessor.process_annotations
-        # This is a placeholder - actual OCR rendering happens in the OCR pipeline
-        # For now, just add a marker
-        num_strokes = len(matches)
-        marker = f"<!-- {num_strokes} stroke(s) pending OCR -->"
-        return f"{marker}\n{original_content}"
-
     def create_anchor(
         self,
         annotation: Annotation,
@@ -301,73 +263,6 @@ class StrokeHandler:
             context_before=context_before,
             context_after=context_after,
         )
-
-    def get_position(
-        self,
-        block,
-        text_origin_y: float,
-    ) -> tuple[float, float] | None:
-        """Get absolute position for a stroke (Line) block.
-
-        Strokes use the dual-anchor coordinate system:
-        - Positive Y: absolute_y = text_origin_y + native_y
-        - Negative Y: absolute_y = text_origin_y + NEGATIVE_Y_OFFSET + native_y
-
-        Args:
-            block: Raw rmscene SceneLineItemBlock
-            text_origin_y: Y coordinate of text origin from .rm file
-
-        Returns:
-            Tuple of (absolute_x, absolute_y), or None if position cannot be determined
-        """
-        try:
-            if not hasattr(block, "item") or not hasattr(block.item, "value"):
-                return None
-
-            value = block.item.value
-
-            # Verify this is a Line block
-            if "Line" not in type(value).__name__:
-                return None
-
-            # Extract native coordinates from points
-            if not hasattr(value, "points") or not value.points:
-                return None
-
-            xs = [p.x for p in value.points if hasattr(p, "x")]
-            ys = [p.y for p in value.points if hasattr(p, "y")]
-
-            if not xs or not ys:
-                return None
-
-            native_x = sum(xs) / len(xs)
-            native_y = sum(ys) / len(ys)
-
-            # Check if text-relative
-            is_text_rel = False
-            if hasattr(block, "parent_id"):
-                is_text_rel = is_text_relative(block.parent_id)
-
-            # Transform to absolute coordinates using dual-anchor system
-            if is_text_rel:
-                # Apply NEGATIVE_Y_OFFSET for negative Y strokes
-                y_offset = NEGATIVE_Y_OFFSET if native_y < 0 else 0
-                absolute_y = text_origin_y + y_offset + native_y
-            else:
-                absolute_y = native_y
-
-            # X coordinate doesn't need transformation for routing decisions
-            absolute_x = native_x
-
-            logger.debug(
-                f"Stroke position: native_y={native_y:.1f} → absolute_y={absolute_y:.1f} "
-                f"(y_offset={NEGATIVE_Y_OFFSET if native_y < 0 else 0})"
-            )
-            return (absolute_x, absolute_y)
-
-        except Exception as e:
-            logger.warning(f"Failed to get stroke position: {e}")
-            return None
 
     def relocate(
         self,

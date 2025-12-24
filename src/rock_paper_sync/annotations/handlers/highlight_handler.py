@@ -8,13 +8,11 @@ Characteristics:
 - Created by selecting text on device
 - Include extracted text content
 - Simple coordinate transform: absolute_y = text_origin_y + native_y
-- Rendered as HTML comments in markdown
 
 Example:
     handler = HighlightHandler()
     annotations = handler.detect(rm_file_path)
     mappings = handler.map(annotations, markdown_blocks, rm_file_path)
-    output = handler.render(0, mappings[0], "Original paragraph")
 """
 
 import logging
@@ -30,7 +28,6 @@ from rock_paper_sync.annotations.common.spatial import find_nearest_paragraph_by
 from rock_paper_sync.annotations.common.text_extraction import extract_text_blocks_from_rm
 from rock_paper_sync.annotations.core.data_types import ExtractedAnnotation, RenderConfig
 from rock_paper_sync.annotations.core_types import HeuristicTextAnchor
-from rock_paper_sync.coordinate_transformer import is_text_relative
 
 if TYPE_CHECKING:
     from typing import Any
@@ -39,6 +36,232 @@ if TYPE_CHECKING:
     from rock_paper_sync.layout import DeviceGeometry, LayoutContext, WordWrapLayoutEngine
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Pure functions for highlight relocation
+# These functions are extracted from the monolithic relocate() method to improve
+# testability and separation of concerns.
+# =============================================================================
+
+
+def extract_glyph_highlight_info(
+    block: "Any",
+) -> tuple[str, list["si.Rectangle"], tuple[float, float]] | None:
+    """Extract highlight information from a SceneGlyphItemBlock.
+
+    Args:
+        block: SceneGlyphItemBlock containing highlight data
+
+    Returns:
+        Tuple of (highlight_text, rectangles, average_position) or None if extraction fails
+    """
+    if not hasattr(block.item, "value"):
+        logger.warning("Glyph block has no value, cannot extract highlight info")
+        return None
+
+    glyph_value = block.item.value
+    if not hasattr(glyph_value, "text") or not glyph_value.text:
+        logger.warning("Glyph has no text content")
+        return None
+
+    if not hasattr(glyph_value, "rectangles") or not glyph_value.rectangles:
+        logger.warning("Glyph has no rectangles")
+        return None
+
+    highlight_text = glyph_value.text
+    rectangles = glyph_value.rectangles
+
+    # Calculate average position from rectangles
+    avg_x = sum(r.x for r in rectangles) / len(rectangles)
+    avg_y = sum(r.y for r in rectangles) / len(rectangles)
+
+    return (highlight_text, rectangles, (avg_x, avg_y))
+
+
+def find_and_resolve_anchor(
+    highlight_text: str,
+    old_text: str,
+    new_text: str,
+    old_position: tuple[float, float],
+    context_window: int = 50,
+    fuzzy_threshold: float = 0.8,
+    min_confidence: float = 0.5,
+) -> tuple[int, int, float] | None:
+    """Find anchor in old text and resolve to new text position.
+
+    Args:
+        highlight_text: The highlighted text to find
+        old_text: Document text before modification
+        new_text: Document text after modification
+        old_position: (x, y) position of highlight in old document
+        context_window: Characters of context for matching
+        fuzzy_threshold: Minimum fuzzy match ratio
+        min_confidence: Minimum confidence to accept anchor
+
+    Returns:
+        Tuple of (old_offset, new_offset, confidence) or None if resolution fails
+    """
+    text_anchor_strategy = HeuristicTextAnchor(
+        context_window=context_window, fuzzy_threshold=fuzzy_threshold
+    )
+
+    # Find anchor in old document
+    anchor = text_anchor_strategy.find_anchor(highlight_text, old_text, old_position)
+
+    logger.debug(
+        f"Highlight '{highlight_text[:30]}...': old_pos=({old_position[0]:.1f}, {old_position[1]:.1f}), "
+        f"old_offset={anchor.char_offset}, confidence={anchor.confidence:.2f}"
+    )
+
+    if anchor.confidence < min_confidence:
+        logger.warning(
+            f"Low confidence anchor ({anchor.confidence:.2f}) for '{highlight_text[:30]}...', "
+            f"cannot relocate"
+        )
+        return None
+
+    # Resolve anchor in new document
+    new_offset = text_anchor_strategy.resolve_anchor(anchor, new_text)
+
+    if new_offset is None:
+        logger.warning(f"Could not find '{highlight_text[:30]}...' in new document")
+        return None
+
+    old_offset = anchor.char_offset
+    if old_offset is None:
+        logger.warning("Anchor has no char_offset")
+        return None
+
+    logger.debug(
+        f"  Resolved: old_offset={old_offset} -> new_offset={new_offset} "
+        f"(delta={new_offset - old_offset})"
+    )
+
+    return (old_offset, new_offset, anchor.confidence)
+
+
+def calculate_position_delta(
+    old_offset: int,
+    new_offset: int,
+    old_text: str,
+    new_text: str,
+    old_origin: tuple[float, float],
+    new_origin: tuple[float, float],
+    layout_engine: "WordWrapLayoutEngine",
+    text_width: float,
+) -> tuple[float, float] | None:
+    """Calculate position delta using layout engine.
+
+    Args:
+        old_offset: Character offset in old text
+        new_offset: Character offset in new text
+        old_text: Document text before modification
+        new_text: Document text after modification
+        old_origin: (x, y) origin of old text block
+        new_origin: (x, y) origin of new text block
+        layout_engine: WordWrapLayoutEngine for position calculations
+        text_width: Text width for layout calculations
+
+    Returns:
+        Tuple of (x_delta, y_delta) or None if calculation fails
+    """
+    try:
+        old_x_model, old_y_model = layout_engine.offset_to_position(
+            old_offset, old_text, old_origin, text_width
+        )
+        new_x_model, new_y_model = layout_engine.offset_to_position(
+            new_offset, new_text, new_origin, text_width
+        )
+    except Exception as e:
+        logger.warning(f"Failed to calculate positions: {e}")
+        return None
+
+    x_delta = new_x_model - old_x_model
+    y_delta = new_y_model - old_y_model
+
+    logger.debug(
+        f"  Model positions: old=({old_x_model:.1f}, {old_y_model:.1f}), "
+        f"new=({new_x_model:.1f}, {new_y_model:.1f})"
+    )
+    logger.debug(f"  Delta: ({x_delta:.1f}, {y_delta:.1f})")
+
+    return (x_delta, y_delta)
+
+
+def apply_delta_to_rectangles(
+    rectangles: list["si.Rectangle"],
+    delta: tuple[float, float],
+) -> None:
+    """Apply position delta to rectangles in-place.
+
+    Args:
+        rectangles: List of Rectangle objects to modify
+        delta: (x_delta, y_delta) to apply
+    """
+    x_delta, y_delta = delta
+    for rect in rectangles:
+        rect.x += x_delta
+        rect.y += y_delta
+
+
+def rebuild_rectangles_for_reflow(
+    original_rectangles: list["si.Rectangle"],
+    new_rects_from_layout: list[tuple[float, float, float, float]],
+    delta: tuple[float, float],
+    geometry: "DeviceGeometry",
+    new_origin: tuple[float, float],
+) -> list["si.Rectangle"]:
+    """Rebuild rectangles when highlight reflows to different line count.
+
+    When text reflows to a different number of lines, we can't simply apply
+    a delta. Instead, we use the layout engine's calculated positions for
+    line structure while preserving original rectangle dimensions.
+
+    Args:
+        original_rectangles: Original highlight rectangles
+        new_rects_from_layout: Layout engine's calculated rectangles (x, y, w, h)
+        delta: (x_delta, y_delta) from position calculation
+        geometry: DeviceGeometry for layout parameters
+        new_origin: (x, y) origin of new text block
+
+    Returns:
+        New list of Rectangle objects for the reflowed highlight
+    """
+    original_rect = original_rectangles[0] if original_rectangles else None
+    original_height = original_rect.h if original_rect else geometry.line_height
+
+    x_delta, y_delta = delta
+    first_new_x, first_new_y, first_new_w, _ = new_rects_from_layout[0]
+
+    # Calculate first rectangle position
+    if original_rect:
+        first_rect_x = original_rect.x + x_delta
+        first_rect_y = original_rect.y + y_delta
+    else:
+        first_rect_x = first_new_x
+        first_rect_y = first_new_y
+
+    result = [si.Rectangle(first_rect_x, first_rect_y, first_new_w, original_height)]
+
+    # Build remaining rectangles
+    line_start_x = new_origin[0]
+    tolerance = 10.0
+
+    for i, (x, y, w, _) in enumerate(new_rects_from_layout[1:], start=1):
+        is_line_start = abs(x - line_start_x) < tolerance
+
+        if is_line_start:
+            rect_x = geometry.text_pos_x
+        else:
+            rel_x = x - first_new_x
+            rect_x = first_rect_x + rel_x
+
+        rect_y = first_rect_y + i * original_height
+        result.append(si.Rectangle(rect_x, rect_y, w, original_height))
+
+    logger.debug(f"  Created {len(result)} rectangle(s) for reflowed highlight")
+    return result
 
 
 class HighlightHandler:
@@ -228,40 +451,6 @@ class HighlightHandler:
         )
         return idx
 
-    def render(
-        self,
-        paragraph_index: int,
-        matches: list[Annotation],
-        original_content: str,
-    ) -> str:
-        """Render highlight annotations as HTML comments.
-
-        Args:
-            paragraph_index: Index of paragraph in markdown
-            matches: List of highlight annotations for this paragraph
-            original_content: Original paragraph text
-
-        Returns:
-            Markdown text with HTML comment markers
-        """
-        if not matches:
-            return original_content
-
-        # Collect all highlight texts
-        highlight_texts = []
-        for annotation in matches:
-            if annotation.highlight and annotation.highlight.text:
-                highlight_texts.append(annotation.highlight.text.strip())
-
-        if not highlight_texts:
-            return original_content
-
-        # Render as HTML comment
-        highlights_str = " | ".join(highlight_texts)
-        comment = f"<!-- Highlights: {highlights_str} -->"
-
-        return f"{comment}\n{original_content}"
-
     def create_anchor(
         self,
         annotation: Annotation,
@@ -327,71 +516,6 @@ class HighlightHandler:
             color=highlight.color if hasattr(highlight, "color") else None,
         )
 
-    def get_position(
-        self,
-        block: "Any",
-        text_origin_y: float,
-    ) -> tuple[float, float] | None:
-        """Get absolute position for a highlight (Glyph) block.
-
-        Highlights use simple text-relative coordinates:
-        absolute_y = text_origin_y + native_y
-
-        Args:
-            block: Raw rmscene SceneGlyphItemBlock
-            text_origin_y: Y coordinate of text origin from .rm file
-
-        Returns:
-            Tuple of (absolute_x, absolute_y), or None if position cannot be determined
-        """
-        try:
-            if not hasattr(block, "item") or not hasattr(block.item, "value"):
-                return None
-
-            value = block.item.value
-
-            # Verify this is a Glyph block
-            if "Glyph" not in type(value).__name__:
-                return None
-
-            # Extract native coordinates from rectangles
-            if not hasattr(value, "rectangles") or not value.rectangles:
-                return None
-
-            # Calculate center from all rectangles
-            xs = [r.x + r.w / 2 for r in value.rectangles if hasattr(r, "x")]
-            ys = [r.y + r.h / 2 for r in value.rectangles if hasattr(r, "y")]
-
-            if not xs or not ys:
-                return None
-
-            native_x = sum(xs) / len(xs)
-            native_y = sum(ys) / len(ys)
-
-            # Check if text-relative (most highlights are)
-            is_text_rel = False
-            if hasattr(block, "parent_id"):
-                is_text_rel = is_text_relative(block.parent_id)
-
-            # Transform to absolute coordinates
-            # Highlights use simple offset (no NEGATIVE_Y_OFFSET needed)
-            if is_text_rel:
-                absolute_y = text_origin_y + native_y
-            else:
-                absolute_y = native_y
-
-            # X coordinate doesn't need text_origin_x for routing decisions
-            absolute_x = native_x
-
-            logger.debug(
-                f"Highlight position: native_y={native_y:.1f} → absolute_y={absolute_y:.1f}"
-            )
-            return (absolute_x, absolute_y)
-
-        except Exception as e:
-            logger.warning(f"Failed to get highlight position: {e}")
-            return None
-
     def relocate(
         self,
         block: "Any",
@@ -428,142 +552,47 @@ class HighlightHandler:
         # Lazy import to avoid circular dependency
         from rock_paper_sync.generator import update_glyph_extra_value_data
 
-        # Extract highlighted text
-        if not hasattr(block.item, "value"):
-            logger.warning("Glyph block has no value, keeping original position")
+        # Step 1: Extract highlight information from block
+        highlight_info = extract_glyph_highlight_info(block)
+        if highlight_info is None:
+            logger.warning("Could not extract highlight info, keeping original position")
             return block
 
+        highlight_text, rectangles, old_position = highlight_info
         glyph_value = block.item.value
-        if not hasattr(glyph_value, "text") or not glyph_value.text:
-            logger.warning("Glyph has no text content, keeping original position")
+
+        # Step 2: Find anchor in old text and resolve to new position
+        anchor_result = find_and_resolve_anchor(
+            highlight_text=highlight_text,
+            old_text=old_text,
+            new_text=new_text,
+            old_position=old_position,
+        )
+        if anchor_result is None:
+            logger.warning("Could not resolve anchor, keeping original position")
             return block
 
-        highlight_text = glyph_value.text
+        old_offset, new_offset, confidence = anchor_result
 
-        # Need rectangles to adjust
-        if not hasattr(glyph_value, "rectangles") or not glyph_value.rectangles:
-            logger.warning("Glyph has no rectangles, keeping original position")
+        # Step 3: Calculate position delta using layout engine
+        delta = calculate_position_delta(
+            old_offset=old_offset,
+            new_offset=new_offset,
+            old_text=old_text,
+            new_text=new_text,
+            old_origin=old_origin,
+            new_origin=new_origin,
+            layout_engine=layout_engine,
+            text_width=geometry.text_width,
+        )
+        if delta is None:
+            logger.warning("Could not calculate position delta, keeping original position")
             return block
 
-        # Get old position (average of rectangles) for anchor finding
-        old_x = sum(r.x for r in glyph_value.rectangles) / len(glyph_value.rectangles)
-        old_y = sum(r.y for r in glyph_value.rectangles) / len(glyph_value.rectangles)
+        x_delta, y_delta = delta
 
-        # Create text anchor strategy for this relocation
-        text_anchor_strategy = HeuristicTextAnchor(context_window=50, fuzzy_threshold=0.8)
-
-        # Find anchor in old document
-        anchor = text_anchor_strategy.find_anchor(highlight_text, old_text, (old_x, old_y))
-
-        # Debug: print anchor details for troubleshooting
-        print(
-            f"[DEBUG-HL] Highlight '{highlight_text[:20]}': old_pos=({old_x:.1f}, {old_y:.1f}), anchor_offset={anchor.char_offset}"
-        )
-
-        logger.debug(
-            f"Highlight '{highlight_text[:30]}...': old_pos=({old_x:.1f}, {old_y:.1f}), "
-            f"old_offset={anchor.char_offset}, confidence={anchor.confidence:.2f}"
-        )
-
-        if anchor.confidence < 0.5:
-            logger.warning(
-                f"Low confidence anchor ({anchor.confidence:.2f}) for '{highlight_text[:30]}...', "
-                f"keeping original position"
-            )
-            return block
-
-        # Resolve anchor in new document
-        new_offset = text_anchor_strategy.resolve_anchor(anchor, new_text)
-
-        if new_offset is None:
-            logger.warning(
-                f"Could not find '{highlight_text[:30]}...' in new document, keeping original position"
-            )
-            return block
-
-        old_offset = anchor.char_offset
-        if old_offset is None:
-            logger.warning("Anchor has no char_offset, keeping original position")
-            return block
-
-        logger.debug(
-            f"  Resolved: old_offset={old_offset} -> new_offset={new_offset} "
-            f"(delta={new_offset - old_offset})"
-        )
-
-        # Debug: print resolution details
-        print(
-            f"[DEBUG-HL] Resolved: old_offset={old_offset} -> new_offset={new_offset} (delta={new_offset - old_offset})"
-        )
-        # Show text context around offsets
-        old_context = old_text[max(0, old_offset - 20) : old_offset + len(highlight_text) + 20]
-        new_context = new_text[max(0, new_offset - 20) : new_offset + len(highlight_text) + 20]
-        print(f"[DEBUG-HL] Old context: '...{old_context}...'")
-        print(f"[DEBUG-HL] New context: '...{new_context}...'")
-
-        # DELTA-BASED APPROACH: Calculate positions using SAME layout model
-        try:
-            # Enable debug for 'bottom' highlight
-            is_bottom = "bottom" in highlight_text.lower()
-            old_x_model, old_y_model = layout_engine.offset_to_position(
-                old_offset, old_text, old_origin, geometry.text_width, debug=is_bottom
-            )
-            new_x_model, new_y_model = layout_engine.offset_to_position(
-                new_offset, new_text, new_origin, geometry.text_width, debug=is_bottom
-            )
-        except Exception as e:
-            logger.warning(f"Failed to calculate positions for highlight: {e}")
-            return block
-
-        # Calculate delta between model positions (errors cancel out)
-        x_delta = new_x_model - old_x_model
-        y_delta = new_y_model - old_y_model
-
-        logger.debug(
-            f"  Model positions: old=({old_x_model:.1f}, {old_y_model:.1f}), "
-            f"new=({new_x_model:.1f}, {new_y_model:.1f})"
-        )
-        logger.debug(f"  Delta: ({x_delta:.1f}, {y_delta:.1f})")
-
-        # Debug: print model positions
-        print(
-            f"[DEBUG-HL] Model: old=({old_x_model:.1f}, {old_y_model:.1f}), new=({new_x_model:.1f}, {new_y_model:.1f})"
-        )
-        print(f"[DEBUG-HL] Delta: ({x_delta:.1f}, {y_delta:.1f})")
-
-        # REFLOW DETECTION: Check if content significantly changed
-        # When text content changes significantly (large char_offset delta), the original
-        # "device offset from model" is no longer valid because it was specific to the
-        # old page layout. In this case, place highlight at model position directly
-        # instead of preserving the old device offset.
-        #
-        # NOTE: Reflow detection is currently disabled because the delta-based approach
-        # gives better results. The model position calculation is inaccurate for cross-paragraph
-        # text because joining text_blocks with '\n' creates artificial line breaks that
-        # don't match the device's actual paragraph spacing. The delta-based approach
-        # cancels out these errors by using the same (flawed) model for both positions.
-        # TODO: Fix the model to properly handle paragraph spacing, then re-enable reflow.
-        offset_change = abs(new_offset - old_offset)
-        significant_offset_change = 100000  # Effectively disabled - was 100
-
-        if offset_change > significant_offset_change:
-            # Significant content reflow - use model position directly
-            # Calculate old device offset (how much device drew away from model)
-            old_device_x_offset = old_x - old_x_model
-            old_device_y_offset = old_y - old_y_model
-
-            logger.debug(
-                f"  Significant reflow detected (offset_change={offset_change}), "
-                f"old device offset=({old_device_x_offset:.1f}, {old_device_y_offset:.1f})"
-            )
-
-            # Don't preserve the old device offset - place at new model position
-            # Keep only minor X adjustments (device-specific rendering quirks)
-            x_delta = new_x_model - old_x + min(old_device_x_offset, 10.0)
-            y_delta = new_y_model - old_y  # Place at model Y position
-
-        # REFLOW DETECTION: Check if highlight now spans different number of lines
-        old_rect_count = len(glyph_value.rectangles)
+        # Step 4: Check for reflow (highlight spanning different number of lines)
+        old_rect_count = len(rectangles)
         new_end_offset = new_offset + len(highlight_text)
         new_rects = layout_engine.calculate_highlight_rectangles(
             new_offset, new_end_offset, new_text, new_origin, geometry.text_width
@@ -571,60 +600,30 @@ class HighlightHandler:
         new_rect_count = len(new_rects)
 
         if new_rect_count != old_rect_count:
-            # REFLOW CASE: Highlight now spans different number of lines
+            # Reflow case: rebuild rectangles for new line structure
             logger.debug(f"  Reflow detected: {old_rect_count} rect(s) → {new_rect_count} rect(s)")
-
-            original_rect = glyph_value.rectangles[0] if glyph_value.rectangles else None
-            original_height = original_rect.h if original_rect else geometry.line_height
-
-            first_new_x, first_new_y, first_new_w, _ = new_rects[0]
-
-            if original_rect:
-                first_rect_x = original_rect.x + x_delta
-                first_rect_y = original_rect.y + y_delta
-            else:
-                first_rect_x = first_new_x
-                first_rect_y = first_new_y
-
+            new_rectangles = rebuild_rectangles_for_reflow(
+                original_rectangles=list(rectangles),
+                new_rects_from_layout=new_rects,
+                delta=delta,
+                geometry=geometry,
+                new_origin=new_origin,
+            )
             glyph_value.rectangles.clear()
-            glyph_value.rectangles.append(
-                si.Rectangle(first_rect_x, first_rect_y, first_new_w, original_height)
-            )
-
-            line_start_x = new_origin[0]
-            tolerance = 10.0
-
-            for i, (x, y, w, _) in enumerate(new_rects[1:], start=1):
-                is_line_start = abs(x - line_start_x) < tolerance
-
-                if is_line_start:
-                    rect_x = geometry.text_pos_x
-                else:
-                    rel_x = x - first_new_x
-                    rect_x = first_rect_x + rel_x
-
-                rect_y = first_rect_y + i * original_height
-                glyph_value.rectangles.append(si.Rectangle(rect_x, rect_y, w, original_height))
-
-            logger.debug(
-                f"  Created {len(glyph_value.rectangles)} rectangle(s) using delta+geometry"
-            )
+            glyph_value.rectangles.extend(new_rectangles)
         else:
-            # DELTA CASE: Same line count, apply delta to preserve pixel-perfect positions
-            for rect in glyph_value.rectangles:
-                rect.x += x_delta
-                rect.y += y_delta
+            # Delta case: apply delta to preserve pixel-perfect positions
+            apply_delta_to_rectangles(rectangles, delta)
 
-        # Update start field for older firmware (< v3.6)
+        # Step 5: Update glyph metadata
         glyph_value.start = new_offset
 
-        # Update text field to match what's at the new position
         new_highlighted_text = new_text[new_offset : new_offset + len(highlight_text)]
         if new_highlighted_text:
             glyph_value.text = new_highlighted_text
             glyph_value.length = len(new_highlighted_text)
 
-        # UPDATE CRDT ANCHOR in extra_value_data for firmware 3.6+
+        # Step 6: Update CRDT anchor for firmware 3.6+
         if (
             crdt_base_id is not None
             and hasattr(block, "extra_value_data")
@@ -636,7 +635,7 @@ class HighlightHandler:
 
         logger.debug(
             f"Adjusted highlight '{highlight_text[:30]}...' by delta=({x_delta:.1f}, {y_delta:.1f}), "
-            f"offset={old_offset}->{new_offset}, confidence={anchor.confidence:.2f}"
+            f"offset={old_offset}->{new_offset}, confidence={confidence:.2f}"
         )
 
         return block

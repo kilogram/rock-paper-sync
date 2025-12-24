@@ -15,7 +15,6 @@ Design principles:
 Method categories:
 - REQUIRED: annotation_type, detect(), map(), create_anchor(), extract_from_markdown()
 - OPTIONAL: relocate() - only needed for content-based repositioning (highlights)
-- DEPRECATED: render(), get_position() - unused in current architecture
 
 For stroke handling, StrokeHandler also provides cluster-based methods:
 - detect_clusters() - extract StrokeClusters with CRDT context
@@ -68,7 +67,6 @@ class AnnotationHandler(Protocol):
     Method categories:
     - REQUIRED: annotation_type, detect(), map(), create_anchor(), extract_from_markdown()
     - OPTIONAL: relocate() - only for content-based repositioning (highlights)
-    - DEPRECATED: render(), get_position() - kept for backward compatibility
 
     CRDT operations (ID generation, block cloning) are delegated to CrdtService,
     not handled by individual handlers.
@@ -120,28 +118,6 @@ class AnnotationHandler(Protocol):
         """
         ...
 
-    def render(
-        self,
-        paragraph_index: int,
-        matches: list[Any],
-        original_content: str,
-    ) -> str:
-        """Generate markdown output for annotations at a paragraph.
-
-        DEPRECATED: This method is not used in the current architecture.
-        Rendering is handled separately from the handler protocol.
-        Kept for backward compatibility.
-
-        Args:
-            paragraph_index: Index of paragraph in markdown
-            matches: List of annotations mapped to this paragraph
-            original_content: Original paragraph text
-
-        Returns:
-            Markdown text with annotation markers/content
-        """
-        ...
-
     def create_anchor(
         self,
         annotation: Any,
@@ -175,31 +151,6 @@ class AnnotationHandler(Protocol):
                 paragraph_index=5,
                 page_num=0
             )
-        """
-        ...
-
-    def get_position(
-        self,
-        block: Any,
-        text_origin_y: float,
-    ) -> tuple[float, float] | None:
-        """Get absolute (x, y) position for an annotation block.
-
-        DEPRECATED: This method is not used in the current architecture.
-        Position extraction is handled by DocumentModel.from_rm_files().
-        Kept for backward compatibility.
-
-        Args:
-            block: Raw rmscene annotation block (SceneGlyphItemBlock or SceneLineItemBlock)
-            text_origin_y: Y coordinate of text origin from .rm file
-
-        Returns:
-            Tuple of (absolute_x, absolute_y) in page coordinates,
-            or None if position cannot be determined.
-
-        Note:
-            - Highlights use simple text-relative offset
-            - Strokes use dual-anchor system with NEGATIVE_Y_OFFSET for negative Y
         """
         ...
 

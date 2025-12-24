@@ -1,6 +1,6 @@
-"""Unit tests for annotation handler mapping and rendering.
+"""Unit tests for annotation handler mapping.
 
-Tests the map() and render() methods of HighlightHandler and StrokeHandler.
+Tests the map() method of HighlightHandler and StrokeHandler.
 These test error paths and edge cases that are hard to capture in replay tests.
 """
 
@@ -129,62 +129,6 @@ class TestHighlightHandlerMap:
         assert any("Could not map" in record.message for record in caplog.records)
 
 
-class TestHighlightHandlerRender:
-    """Tests for HighlightHandler.render()."""
-
-    @pytest.fixture
-    def handler(self):
-        return HighlightHandler()
-
-    def test_render_empty_matches(self, handler):
-        """Empty matches returns original content."""
-        content = "Original paragraph"
-
-        result = handler.render(0, [], content)
-
-        assert result == content
-
-    def test_render_single_highlight(self, handler):
-        """Single highlight renders as HTML comment."""
-        annotation = MagicMock()
-        annotation.highlight = MagicMock()
-        annotation.highlight.text = "important word"
-
-        content = "This is the paragraph"
-
-        result = handler.render(0, [annotation], content)
-
-        assert "<!-- Highlights: important word -->" in result
-        assert content in result
-
-    def test_render_multiple_highlights(self, handler):
-        """Multiple highlights joined with pipe."""
-        anno1 = MagicMock()
-        anno1.highlight = MagicMock()
-        anno1.highlight.text = "first"
-
-        anno2 = MagicMock()
-        anno2.highlight = MagicMock()
-        anno2.highlight.text = "second"
-
-        content = "Paragraph content"
-
-        result = handler.render(0, [anno1, anno2], content)
-
-        assert "<!-- Highlights: first | second -->" in result
-
-    def test_render_no_highlight_text(self, handler):
-        """Annotations without highlight text are skipped."""
-        annotation = MagicMock()
-        annotation.highlight = None  # No highlight
-
-        content = "Original"
-
-        result = handler.render(0, [annotation], content)
-
-        assert result == "Original"  # Unchanged
-
-
 class TestStrokeHandlerMap:
     """Tests for StrokeHandler.map()."""
 
@@ -285,47 +229,6 @@ class TestStrokeHandlerMap:
         assert annotation in result[0]
 
 
-class TestStrokeHandlerRender:
-    """Tests for StrokeHandler.render()."""
-
-    @pytest.fixture
-    def handler(self):
-        return StrokeHandler()
-
-    def test_render_empty_matches(self, handler):
-        """Empty matches returns original content."""
-        content = "Original paragraph"
-
-        result = handler.render(0, [], content)
-
-        assert result == content
-
-    def test_render_strokes_without_ocr_processor(self, handler):
-        """Strokes without OCR processor add annotation count marker."""
-        annotation = MagicMock()
-        annotation.stroke = MagicMock()
-
-        content = "Original paragraph"
-
-        result = handler.render(0, [annotation], content)
-
-        # Should add handwritten annotation marker
-        assert "<!-- 1 handwritten annotation(s) -->" in result
-        assert content in result
-
-    def test_render_multiple_strokes(self, handler):
-        """Multiple strokes show correct count."""
-        anno1 = MagicMock()
-        anno2 = MagicMock()
-        anno3 = MagicMock()
-
-        content = "Original paragraph"
-
-        result = handler.render(0, [anno1, anno2, anno3], content)
-
-        assert "<!-- 3 handwritten annotation(s) -->" in result
-
-
 class TestHandlerIntegration:
     """Integration tests for handler patterns."""
 
@@ -348,6 +251,5 @@ class TestHandlerIntegration:
             assert hasattr(handler, "annotation_type")
             assert hasattr(handler, "detect")
             assert hasattr(handler, "map")
-            assert hasattr(handler, "render")
             assert hasattr(handler, "create_anchor")
             assert hasattr(handler, "extract_from_markdown")
