@@ -1,4 +1,4 @@
-"""StrokeBundle - Groups all blocks required for a complete stroke.
+"""StrokeBundle - CRDT serialization unit for strokes.
 
 A stroke in the reMarkable v6 CRDT format requires FOUR interdependent blocks:
 
@@ -9,8 +9,23 @@ When migrating strokes between pages, ALL FOUR blocks must move together.
 Missing any block causes the device to fail silently or show errors like
 "Unable to find node with id=X:Y".
 
-This module provides the StrokeBundle dataclass that groups these blocks
-as an atomic unit for migration operations.
+IMPORTANT: StrokeBundle is a LOW-LEVEL CRDT concept, not a semantic annotation.
+
+Key distinction from other stroke types:
+- StrokeBundle: CRDT serialization unit (4 blocks per TreeNodeBlock)
+- StrokeCluster: Semantic annotation unit (margin note, underline, etc.)
+- Stroke: Individual stroke with point data + CRDT refs
+
+Multiple strokes may share one StrokeBundle (same TreeNodeBlock).
+One StrokeCluster may reference multiple StrokeBundles.
+
+Use StrokeBundle for:
+- Device serialization (writing .rm files)
+- Block grouping validation
+
+Use StrokeCluster for:
+- Annotation migration (moving annotations when content changes)
+- Semantic grouping (treating related strokes as one unit)
 """
 
 from __future__ import annotations
