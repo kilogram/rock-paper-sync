@@ -23,7 +23,8 @@ The annotation system provides a composable architecture for handling different 
 
 **`AnnotationHandler` Protocol** (`core/protocol.py`):
 - Interface for pluggable annotation processors
-- Methods: `detect()`, `map()`, `render()`, `get_position()`, state management
+- Required: `detect()`, `map()`, `create_anchor()`, `extract_from_markdown()`
+- Optional: `relocate()` (only for content-based repositioning like highlights)
 - Handlers are stateless processors (state persisted separately)
 - Handlers may import rmscene and coordinate_transformer directly for type-specific operations
 
@@ -106,13 +107,14 @@ To add a new annotation type (e.g., sketches, diagrams):
        def detect(self, rm_file_path) -> list[Annotation]:
            # Extract sketch annotations
 
-       def map(self, annotations, markdown_blocks, rm_file_path) -> dict:
+       def map(self, annotations, markdown_blocks, rm_file_path, layout_context) -> dict:
            # Map sketches to paragraphs
 
-       def render(self, paragraph_index, matches, content) -> str:
-           # Render as SVG embedded in markdown
+       def create_anchor(self, annotation, paragraph_text, paragraph_index, page_num) -> AnnotationAnchor:
+           # Create stable anchor for matching across syncs
 
-       # ... other Protocol methods (create_anchor, get_position, relocate, extract_from_markdown)
+       def extract_from_markdown(self, paragraph, config) -> list[ExtractedAnnotation]:
+           # Extract annotations from rendered markdown
    ```
 
 2. **Register with `AnnotationProcessor`**:
@@ -128,8 +130,8 @@ The system automatically routes annotations to the correct handler and applies t
 1. **Separation of Concerns**:
    - Coordinate transformation: Pure math operations (`coordinate_transformer.py`)
    - Annotation mapping: Position → paragraph index (handler `map()`)
-   - Rendering: Markdown generation (handler `render()`)
-   - Corrections: OCR-specific correction detection (`ocr_corrections.py`)
+   - Content anchoring: Stable identifiers for annotation matching (`create_anchor()`)
+   - Annotation migration: Content-aware relocation (`relocate()`, `AnnotationMerger`)
 
 2. **Pure Functions**:
    - Coordinate transformers are stateless and deterministic
