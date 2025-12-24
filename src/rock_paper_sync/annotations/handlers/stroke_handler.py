@@ -16,12 +16,20 @@ Characteristics:
 
 For coordinate transformation details, see docs/STROKE_ANCHORING.md.
 
-Example:
+Example (traditional interface):
     handler = StrokeHandler(ocr_processor)
     annotations = handler.detect(rm_file_path)
     mappings = handler.map(annotations, markdown_blocks, rm_file_path)
     output = handler.render(0, mappings[0], "Original paragraph")
+
+Example (cluster-based interface for migration):
+    handler = StrokeHandler()
+    clusters = handler.detect_clusters(rm_file_path)  # Extract with CRDT context
+    migrated = handler.migrate_clusters(clusters, old_text, new_text, resolver)
+    blocks = handler.serialize_for_page(migrated, page_projection)
 """
+
+from __future__ import annotations
 
 import logging
 import re
@@ -45,6 +53,15 @@ from rock_paper_sync.coordinate_transformer import (
 )
 
 if TYPE_CHECKING:
+    from typing import Any
+
+    from rock_paper_sync.annotations.document_model import (
+        AnchorContext,
+        ContextResolver,
+        PageProjection,
+    )
+    from rock_paper_sync.annotations.services.crdt_service import CrdtService
+    from rock_paper_sync.annotations.stroke_cluster import StrokeCluster
     from rock_paper_sync.layout import LayoutContext
     from rock_paper_sync.ocr.integration import OCRProcessor
 
@@ -59,7 +76,7 @@ class StrokeHandler:
     because they use the dual-anchor coordinate system.
     """
 
-    def __init__(self, ocr_processor: "OCRProcessor | None" = None):
+    def __init__(self, ocr_processor: OCRProcessor | None = None):
         """Initialize stroke handler.
 
         Args:
@@ -91,7 +108,7 @@ class StrokeHandler:
         annotations: list[Annotation],
         markdown_blocks: list,
         rm_file_path: Path,
-        layout_context: "LayoutContext | None" = None,
+        layout_context: LayoutContext | None = None,
     ) -> dict[int, list[Annotation]]:
         """Map strokes to markdown paragraphs using coordinate transformation.
 
@@ -446,3 +463,232 @@ class StrokeHandler:
         )
 
         return extracted
+
+    # =========================================================================
+    # Cluster-based Interface (for migration)
+    # =========================================================================
+
+    def detect_clusters(
+        self,
+        rm_file_path: Path,
+        distance_threshold: float = 80.0,
+    ) -> list[StrokeCluster]:
+        """Extract stroke clusters from .rm file with full CRDT context.
+
+        This is the cluster-based interface for annotation migration. It returns
+        StrokeCluster objects that preserve CRDT block references for serialization.
+
+        Args:
+            rm_file_path: Path to reMarkable v6 .rm file
+            distance_threshold: Maximum distance between stroke centers for clustering
+                              (default: 80px)
+
+        Returns:
+            List of StrokeCluster objects with CRDT context
+        """
+        from rock_paper_sync.annotations.stroke_cluster import StrokeCluster
+
+        clusters = StrokeCluster.from_rm_file(rm_file_path, distance_threshold)
+        logger.debug(f"Detected {len(clusters)} stroke cluster(s) from {rm_file_path.name}")
+        return clusters
+
+    def migrate_clusters(
+        self,
+        clusters: list[StrokeCluster],
+        old_text: str,
+        new_text: str,
+        context_resolver: ContextResolver,
+        crdt_service: CrdtService | None = None,
+    ) -> list[StrokeCluster]:
+        """Migrate stroke clusters to a new document version.
+
+        Uses ContextResolver to find new anchor positions for each cluster.
+        Clusters that cannot be resolved are dropped with a warning.
+
+        Args:
+            clusters: List of StrokeCluster objects from detect_clusters()
+            old_text: Full text of the original document version
+            new_text: Full text of the new document version
+            context_resolver: Resolver for anchor migration
+            crdt_service: Optional CRDT service for reanchoring (creates one if not provided)
+
+        Returns:
+            List of migrated StrokeCluster objects with updated anchors
+        """
+        from rock_paper_sync.annotations.services.crdt_service import (
+            CrdtService as CrdtServiceClass,
+        )
+
+        if crdt_service is None:
+            crdt_service = CrdtServiceClass()
+
+        migrated: list[StrokeCluster] = []
+
+        for cluster in clusters:
+            if not cluster.anchor:
+                # No anchor context - cannot migrate
+                logger.warning(
+                    f"Cluster {cluster.cluster_id[:8]}... has no anchor, skipping migration"
+                )
+                continue
+
+            # Resolve anchor in new text
+            resolved = context_resolver.resolve(
+                cluster.anchor,
+                old_text,
+                new_text,
+            )
+
+            if resolved is None:
+                logger.warning(
+                    f"Cluster {cluster.cluster_id[:8]}... could not be resolved in new text, "
+                    f"dropping annotation"
+                )
+                continue
+
+            # Update bundles with new anchor offset
+            new_anchor_offset = resolved.start_offset
+            migrated_bundles = []
+            for bundle in cluster.bundles:
+                migrated_bundle = crdt_service.reanchor_bundle(bundle, new_anchor_offset)
+                migrated_bundles.append(migrated_bundle)
+
+            # Update strokes to reference new bundles
+            new_strokes = []
+            bundle_map = {
+                (b.node_id.part1, b.node_id.part2): migrated_bundles[i]
+                for i, b in enumerate(cluster.bundles)
+            }
+            for stroke in cluster.strokes:
+                if stroke.bundle:
+                    key = (stroke.bundle.node_id.part1, stroke.bundle.node_id.part2)
+                    if key in bundle_map:
+                        # Create new stroke with updated bundle reference
+                        from rock_paper_sync.annotations.stroke import Stroke
+
+                        new_stroke = Stroke(
+                            stroke_id=stroke.stroke_id,
+                            points=stroke.points,
+                            bounding_box=stroke.bounding_box,
+                            color=stroke.color,
+                            tool=stroke.tool,
+                            thickness=stroke.thickness,
+                            tree_node_id=stroke.tree_node_id,
+                            line_block=stroke.line_block,
+                            bundle=bundle_map[key],
+                        )
+                        new_strokes.append(new_stroke)
+                    else:
+                        new_strokes.append(stroke)
+                else:
+                    new_strokes.append(stroke)
+
+            # Create migrated cluster with updated anchor
+            from rock_paper_sync.annotations.stroke_cluster import StrokeCluster
+
+            migrated_cluster = StrokeCluster(
+                cluster_id=cluster.cluster_id,
+                strokes=new_strokes,
+                bounding_box=cluster.bounding_box,
+                anchor=self._update_anchor_context(cluster.anchor, resolved),
+            )
+            migrated_cluster._bundles = migrated_bundles
+            migrated.append(migrated_cluster)
+
+            logger.debug(
+                f"Migrated cluster {cluster.cluster_id[:8]}... "
+                f"from offset {cluster.anchor.paragraph_index} "
+                f"to offset {new_anchor_offset} "
+                f"(confidence={resolved.confidence:.2f}, type={resolved.match_type})"
+            )
+
+        logger.info(f"Migrated {len(migrated)}/{len(clusters)} clusters to new document version")
+        return migrated
+
+    def _update_anchor_context(
+        self,
+        old_anchor: AnchorContext,
+        resolved: Any,  # ResolvedAnchorContext
+    ) -> AnchorContext:
+        """Update AnchorContext with new resolved position.
+
+        Args:
+            old_anchor: Original anchor context
+            resolved: Resolved anchor from ContextResolver
+
+        Returns:
+            Updated AnchorContext
+        """
+        from rock_paper_sync.annotations.document_model import AnchorContext
+
+        return AnchorContext(
+            content_hash=old_anchor.content_hash,
+            text_content=old_anchor.text_content,
+            paragraph_index=None,  # Will be recalculated on next detection
+            section_path=old_anchor.section_path,
+            context_before=old_anchor.context_before,
+            context_after=old_anchor.context_after,
+            line_range=None,  # Will be recalculated
+            y_position_hint=old_anchor.y_position_hint,
+            page_hint=old_anchor.page_hint,
+            diff_anchor=old_anchor.diff_anchor,
+        )
+
+    def serialize_for_page(
+        self,
+        clusters: list[StrokeCluster],
+        page_projection: PageProjection,
+        crdt_service: CrdtService | None = None,
+    ) -> list[Any]:
+        """Serialize stroke clusters for a specific page.
+
+        Filters clusters that belong to this page based on their anchor offset,
+        prepares bundles for page injection, and returns raw rmscene blocks.
+
+        Args:
+            clusters: List of StrokeCluster objects
+            page_projection: Page projection containing offset range
+            crdt_service: Optional CRDT service for bundle preparation
+
+        Returns:
+            List of rmscene blocks ready for writing to .rm file
+        """
+        from rock_paper_sync.annotations.services.crdt_service import (
+            CrdtService as CrdtServiceClass,
+        )
+
+        if crdt_service is None:
+            crdt_service = CrdtServiceClass()
+
+        blocks: list[Any] = []
+        page_start = page_projection.doc_char_start
+        page_end = page_projection.doc_char_end
+
+        for cluster in clusters:
+            # Determine if cluster belongs to this page
+            # Use the first bundle's anchor offset as representative
+            cluster_offset = None
+            for bundle in cluster.bundles:
+                if bundle.anchor_offset is not None:
+                    cluster_offset = bundle.anchor_offset
+                    break
+
+            if cluster_offset is None:
+                # No anchor - skip
+                logger.debug(f"Cluster {cluster.cluster_id[:8]}... has no anchor, skipping")
+                continue
+
+            if not (page_start <= cluster_offset < page_end):
+                # Not on this page
+                continue
+
+            # Prepare each bundle for page injection
+            for bundle in cluster.bundles:
+                prepared_bundle = crdt_service.prepare_bundle_for_page(bundle)
+                blocks.extend(prepared_bundle.to_raw_blocks())
+
+        logger.debug(
+            f"Serialized {len(blocks)} blocks for page {page_projection.page_index} "
+            f"(offset range {page_start}-{page_end})"
+        )
+        return blocks
