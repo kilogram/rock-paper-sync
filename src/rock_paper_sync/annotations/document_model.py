@@ -38,6 +38,8 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import rmscene
 
+from rock_paper_sync.coordinate_transformer import END_OF_DOC_ANCHOR_MARKER
+
 from .core_types import HeuristicTextAnchor, Point, StrokeData
 from .scene_graph import SceneGraphIndex, StrokeBundle
 
@@ -791,7 +793,7 @@ class DocumentModel:
                         if hasattr(g, "anchor_id") and g.anchor_id and g.anchor_id.value:
                             anchor_val = g.anchor_id.value
                             # anchor_id.part2 is the character offset (unless it's the sentinel)
-                            if anchor_val.part2 != 281474976710655:  # Not END_OF_DOC sentinel
+                            if anchor_val.part2 != END_OF_DOC_ANCHOR_MARKER:
                                 anchor_char_offset = anchor_val.part2
                                 # Get Y position of the anchor text
                                 if layout_ctx and anchor_char_offset < len(page_text):

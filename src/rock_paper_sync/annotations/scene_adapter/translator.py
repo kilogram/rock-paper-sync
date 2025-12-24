@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING, Any
 import rmscene
 from rmscene import CrdtId
 
+from rock_paper_sync.coordinate_transformer import END_OF_DOC_ANCHOR_MARKER
+
 from .block_registry import BlockKind, classify_block
 from .bundle import StrokeBundle
 from .scene_index import SceneGraphIndex
@@ -24,10 +26,6 @@ if TYPE_CHECKING:
     pass
 
 logger = logging.getLogger(__name__)
-
-
-# Sentinel value for end-of-document anchors (margin notes)
-END_OF_DOC_ANCHOR_MARKER = 281474976710655
 
 
 def extract_unknown_blocks(blocks: list[Any]) -> list[Any]:
