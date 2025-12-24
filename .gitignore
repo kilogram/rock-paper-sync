@@ -169,3 +169,4 @@ tests/record_replay/debug_images/
 
 # Test diagnostic data (generated during test runs)
 tests/record_replay/testdata/**/trips/*/_diagnostic/
+coverage.json
