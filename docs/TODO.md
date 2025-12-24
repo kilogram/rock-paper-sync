@@ -94,3 +94,23 @@ Dead code to remove:
 
 - Extract business logic to `ChangeDetector` class
 - Remove unused `reset()` method or wire to CLI for disaster recovery
+
+---
+
+## Anchor Type Consolidation
+
+**Files:** `annotations/document_model.py`, `annotations/core_types.py`, `annotations/common/anchors.py`
+
+Currently there are redundant anchor types:
+- `AnchorContext` in document_model.py - main production anchor for migration
+- `AnnotationAnchor` in common/anchors.py - used by handler Protocol
+- `TextAnchor` in core_types.py (line 534) - used by HeuristicTextAnchor
+- `TextAnchor` in common/anchors.py (line 157) - used by AnnotationAnchor
+
+Proposed consolidation:
+- Keep `AnchorContext` as unified anchor (already handles text + spatial)
+- Migrate handler `create_anchor()` to return `AnchorContext` instead of `AnnotationAnchor`
+- Remove duplicate `TextAnchor` definitions
+- Keep `HeuristicTextAnchor` as service class (not a data type)
+
+Risk: High - affects migration pipeline and handler protocol. Requires careful testing.
