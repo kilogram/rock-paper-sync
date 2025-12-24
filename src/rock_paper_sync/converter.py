@@ -789,12 +789,9 @@ class SyncEngine:
         """
         annotation_changed_files: list[Path] = []
 
-        # Get all previously-synced files for this vault
-        cursor = self.state.conn.execute(
-            "SELECT obsidian_path, remarkable_uuid FROM sync_state WHERE vault_name = ?",
-            (vault.name,),
-        )
-        synced_files = [(row[0], row[1]) for row in cursor.fetchall()]
+        # Get all previously-synced files for this vault using StateManager API
+        synced_records = self.state.get_all_synced_files(vault.name)
+        synced_files = [(r.obsidian_path, r.remarkable_uuid) for r in synced_records]
 
         logger.debug(
             f"[{correlation_id}] Checking {len(synced_files)} synced file(s) for annotation-only changes"
