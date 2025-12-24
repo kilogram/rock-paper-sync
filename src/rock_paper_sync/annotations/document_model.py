@@ -42,6 +42,7 @@ from .core_types import HeuristicTextAnchor, Point, StrokeData
 from .scene_graph import SceneGraphIndex, StrokeBundle
 
 if TYPE_CHECKING:
+    from rock_paper_sync.annotations.merging import AnnotationMerger
     from rock_paper_sync.layout import DeviceGeometry, LayoutContext, WordWrapLayoutEngine
     from rock_paper_sync.parser import ContentBlock
 
@@ -1237,127 +1238,37 @@ class DocumentModel:
     def migrate_annotations_to(
         self,
         new_model: DocumentModel,
+        merger: AnnotationMerger | None = None,
     ) -> tuple[DocumentModel, MigrationReport]:
         """Migrate annotations from this model to new content.
 
-        The core operation for annotation preservation.
+        The core operation for annotation preservation. This is a convenience
+        facade that delegates to AnnotationMerger.
+
+        For explicit dependency injection (e.g., testing), pass a custom merger:
+            merger = AnnotationMerger(resolver=mock_resolver)
+            merged, report = old_model.migrate_annotations_to(new_model, merger=merger)
+
+        Args:
+            new_model: Target document model (without annotations)
+            merger: Optional AnnotationMerger instance. If None, creates a
+                default merger with default ContextResolver.
+
+        Returns:
+            Tuple of (merged DocumentModel with annotations, MigrationReport)
         """
-        from rock_paper_sync.layout import LayoutContext, TextAreaConfig
-
-        resolver = ContextResolver()
-        report = MigrationReport()
-
-        # Build layout contexts
-        old_layout = None
-        new_layout = None
-        if self.geometry:
-            old_layout = LayoutContext.from_text(
-                self.full_text,
-                use_font_metrics=True,
-                config=TextAreaConfig(
-                    text_width=self.geometry.text_width,
-                    text_pos_x=self.geometry.text_pos_x,
-                    text_pos_y=self.geometry.text_pos_y,
-                ),
-            )
-            new_layout = LayoutContext.from_text(
-                new_model.full_text,
-                use_font_metrics=True,
-                config=TextAreaConfig(
-                    text_width=self.geometry.text_width,
-                    text_pos_x=self.geometry.text_pos_x,
-                    text_pos_y=self.geometry.text_pos_y,
-                ),
-            )
-
-        migrated_annotations: list[DocumentAnnotation] = []
-
-        # Group annotations by cluster_id
-        clusters: dict[str, list[int]] = {}  # cluster_id -> annotation indices
-        unclustered: list[int] = []
-
-        for i, anno in enumerate(self.annotations):
-            if anno.cluster_id:
-                clusters.setdefault(anno.cluster_id, []).append(i)
-            else:
-                unclustered.append(i)
-
-        # Migrate clustered annotations (all follow the leader)
-        for cluster_id, indices in clusters.items():
-            leader_resolution = self._resolve_cluster_leader(
-                indices, resolver, new_model, old_layout, new_layout
-            )
-
-            for idx in indices:
-                annotation = self.annotations[idx]
-                if leader_resolution:
-                    new_annotation = self._migrate_with_resolution(
-                        annotation, leader_resolution, new_model, cluster_id
-                    )
-                    migrated_annotations.append(new_annotation)
-                    report.add_migration(annotation, new_annotation, leader_resolution)
-
-                    logger.debug(
-                        f"Migrated clustered {annotation.annotation_type} "
-                        f"(cluster={cluster_id}) with {leader_resolution.match_type} "
-                        f"match (confidence={leader_resolution.confidence:.2f}): "
-                        f"old_text='{annotation.anchor_context.text_content[:30]}...' -> "
-                        f"new_text='{new_annotation.anchor_context.text_content[:30]}...'"
-                    )
-                else:
-                    report.add_orphan(annotation)
-                    logger.warning(
-                        f"Could not resolve cluster {cluster_id} "
-                        f"({annotation.annotation_type} annotation)"
-                    )
-
-        # Migrate unclustered annotations (existing single-annotation logic)
-        for idx in unclustered:
-            annotation = self.annotations[idx]
-            resolved = resolver.resolve(
-                annotation.anchor_context,
-                self.full_text,
-                new_model.full_text,
-                old_layout,
-                new_layout,
-            )
-
-            if resolved:
-                new_annotation = self._migrate_with_resolution(
-                    annotation, resolved, new_model, None
-                )
-                migrated_annotations.append(new_annotation)
-                report.add_migration(annotation, new_annotation, resolved)
-                logger.debug(
-                    f"Migration: {annotation.annotation_type} "
-                    f"old_text='{annotation.anchor_context.text_content[:30]}...' -> "
-                    f"new_text='{new_annotation.anchor_context.text_content[:30]}...'"
-                )
-
-                logger.debug(
-                    f"Migrated {annotation.annotation_type} with {resolved.match_type} "
-                    f"match (confidence={resolved.confidence:.2f})"
-                )
-            else:
-                report.add_orphan(annotation)
-                logger.warning(f"Could not resolve {annotation.annotation_type} annotation")
-
-        # Create new model with migrated annotations
-        new_model_with_annotations = DocumentModel(
-            paragraphs=new_model.paragraphs,
-            content_blocks=new_model.content_blocks,  # Preserve content blocks for pagination
-            full_text=new_model.full_text,
-            annotations=migrated_annotations,
-            geometry=new_model.geometry,
-            lines_per_page=new_model.lines_per_page,
+        from rock_paper_sync.annotations.merging import (
+            AnnotationMerger,
+            MergeContext,
         )
 
-        logger.info(
-            f"Migration complete: {len(migrated_annotations)} migrated, "
-            f"{len(report.orphans)} orphaned (success rate: {report.success_rate:.1%})"
-        )
+        if merger is None:
+            merger = AnnotationMerger(resolver=ContextResolver())
 
-        return new_model_with_annotations, report
+        context = MergeContext(old_model=self, new_model=new_model)
+        result = merger.merge(context)
+
+        return result.merged_model, result.report
 
     def project_to_pages(
         self,
