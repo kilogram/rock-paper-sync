@@ -29,21 +29,20 @@ This file tracks architectural improvements and code quality issues identified d
 
 **Directory:** `layout/`
 
-- Resolve `text_width` naming confusion (750px vs 758px mean different things)
-- Fix `PAPER_PRO` vs `PAPER_PRO_MOVE` naming inconsistency
+- ~~Resolve `text_width` naming confusion~~ (DONE - already well-documented in code)
+- ~~Fix `PAPER_PRO` vs `PAPER_PRO_MOVE` naming inconsistency~~ (DONE)
 - Simplify factory method parameter precedence in `LayoutContext`
 
 ---
 
 ## Code Quality
 
-- Replace bare `except Exception` with specific exceptions
-  - `layout/context.py:399`
-  - `layout/engine.py:94`
+- ~~Replace bare `except Exception` with specific exceptions~~ (DONE)
+  - ~~`layout/context.py:399`~~
+  - ~~`layout/engine.py:94`~~
 - ~~Remove debug print statements~~ (DONE - removed in relocate() refactoring)
-- Centralize magic constants
-  - `END_OF_DOC_SENTINEL = 281474976710655` (used in document_model.py)
-  - CRDT format tags (0x7F, 0x8F in generator.py)
+- ~~Centralize `END_OF_DOC_ANCHOR_MARKER` constant~~ (DONE - uses coordinate_transformer.py)
+- Centralize CRDT format tags (0x7F, 0x8F in generator.py)
 
 ---
 
@@ -75,7 +74,7 @@ Priority modules needing improved coverage:
 
 ## Generator Refactoring
 
-**File:** `generator.py` (2025 lines)
+**File:** `generator.py` (~1935 lines after dead code removal)
 
 Future extraction candidates:
 - `CrdtFormatter` - CRDT encoding/decoding (lines 59-215)
@@ -83,8 +82,8 @@ Future extraction candidates:
 - `AnnotationMigrator` - Annotation extraction and adjustment
 - `RmBinaryGenerator` - Binary .rm file generation
 
-Dead code to remove:
-- `_match_rm_files_to_pages()` (90 lines, never called)
+~~Dead code to remove:~~
+- ~~`_match_rm_files_to_pages()` (90 lines, never called)~~ (DONE)
 
 ---
 
@@ -93,7 +92,7 @@ Dead code to remove:
 **File:** `state.py`
 
 - Extract business logic to `ChangeDetector` class
-- Remove unused `reset()` method or wire to CLI for disaster recovery
+- ~~Remove unused `reset()` method or wire to CLI for disaster recovery~~ (DONE - wired to CLI)
 
 ---
 
