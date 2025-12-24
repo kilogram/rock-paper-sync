@@ -16,7 +16,7 @@ from rock_paper_sync.generator import (
     RemarkablePage,
     TextItem,
 )
-from rock_paper_sync.layout.constants import TEXT_POS_Y
+from rock_paper_sync.layout import DEFAULT_DEVICE
 from rock_paper_sync.parser import (
     BlockType,
     ContentBlock,
@@ -25,6 +25,8 @@ from rock_paper_sync.parser import (
     TextFormat,
     parse_markdown_file,
 )
+
+TEXT_POS_Y = DEFAULT_DEVICE.text_pos_y
 
 
 @pytest.fixture
@@ -179,12 +181,12 @@ class TestPagination:
 
     def test_header_near_bottom_starts_new_page(self, generator: RemarkableGenerator) -> None:
         """Headers near page bottom should start new page."""
-        from rock_paper_sync.layout.constants import LINES_PER_PAGE
+        lines_per_page = DEFAULT_DEVICE.lines_per_page
 
         blocks = []
 
         # Fill almost a full page (leave room for ~2 lines)
-        for i in range(LINES_PER_PAGE - 2):
+        for i in range(lines_per_page - 2):
             blocks.append(
                 ContentBlock(
                     type=BlockType.PARAGRAPH,

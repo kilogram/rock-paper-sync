@@ -17,7 +17,9 @@ import io
 import pytest
 
 from rock_paper_sync.annotations import AnnotationType, read_annotations
-from rock_paper_sync.layout.constants import LINE_HEIGHT
+from rock_paper_sync.layout import DEFAULT_DEVICE
+
+LINE_HEIGHT = DEFAULT_DEVICE.line_height
 
 
 def extract_highlights(rm_files: dict[str, bytes]) -> list:

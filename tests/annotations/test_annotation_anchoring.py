@@ -11,7 +11,10 @@ from rock_paper_sync.annotations import (
     HeuristicTextAnchor,
     WordWrapLayoutEngine,
 )
-from rock_paper_sync.layout.constants import TEXT_POS_X, TEXT_POS_Y
+from rock_paper_sync.layout import DEFAULT_DEVICE
+
+TEXT_POS_X = DEFAULT_DEVICE.text_pos_x
+TEXT_POS_Y = DEFAULT_DEVICE.text_pos_y
 
 
 class TestHeuristicTextAnchor:

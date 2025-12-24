@@ -109,11 +109,11 @@ def test_paragraph_pagination(config_name, device, workspace, testdata_store, de
     config = CONFIGS[config_name]
     rm_dir = testdata_store.base_dir / test_id / "rm_files"
 
-    from rock_paper_sync.layout.constants import LINES_PER_PAGE
+    from rock_paper_sync.layout import DEFAULT_DEVICE
 
     print(f"\n{'='*60}")
     print(f"Config: {config_name}")
-    print(f"  lines_per_page={LINES_PER_PAGE} (calculated from device geometry)")
+    print(f"  lines_per_page={DEFAULT_DEVICE.lines_per_page} (calculated from device geometry)")
     print(f"  allow_paragraph_splitting={config.allow_paragraph_splitting}")
     print(f"{'='*60}")
 

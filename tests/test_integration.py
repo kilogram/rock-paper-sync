@@ -333,10 +333,10 @@ class TestComplexMarkdownScenarios:
         assert len(doc.content) > 100  # 1 header + 50 section headers + 100 paragraphs
 
         # Estimate pages needed (rough calculation)
-        from rock_paper_sync.layout.constants import LINES_PER_PAGE
+        from rock_paper_sync.layout import DEFAULT_DEVICE
 
         total_blocks = len(doc.content)
-        estimated_pages = max(1, total_blocks // LINES_PER_PAGE)
+        estimated_pages = max(1, total_blocks // DEFAULT_DEVICE.lines_per_page)
 
         assert estimated_pages >= 3  # Should need multiple pages
 
