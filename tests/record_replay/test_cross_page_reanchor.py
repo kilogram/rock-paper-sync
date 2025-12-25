@@ -63,7 +63,6 @@ def find_highlight_by_text(rm_files: dict[str, bytes], text_substring: str):
 
 
 @pytest.mark.device
-@pytest.mark.skip(reason="Pre-existing failure - missing stroke in output, needs investigation")
 def test_cross_page_reanchor(device, workspace, fixtures_dir, visual_validator):
     """Test annotations moving across page boundaries when content changes.
 
