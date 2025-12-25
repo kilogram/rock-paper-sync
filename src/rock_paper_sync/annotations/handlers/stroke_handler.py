@@ -52,6 +52,8 @@ from rock_paper_sync.coordinate_transformer import (
 if TYPE_CHECKING:
     from typing import Any
 
+    from rmscene import TreeNodeBlock
+
     from rock_paper_sync.annotations.document_model import (
         AnchorContext,
         ContextResolver,
@@ -59,7 +61,7 @@ if TYPE_CHECKING:
     )
     from rock_paper_sync.annotations.services.crdt_service import CrdtService
     from rock_paper_sync.annotations.stroke_cluster import StrokeCluster
-    from rock_paper_sync.layout import LayoutContext
+    from rock_paper_sync.layout import DeviceGeometry, LayoutContext
     from rock_paper_sync.ocr.integration import OCRProcessor
 
 logger = logging.getLogger(__name__)
@@ -275,16 +277,21 @@ class StrokeHandler:
         geometry,
         crdt_base_id: int | None = None,
     ):
-        """Relocate stroke annotation (pass-through).
+        """Relocate stroke annotation block (pass-through for coordinates).
 
-        Strokes don't need coordinate adjustment during regeneration because:
-        1. Their positions are relative to TreeNodeBlock anchors
-        2. The roundtrip mechanism updates anchor_ids automatically
+        Strokes use anchor-relative positioning via TreeNodeBlocks, NOT absolute
+        coordinates. The SceneLineItemBlock coordinates are relative to the anchor
+        and don't need transformation. The actual relocation happens via
+        TreeNodeBlock reanchoring (see reanchor_tree_node method).
+
+        This pass-through preserves the original pixel-perfect stroke coordinates
+        while the TreeNodeBlock anchor is updated separately to position the
+        stroke correctly on the new page.
 
         Args:
             block: Raw rmscene SceneLineItemBlock
-            old_text: Page text before modification (unused)
-            new_text: Page text after modification (unused)
+            old_text: Page text before modification (unused for coordinates)
+            new_text: Page text after modification (unused for coordinates)
             old_origin: Origin of old text block (unused)
             new_origin: Origin of new text block (unused)
             layout_engine: Layout engine (unused)
@@ -292,11 +299,147 @@ class StrokeHandler:
             crdt_base_id: CRDT base ID (unused)
 
         Returns:
-            Block unchanged - anchor roundtrip handles stroke relocation
+            Block unchanged - stroke positioning is via TreeNodeBlock anchor
         """
-        # Strokes use anchor-based positioning via TreeNodeBlocks
-        # The roundtrip mechanism in generate_rm_file handles updating anchor_ids
+        # Stroke coordinates are relative to their TreeNodeBlock anchor.
+        # The anchor is updated via reanchor_tree_node(), not here.
+        # Returning the block unchanged preserves pixel-perfect stroke paths.
         return block
+
+    def reanchor_tree_node(
+        self,
+        tree_node: TreeNodeBlock,
+        anchor_context: AnchorContext,
+        page_text: str,
+        geometry: DeviceGeometry | None = None,
+    ) -> tuple[TreeNodeBlock, int]:
+        """Reanchor a TreeNodeBlock to a new position in page text.
+
+        This method owns the anchor resolution logic for strokes. Given a
+        TreeNodeBlock and its anchor context, it finds the correct character
+        offset in the page text and creates a reanchored TreeNodeBlock.
+
+        Args:
+            tree_node: Original TreeNodeBlock with anchor to update
+            anchor_context: Context with text content for anchor resolution
+            page_text: Text content of the target page
+            geometry: Optional device geometry for Y-position fallback
+
+        Returns:
+            Tuple of (reanchored_tree_node, target_offset)
+        """
+        from rock_paper_sync.annotations.services.crdt_service import CrdtService
+
+        # Calculate target offset in page text using full anchor resolution
+        target_offset = self._calculate_anchor_offset(anchor_context, page_text, geometry)
+
+        # Create reanchored tree node via CRDT service
+        crdt_service = CrdtService()
+        reanchored_node = crdt_service.clone_tree_node_with_anchor(tree_node, target_offset)
+
+        anchor_text = anchor_context.text_content or ""
+        logger.debug(
+            f"Reanchored TreeNodeBlock: target_offset={target_offset}, "
+            f"anchor_text='{anchor_text[:30]}...'"
+        )
+
+        return reanchored_node, target_offset
+
+    def _calculate_anchor_offset(
+        self,
+        anchor_context: AnchorContext,
+        page_text: str,
+        geometry: DeviceGeometry | None = None,
+    ) -> int:
+        """Calculate the character offset for a stroke anchor in page text.
+
+        Uses multiple strategies to find the best position:
+        1. Direct text match - find anchor text in page
+        2. Context match - use surrounding context for disambiguation
+        3. Diff anchor resolution - use diff-based anchor if available
+        4. Y-position hint fallback - use layout to approximate position
+        5. Paragraph index fallback - use relative position
+
+        Args:
+            anchor_context: Anchor information with text and context
+            page_text: Text content of the target page
+            geometry: Optional device geometry for Y-position fallback
+
+        Returns:
+            Character offset where stroke should be anchored
+        """
+        from rock_paper_sync.transform import find_all_occurrences
+
+        anchor_text = anchor_context.text_content
+
+        # Strategy 1: Direct text match
+        if anchor_text:
+            occurrences = find_all_occurrences(page_text, anchor_text)
+
+            if len(occurrences) == 1:
+                # Unique match - use it
+                return occurrences[0]
+
+            if len(occurrences) > 1:
+                # Multiple matches - use context to disambiguate
+                if anchor_context.context_before:
+                    for occ in occurrences:
+                        start = max(0, occ - len(anchor_context.context_before))
+                        if page_text[start:occ].endswith(anchor_context.context_before):
+                            return occ
+                # Fall back to first occurrence
+                return occurrences[0]
+
+        # Strategy 2: Diff anchor resolution
+        if anchor_context.diff_anchor:
+            span = anchor_context.diff_anchor.resolve_in(page_text)
+            if span:
+                return span[0]
+
+        # Strategy 3: Y-position hint fallback (requires geometry)
+        if anchor_context.y_position_hint is not None and geometry is not None:
+            try:
+                from rock_paper_sync.layout import LayoutContext, TextAreaConfig
+
+                # Create layout context for this page
+                layout_ctx = LayoutContext.from_text(
+                    page_text,
+                    use_font_metrics=True,
+                    config=TextAreaConfig(
+                        text_width=geometry.text_width,
+                        text_pos_x=geometry.text_pos_x,
+                        text_pos_y=geometry.text_pos_y,
+                    ),
+                )
+
+                # Convert Y position to approximate offset
+                offset = layout_ctx.position_to_offset(0, anchor_context.y_position_hint)
+                offset = max(0, min(offset, len(page_text) - 1))
+
+                logger.debug(
+                    f"Using Y-position fallback for stroke anchor: "
+                    f"y={anchor_context.y_position_hint:.1f} -> offset={offset}"
+                )
+                return offset
+            except Exception as e:
+                logger.debug(f"Y-position fallback failed: {e}")
+
+        # Strategy 4: Paragraph index fallback
+        if anchor_context.paragraph_index is not None:
+            offset = 0
+            lines = page_text.split("\n")
+            for i, line in enumerate(lines):
+                if i >= anchor_context.paragraph_index:
+                    return offset
+                offset += len(line) + 1  # +1 for newline
+            return offset
+
+        # Default: anchor at document start
+        logger.warning(
+            f"Could not resolve anchor for '{anchor_text[:30] if anchor_text else '<no text>'}...', "
+            f"using offset 0"
+        )
+        return 0
 
     def extract_from_markdown(
         self,

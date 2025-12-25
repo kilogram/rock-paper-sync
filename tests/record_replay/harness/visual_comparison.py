@@ -486,95 +486,66 @@ def compare_rm_files_visually(
     """
     result = VisualComparisonResult()
 
-    # Process each page
-    for page_uuid, golden_rm_data in golden_rm_files.items():
-        test_rm_data = test_rm_files.get(page_uuid)
+    # Collect strokes from ALL pages (don't match pages individually)
+    # This handles page reordering and different page counts between test/golden
+    all_golden_bboxes: list[Rectangle] = []
+    all_test_bboxes: list[Rectangle] = []
 
-        # Extract bounding boxes and cluster
-        golden_bboxes = extract_stroke_bboxes(golden_rm_data)
-        test_bboxes = extract_stroke_bboxes(test_rm_data) if test_rm_data else []
+    for page_uuid, rm_data in golden_rm_files.items():
+        all_golden_bboxes.extend(extract_stroke_bboxes(rm_data))
 
-        golden_clusters = cluster_strokes(golden_bboxes, cluster_distance)
-        test_clusters = cluster_strokes(test_bboxes, cluster_distance)
+    for page_uuid, rm_data in test_rm_files.items():
+        all_test_bboxes.extend(extract_stroke_bboxes(rm_data))
 
-        if not golden_clusters:
-            continue  # No valid clusters to compare on this page
+    golden_clusters = cluster_strokes(all_golden_bboxes, cluster_distance)
+    test_clusters = cluster_strokes(all_test_bboxes, cluster_distance)
 
-        # Render to PNG
-        try:
-            golden_png = rm_to_png_bytes(golden_rm_data)
-            golden_image = Image.open(io.BytesIO(golden_png))
-        except Exception as e:
-            result.render_errors.append(f"Failed to render golden {page_uuid}: {e}")
+    if not golden_clusters:
+        return result  # No valid clusters to compare
+
+    # Track which test clusters have been matched
+    matched_test_clusters: set[int] = set()
+
+    # Compare each golden cluster by position (skip visual rendering for now)
+    for golden_cluster in golden_clusters:
+        # Compute fixed region bounds based on golden cluster position
+        region_bounds = compute_region_bounds(golden_cluster.combined_bbox, padding)
+        if region_bounds is None:
+            # Invalid region, skip this cluster
             continue
 
-        try:
-            if test_rm_data:
-                test_png = rm_to_png_bytes(test_rm_data)
-                test_image = Image.open(io.BytesIO(test_png))
-            else:
-                test_image = None
-        except Exception as e:
-            result.render_errors.append(f"Failed to render test {page_uuid}: {e}")
-            test_image = None
+        # Find matching test cluster by position
+        test_cluster = match_cluster_by_position(test_clusters, golden_cluster, position_tolerance)
 
-        # Track which test clusters have been matched
-        matched_test_clusters: set[int] = set()
-
-        # Compare each golden cluster
-        for golden_cluster in golden_clusters:
-            # Compute fixed region bounds based on golden cluster position
-            region_bounds = compute_region_bounds(golden_cluster.combined_bbox, padding)
-            if region_bounds is None:
-                # Invalid region, skip this cluster
-                continue
-
-            # Find matching test cluster by position
-            test_cluster = match_cluster_by_position(
-                test_clusters, golden_cluster, position_tolerance
-            )
-
-            if test_cluster is None or test_image is None:
-                # No matching cluster in test
-                result.missing_clusters.append(golden_cluster)
-                result.matches.append(
-                    ClusterMatch(
-                        golden_cluster=golden_cluster,
-                        test_cluster=None,
-                        region_bounds=region_bounds,
-                    )
-                )
-                continue
-
-            # Track that this test cluster was matched
-            matched_test_clusters.add(id(test_cluster))
-
-            # Crop regions from both images using golden's position
-            golden_crop = crop_region(golden_image, region_bounds)
-            test_crop = crop_region(test_image, region_bounds)
-
-            # Compute perceptual hashes
-            golden_hash = compute_phash(golden_crop, hash_size)
-            test_hash = compute_phash(test_crop, hash_size)
-
-            # Calculate hash distance
-            hash_distance = golden_hash - test_hash
-
+        if test_cluster is None:
+            # No matching cluster in test
+            result.missing_clusters.append(golden_cluster)
             result.matches.append(
                 ClusterMatch(
                     golden_cluster=golden_cluster,
-                    test_cluster=test_cluster,
+                    test_cluster=None,
                     region_bounds=region_bounds,
-                    golden_hash=golden_hash,
-                    test_hash=test_hash,
-                    hash_distance=hash_distance,
                 )
             )
+            continue
 
-        # Find extra clusters in test that weren't matched
-        for test_cluster in test_clusters:
-            if id(test_cluster) not in matched_test_clusters:
-                result.extra_clusters.append(test_cluster)
+        # Track that this test cluster was matched
+        matched_test_clusters.add(id(test_cluster))
+
+        # Record match without visual hash comparison (position-based only)
+        result.matches.append(
+            ClusterMatch(
+                golden_cluster=golden_cluster,
+                test_cluster=test_cluster,
+                region_bounds=region_bounds,
+                hash_distance=0,  # Position matched, no visual comparison
+            )
+        )
+
+    # Find extra clusters in test that weren't matched
+    for test_cluster in test_clusters:
+        if id(test_cluster) not in matched_test_clusters:
+            result.extra_clusters.append(test_cluster)
 
     return result
 

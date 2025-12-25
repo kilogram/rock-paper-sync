@@ -187,62 +187,28 @@ class SceneTranslator:
         self,
         bundle: StrokeBundle,
         new_anchor_offset: int,
-        author_id: int = 1,
+        author_id: int = 1,  # Kept for backwards compatibility, but ignored
     ) -> StrokeBundle:
         """Create a new bundle with updated anchor offset.
 
-        This creates new TreeNodeBlock with the anchor_id pointing to
-        the new character offset. Other blocks are preserved as-is.
+        Delegates to CrdtService.reanchor_bundle() which is the single source
+        of truth for CRDT operations. The author_id parameter is kept for
+        backwards compatibility but is not used (CrdtService uses its own
+        anchor_author_id logic).
 
         Args:
             bundle: The original StrokeBundle
             new_anchor_offset: New character offset for the anchor
-            author_id: Author ID for the new anchor CrdtId
+            author_id: Deprecated - kept for backwards compatibility
 
         Returns:
             New StrokeBundle with updated TreeNodeBlock
         """
-        if not bundle.tree_node:
-            return bundle
+        from rock_paper_sync.annotations.services.crdt_service import CrdtService
 
-        # Check for sentinel anchor - preserve it unchanged
-        if is_sentinel_anchor(bundle.tree_node):
-            return bundle
-
-        # Create updated TreeNodeBlock with new anchor
-        old_tree_node = bundle.tree_node
-        new_anchor_id = CrdtId(author_id, new_anchor_offset)
-
-        # Deep copy the group with new anchor
-        from rmscene import LwwValue
-        from rmscene.scene_items import Group
-
-        new_group = Group(
-            node_id=old_tree_node.group.node_id,
-            label=old_tree_node.group.label,
-            visible=old_tree_node.group.visible,
-            anchor_id=LwwValue(
-                timestamp=old_tree_node.group.anchor_id.timestamp,
-                value=new_anchor_id,
-            ),
-            anchor_type=old_tree_node.group.anchor_type,
-            anchor_threshold=old_tree_node.group.anchor_threshold,
-            anchor_origin_x=old_tree_node.group.anchor_origin_x,
-        )
-
-        from rmscene import TreeNodeBlock
-
-        new_tree_node = TreeNodeBlock(
-            group=new_group,
-        )
-
-        return StrokeBundle(
-            node_id=bundle.node_id,
-            tree_node=new_tree_node,
-            scene_tree=bundle.scene_tree,
-            scene_group_item=bundle.scene_group_item,
-            strokes=bundle.strokes,
-        )
+        # Delegate to CrdtService - the single source of truth for CRDT ops
+        crdt_service = CrdtService()
+        return crdt_service.reanchor_bundle(bundle, new_anchor_offset)
 
     def prepare_bundle_for_injection(
         self,

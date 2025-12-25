@@ -9,6 +9,15 @@ Characteristics:
 - Include extracted text content
 - Simple coordinate transform: absolute_y = text_origin_y + native_y
 
+Relocation:
+    Highlights own their relocation logic. When content changes, the handler:
+    1. Extracts highlight info from the rmscene block
+    2. Uses transform module utilities for coordinate math
+    3. Applies results back to the rmscene block
+
+    The transform module provides decoupled utilities (Position, PositionDelta,
+    Rectangle, etc.) that are reusable across annotation types.
+
 Example:
     handler = HighlightHandler()
     annotations = handler.detect(rm_file_path)
@@ -28,11 +37,16 @@ from rock_paper_sync.annotations.common.spatial import find_nearest_paragraph_by
 from rock_paper_sync.annotations.common.text_extraction import extract_text_blocks_from_rm
 from rock_paper_sync.annotations.core.data_types import ExtractedAnnotation, RenderConfig
 from rock_paper_sync.annotations.core_types import HeuristicTextAnchor
+from rock_paper_sync.transform import (
+    PositionDelta,
+    Rectangle,
+    TextSpan,
+    calculate_relocation_delta,
+)
 
 if TYPE_CHECKING:
     from typing import Any
 
-    from rock_paper_sync.annotations.core_types import Rectangle
     from rock_paper_sync.layout import DeviceGeometry, LayoutContext, WordWrapLayoutEngine
 
 logger = logging.getLogger(__name__)
@@ -150,8 +164,11 @@ def calculate_position_delta(
     new_origin: tuple[float, float],
     layout_engine: "WordWrapLayoutEngine",
     text_width: float,
-) -> tuple[float, float] | None:
+) -> PositionDelta | None:
     """Calculate position delta using layout engine.
+
+    Delegates to transform.calculate_relocation_delta() for the math,
+    providing a handler-friendly interface.
 
     Args:
         old_offset: Character offset in old text
@@ -164,101 +181,101 @@ def calculate_position_delta(
         text_width: Text width for layout calculations
 
     Returns:
-        Tuple of (x_delta, y_delta) or None if calculation fails
+        PositionDelta or None if calculation fails
     """
     try:
-        old_x_model, old_y_model = layout_engine.offset_to_position(
-            old_offset, old_text, old_origin, text_width
+        # Use transform module for the coordinate math
+        delta = calculate_relocation_delta(
+            old_span=TextSpan(old_offset, old_offset + 1),  # Single char span for position
+            new_offset=new_offset,
+            layout_engine=layout_engine,
+            text_width=text_width,
+            old_text=old_text,
+            new_text=new_text,
+            old_origin=old_origin,
+            new_origin=new_origin,
         )
-        new_x_model, new_y_model = layout_engine.offset_to_position(
-            new_offset, new_text, new_origin, text_width
-        )
+        logger.debug(f"  Delta: ({delta.dx:.1f}, {delta.dy:.1f})")
+        return delta
     except Exception as e:
         logger.warning(f"Failed to calculate positions: {e}")
         return None
 
-    x_delta = new_x_model - old_x_model
-    y_delta = new_y_model - old_y_model
 
-    logger.debug(
-        f"  Model positions: old=({old_x_model:.1f}, {old_y_model:.1f}), "
-        f"new=({new_x_model:.1f}, {new_y_model:.1f})"
-    )
-    logger.debug(f"  Delta: ({x_delta:.1f}, {y_delta:.1f})")
-
-    return (x_delta, y_delta)
-
-
-def apply_delta_to_rectangles(
+def apply_delta_to_rmscene_rectangles(
     rectangles: list["si.Rectangle"],
-    delta: tuple[float, float],
+    delta: PositionDelta,
 ) -> None:
-    """Apply position delta to rectangles in-place.
+    """Apply position delta to rmscene rectangles in-place.
+
+    This is the rmscene-specific adapter that applies a PositionDelta
+    (from the transform module) to rmscene Rectangle objects.
 
     Args:
-        rectangles: List of Rectangle objects to modify
-        delta: (x_delta, y_delta) to apply
+        rectangles: List of rmscene Rectangle objects to modify
+        delta: PositionDelta to apply
     """
-    x_delta, y_delta = delta
     for rect in rectangles:
-        rect.x += x_delta
-        rect.y += y_delta
+        rect.x += delta.dx
+        rect.y += delta.dy
 
 
-def rebuild_rectangles_for_reflow(
+def rebuild_rmscene_rectangles_for_reflow(
     original_rectangles: list["si.Rectangle"],
     new_rects_from_layout: list[tuple[float, float, float, float]],
-    delta: tuple[float, float],
+    delta: PositionDelta,
     geometry: "DeviceGeometry",
     new_origin: tuple[float, float],
 ) -> list["si.Rectangle"]:
-    """Rebuild rectangles when highlight reflows to different line count.
+    """Rebuild rmscene rectangles when highlight reflows to different line count.
+
+    This is the rmscene-specific adapter for rectangle rebuilding. Uses the
+    transform module's Rectangle type internally for math, then creates
+    rmscene Rectangle objects for the output.
 
     When text reflows to a different number of lines, we can't simply apply
     a delta. Instead, we use the layout engine's calculated positions for
     line structure while preserving original rectangle dimensions.
 
     Args:
-        original_rectangles: Original highlight rectangles
+        original_rectangles: Original rmscene highlight rectangles
         new_rects_from_layout: Layout engine's calculated rectangles (x, y, w, h)
-        delta: (x_delta, y_delta) from position calculation
+        delta: PositionDelta from position calculation
         geometry: DeviceGeometry for layout parameters
         new_origin: (x, y) origin of new text block
 
     Returns:
-        New list of Rectangle objects for the reflowed highlight
+        New list of rmscene Rectangle objects for the reflowed highlight
     """
+    from rock_paper_sync.transform import rebuild_for_reflow
+
+    if not new_rects_from_layout:
+        return []
+
+    # Convert first original rectangle to transform.Rectangle for math
     original_rect = original_rectangles[0] if original_rectangles else None
-    original_height = original_rect.h if original_rect else geometry.line_height
-
-    x_delta, y_delta = delta
-    first_new_x, first_new_y, first_new_w, _ = new_rects_from_layout[0]
-
-    # Calculate first rectangle position
     if original_rect:
-        first_rect_x = original_rect.x + x_delta
-        first_rect_y = original_rect.y + y_delta
+        first_rect = Rectangle(
+            x=original_rect.x,
+            y=original_rect.y,
+            width=original_rect.w,
+            height=original_rect.h,
+        )
     else:
-        first_rect_x = first_new_x
-        first_rect_y = first_new_y
+        # Fallback if no original rectangles
+        x, y, w, h = new_rects_from_layout[0]
+        first_rect = Rectangle(x=x, y=y, width=w, height=geometry.line_height)
 
-    result = [si.Rectangle(first_rect_x, first_rect_y, first_new_w, original_height)]
+    # Use transform module for the math
+    new_rects = rebuild_for_reflow(
+        original_first_rect=first_rect,
+        layout_rects=new_rects_from_layout,
+        delta=delta,
+        text_origin_x=new_origin[0],
+    )
 
-    # Build remaining rectangles
-    line_start_x = new_origin[0]
-    tolerance = 10.0
-
-    for i, (x, y, w, _) in enumerate(new_rects_from_layout[1:], start=1):
-        is_line_start = abs(x - line_start_x) < tolerance
-
-        if is_line_start:
-            rect_x = geometry.text_pos_x
-        else:
-            rel_x = x - first_new_x
-            rect_x = first_rect_x + rel_x
-
-        rect_y = first_rect_y + i * original_height
-        result.append(si.Rectangle(rect_x, rect_y, w, original_height))
+    # Convert back to rmscene rectangles
+    result = [si.Rectangle(r.x, r.y, r.width, r.height) for r in new_rects]
 
     logger.debug(f"  Created {len(result)} rectangle(s) for reflowed highlight")
     return result
@@ -589,8 +606,6 @@ class HighlightHandler:
             logger.warning("Could not calculate position delta, keeping original position")
             return block
 
-        x_delta, y_delta = delta
-
         # Step 4: Check for reflow (highlight spanning different number of lines)
         old_rect_count = len(rectangles)
         new_end_offset = new_offset + len(highlight_text)
@@ -602,7 +617,7 @@ class HighlightHandler:
         if new_rect_count != old_rect_count:
             # Reflow case: rebuild rectangles for new line structure
             logger.debug(f"  Reflow detected: {old_rect_count} rect(s) → {new_rect_count} rect(s)")
-            new_rectangles = rebuild_rectangles_for_reflow(
+            new_rectangles = rebuild_rmscene_rectangles_for_reflow(
                 original_rectangles=list(rectangles),
                 new_rects_from_layout=new_rects,
                 delta=delta,
@@ -613,7 +628,7 @@ class HighlightHandler:
             glyph_value.rectangles.extend(new_rectangles)
         else:
             # Delta case: apply delta to preserve pixel-perfect positions
-            apply_delta_to_rectangles(rectangles, delta)
+            apply_delta_to_rmscene_rectangles(rectangles, delta)
 
         # Step 5: Update glyph metadata
         glyph_value.start = new_offset
@@ -634,7 +649,7 @@ class HighlightHandler:
             )
 
         logger.debug(
-            f"Adjusted highlight '{highlight_text[:30]}...' by delta=({x_delta:.1f}, {y_delta:.1f}), "
+            f"Adjusted highlight '{highlight_text[:30]}...' by delta=({delta.dx:.1f}, {delta.dy:.1f}), "
             f"offset={old_offset}->{new_offset}, confidence={confidence:.2f}"
         )
 

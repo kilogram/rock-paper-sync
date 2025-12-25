@@ -386,6 +386,13 @@ class RemarkableGenerator:
         # Keep HeuristicTextAnchor for direct use (e.g., highlight adjustment)
         self.text_anchor_strategy = HeuristicTextAnchor(context_window=50, fuzzy_threshold=0.8)
 
+        # Initialize annotation handlers - they own their relocation logic
+        from rock_paper_sync.annotations.handlers.highlight_handler import HighlightHandler
+        from rock_paper_sync.annotations.handlers.stroke_handler import StrokeHandler
+
+        self._highlight_handler = HighlightHandler()
+        self._stroke_handler = StrokeHandler()
+
         logger.info(
             "RemarkableGenerator initialized with DocumentModel-based annotation preservation"
         )
@@ -597,7 +604,6 @@ class RemarkableGenerator:
             if "Glyph" in block_type:
                 # Highlight - use HighlightHandler.relocate for delta-based positioning
                 # This preserves original rectangle precision while correctly shifting positions
-                from rock_paper_sync.annotations.handlers.highlight_handler import HighlightHandler
 
                 # Get old text from source page using source_page_idx
                 source_page_idx = doc_anno.source_page_idx
@@ -621,8 +627,7 @@ class RemarkableGenerator:
 
                 if old_text:
                     # Use HighlightHandler.relocate for delta-based positioning
-                    handler = HighlightHandler()
-                    adjusted_block = handler.relocate(
+                    adjusted_block = self._highlight_handler.relocate(
                         block,
                         old_text,
                         page_text,
@@ -648,15 +653,15 @@ class RemarkableGenerator:
                 # Stroke - keep original coordinates (relative to text anchor)
                 ctx.annotations.append(block)
 
-                # Handle TreeNodeBlock for strokes
+                # Handle TreeNodeBlock for strokes - delegate anchor resolution to handler
                 if doc_anno.original_tree_node:
-                    # Calculate target char offset in page text
-                    # Each stroke uses its own anchor to preserve relative X positions
-                    target_offset = self._calculate_annotation_page_offset(
-                        doc_anno.anchor_context, page_text
+                    # StrokeHandler owns the anchor resolution logic
+                    target_offset = self._stroke_handler._calculate_anchor_offset(
+                        doc_anno.anchor_context, page_text, self.geometry
                     )
 
-                    # Store ORIGINAL TreeNodeBlock, SceneGroupItemBlock, and SceneTreeBlock - roundtrip code will reanchor/inject them
+                    # Store ORIGINAL TreeNodeBlock, SceneGroupItemBlock, and SceneTreeBlock
+                    # The roundtrip code will reanchor/inject them at write time
                     node_id = (
                         doc_anno.original_tree_node.group.node_id
                         if hasattr(doc_anno.original_tree_node, "group")
@@ -940,61 +945,6 @@ class RemarkableGenerator:
 
         return best_offset
 
-    def _calculate_annotation_page_offset(
-        self,
-        anchor_context: AnchorContext,
-        page_text: str,
-    ) -> int:
-        """Calculate character offset for an annotation in page text.
-
-        Args:
-            anchor_context: AnchorContext with annotation position info
-            page_text: Text content of the target page
-
-        Returns:
-            Character offset in page text, or 0 if not found
-        """
-        # Try to find the anchor's text in the page
-        pos = page_text.find(anchor_context.text_content)
-        if pos != -1:
-            return pos
-
-        # Try diff anchor
-        if anchor_context.diff_anchor:
-            span = anchor_context.diff_anchor.resolve_in(page_text)
-            if span:
-                return span[0]
-
-        # Fallback: Use Y position hint to approximate anchor
-        # This handles strokes that moved to different pages where their
-        # original anchor text no longer exists
-        if anchor_context.y_position_hint is not None:
-            from rock_paper_sync.layout import LayoutContext, TextAreaConfig
-
-            # Create layout context for this page
-            layout_ctx = LayoutContext.from_text(
-                page_text,
-                use_font_metrics=True,
-                config=TextAreaConfig(
-                    text_width=self.geometry.text_width,
-                    text_pos_x=self.geometry.text_pos_x,
-                    text_pos_y=self.geometry.text_pos_y,
-                ),
-            )
-
-            # Convert Y position to approximate offset
-            offset = layout_ctx.position_to_offset(0, anchor_context.y_position_hint)
-            offset = max(0, min(offset, len(page_text) - 1))
-
-            logger.debug(
-                f"Using Y-position fallback for stroke anchor: y={anchor_context.y_position_hint:.1f} "
-                f"-> offset={offset}"
-            )
-            return offset
-
-        logger.warning("Failed to resolve annotation anchor, defaulting to offset=0")
-        return 0
-
     def _preserve_annotations_with_document_model(
         self,
         pages: list[RemarkablePage],
@@ -1150,10 +1100,15 @@ class RemarkableGenerator:
                     # The TreeNodeBlock anchor handles positioning
                     ctx.annotations.append(block)
 
-                    # Handle TreeNodeBlock for strokes
+                    # Handle TreeNodeBlock for strokes - delegate anchor resolution to handler
                     if doc_anno.original_tree_node:
-                        # Calculate target char offset in page text
-                        target_offset = self._calculate_annotation_offset(doc_anno, page)
+                        # Get page text for anchor resolution
+                        page_text = "\n".join(tb.content for tb in page.text_blocks)
+
+                        # StrokeHandler owns the anchor resolution logic
+                        target_offset = self._stroke_handler._calculate_anchor_offset(
+                            doc_anno.anchor_context, page_text, self.geometry
+                        )
                         ctx.tree_nodes.append(
                             (
                                 doc_anno.original_tree_node,
@@ -1184,35 +1139,6 @@ class RemarkableGenerator:
                     f"{len(ctx.tree_nodes)} TreeNodeBlocks"
                 )
 
-    def _calculate_annotation_offset(
-        self,
-        doc_anno: DocumentAnnotation,
-        page: RemarkablePage,
-    ) -> int:
-        """Calculate character offset for an annotation on a page.
-
-        Uses the anchor context to find the best position in the page text.
-        """
-        # Get page text
-        page_text = "\n".join(tb.content for tb in page.text_blocks)
-
-        # Try to find the annotation's text in the page
-        anchor = doc_anno.anchor_context
-        pos = page_text.find(anchor.text_content)
-        if pos != -1:
-            return pos
-
-        # Fallback: use paragraph index
-        if anchor.paragraph_index is not None:
-            offset = 0
-            for i, tb in enumerate(page.text_blocks):
-                if i >= anchor.paragraph_index:
-                    return offset
-                offset += len(tb.content) + 1  # +1 for newline
-
-        # Default to 0
-        return 0
-
     def _adjust_glyph_for_page(
         self,
         glyph_block,
@@ -1222,10 +1148,9 @@ class RemarkableGenerator:
     ):
         """Adjust highlight rectangles for a target page.
 
-        Unlike _adjust_glyph_with_content_anchoring which uses document-level
-        text and calculates deltas, this method recalculates positions from
-        scratch for the target page. This is necessary when highlights move
-        cross-page, as the coordinate system changes.
+        Recalculates highlight positions from scratch for the target page.
+        This is necessary when highlights move cross-page, as the coordinate
+        system changes.
 
         Args:
             glyph_block: SceneGlyphItemBlock containing highlight rectangles
@@ -1409,220 +1334,6 @@ class RemarkableGenerator:
         except Exception as e:
             logger.warning(f"Failed to extract text blocks from {rm_file_path}: {e}")
             return [], self.geometry.text_pos_y, ""
-
-    def _adjust_glyph_with_content_anchoring(
-        self,
-        glyph_block,
-        old_text: str,
-        new_text: str,
-        old_origin: tuple[float, float],
-        new_origin: tuple[float, float],
-        crdt_base_id: int = 16,
-    ):
-        """Re-render highlight rectangles using content anchoring.
-
-        Uses a delta-based approach to preserve pixel-perfect rectangle positions:
-        1. Find where highlighted text was in old document (anchor)
-        2. Resolve where that text is in new document (new_offset)
-        3. Calculate position delta using SAME layout model for both
-        4. Apply delta to original pixel-perfect rectangles
-        5. Update CRDT anchor in extra_value_data for firmware 3.6+
-
-        This approach preserves the original Qt-rendered rectangle precision
-        while correctly shifting highlights when text moves.
-
-        Args:
-            glyph_block: SceneGlyphItemBlock containing highlight rectangles
-            old_text: Full text of old document
-            new_text: Full text of new document
-            old_origin: (x, y) origin of old text block
-            new_origin: (x, y) origin of new text block
-            crdt_base_id: Base ID from RootTextBlock for CRDT offset calculation
-
-        Returns:
-            Modified glyph_block with adjusted rectangles and CRDT anchor
-        """
-        # Extract highlighted text
-        if not hasattr(glyph_block.item, "value"):
-            logger.warning("Glyph block has no value, keeping original position")
-            return glyph_block
-
-        glyph_value = glyph_block.item.value
-        if not hasattr(glyph_value, "text") or not glyph_value.text:
-            logger.warning("Glyph has no text content, keeping original position")
-            return glyph_block
-
-        highlight_text = glyph_value.text
-
-        # Need rectangles to adjust
-        if not hasattr(glyph_value, "rectangles") or not glyph_value.rectangles:
-            logger.warning("Glyph has no rectangles, keeping original position")
-            return glyph_block
-
-        # Get old position (average of rectangles) for anchor finding
-        old_x = sum(r.x for r in glyph_value.rectangles) / len(glyph_value.rectangles)
-        old_y = sum(r.y for r in glyph_value.rectangles) / len(glyph_value.rectangles)
-
-        # Find anchor in old document
-        anchor = self.text_anchor_strategy.find_anchor(highlight_text, old_text, (old_x, old_y))
-
-        logger.debug(
-            f"Highlight '{highlight_text[:30]}...': old_pos=({old_x:.1f}, {old_y:.1f}), "
-            f"old_offset={anchor.char_offset}, confidence={anchor.confidence:.2f}"
-        )
-
-        if anchor.confidence < 0.5:
-            logger.warning(
-                f"Low confidence anchor ({anchor.confidence:.2f}) for '{highlight_text[:30]}...', "
-                f"keeping original position"
-            )
-            return glyph_block
-
-        # Resolve anchor in new document
-        new_offset = self.text_anchor_strategy.resolve_anchor(anchor, new_text)
-
-        if new_offset is None:
-            logger.warning(
-                f"Could not find '{highlight_text[:30]}...' in new document, keeping original position"
-            )
-            return glyph_block
-
-        old_offset = anchor.char_offset
-        if old_offset is None:
-            logger.warning("Anchor has no char_offset, keeping original position")
-            return glyph_block
-
-        logger.debug(
-            f"  Resolved: old_offset={old_offset} -> new_offset={new_offset} "
-            f"(delta={new_offset - old_offset})"
-        )
-
-        # DELTA-BASED APPROACH: Calculate positions using SAME layout model
-        # This makes model inaccuracies cancel out
-        try:
-            old_x_model, old_y_model = self.layout_engine.offset_to_position(
-                old_offset, old_text, old_origin, self.geometry.text_width
-            )
-            new_x_model, new_y_model = self.layout_engine.offset_to_position(
-                new_offset, new_text, new_origin, self.geometry.text_width
-            )
-        except Exception as e:
-            logger.warning(f"Failed to calculate positions for highlight: {e}")
-            return glyph_block
-
-        # Calculate delta between model positions (errors cancel out)
-        x_delta = new_x_model - old_x_model
-        y_delta = new_y_model - old_y_model
-
-        logger.debug(
-            f"  Model positions: old=({old_x_model:.1f}, {old_y_model:.1f}), "
-            f"new=({new_x_model:.1f}, {new_y_model:.1f})"
-        )
-        logger.debug(f"  Delta: ({x_delta:.1f}, {y_delta:.1f})")
-
-        # REFLOW DETECTION: Check if highlight now spans different number of lines
-        # When text reflows, we need to recalculate rectangles from scratch
-        old_rect_count = len(glyph_value.rectangles)
-        new_end_offset = new_offset + len(highlight_text)
-        new_rects = self.layout_engine.calculate_highlight_rectangles(
-            new_offset, new_end_offset, new_text, new_origin, self.geometry.text_width
-        )
-        new_rect_count = len(new_rects)
-
-        if new_rect_count != old_rect_count:
-            # REFLOW CASE: Highlight now spans different number of lines
-            # Use delta-based positioning for accuracy (font metric errors cancel out)
-            logger.debug(f"  Reflow detected: {old_rect_count} rect(s) → {new_rect_count} rect(s)")
-
-            # Preserve original rectangle properties
-            original_rect = glyph_value.rectangles[0] if glyph_value.rectangles else None
-            original_height = original_rect.h if original_rect else self.geometry.line_height
-
-            # Strategy: Apply delta to first rect, then use known geometry for others
-            # This preserves pixel-perfect positioning from the original highlight
-            # while correctly handling multi-line splits
-
-            # Get layout-calculated positions for reference
-            first_new_x, first_new_y, first_new_w, _ = new_rects[0]
-
-            # Calculate first rectangle using delta approach (preserves accuracy)
-            if original_rect:
-                first_rect_x = original_rect.x + x_delta
-                first_rect_y = original_rect.y + y_delta
-            else:
-                first_rect_x = first_new_x
-                first_rect_y = first_new_y
-
-            glyph_value.rectangles.clear()
-            glyph_value.rectangles.append(
-                si.Rectangle(first_rect_x, first_rect_y, first_new_w, original_height)
-            )
-
-            # For additional rectangles, use KNOWN GEOMETRY instead of layout relative offsets
-            # Relative offsets from layout engine have font metric scaling errors
-            #
-            # Key insight: Each subsequent line's rectangle has:
-            # - X: Either at line start (self.geometry.text_pos_x) or relative position within line
-            # - Y: Previous line Y + original_height (highlight rectangles are contiguous)
-            #
-            # We detect line-start by checking if layout X is close to text origin
-            line_start_x = new_origin[0]  # self.geometry.text_pos_x
-            tolerance = 10.0  # Allow small deviation
-
-            for i, (x, y, w, _) in enumerate(new_rects[1:], start=1):
-                # Check if this rectangle starts at line beginning
-                is_line_start = abs(x - line_start_x) < tolerance
-
-                if is_line_start:
-                    # Rectangle at line start: use self.geometry.text_pos_x directly
-                    # This avoids font metric errors in X calculation
-                    rect_x = self.geometry.text_pos_x
-                else:
-                    # Mid-line continuation: use relative offset (rare case)
-                    rel_x = x - first_new_x
-                    rect_x = first_rect_x + rel_x
-
-                # Y position: each line is original_height below previous
-                # Device uses highlight height as line spacing (~44px), not LINE_HEIGHT
-                rect_y = first_rect_y + i * original_height
-
-                glyph_value.rectangles.append(si.Rectangle(rect_x, rect_y, w, original_height))
-                logger.debug(
-                    f"  rect[{i}]: x={rect_x:.1f}, y={rect_y:.1f}, w={w:.1f} (line_start={is_line_start})"
-                )
-
-            logger.debug(
-                f"  Created {len(glyph_value.rectangles)} rectangle(s) using delta+geometry"
-            )
-        else:
-            # DELTA CASE: Same line count, apply delta to preserve pixel-perfect positions
-            for rect in glyph_value.rectangles:
-                rect.x += x_delta
-                rect.y += y_delta
-
-        # Update start field for older firmware (< v3.6)
-        glyph_value.start = new_offset
-
-        # Update text field to match what's at the new position
-        new_highlighted_text = new_text[new_offset : new_offset + len(highlight_text)]
-        if new_highlighted_text:
-            glyph_value.text = new_highlighted_text
-            glyph_value.length = len(new_highlighted_text)
-
-        # UPDATE CRDT ANCHOR in extra_value_data for firmware 3.6+
-        # This is the critical fix: the device uses CrdtId in extra_value_data
-        # to anchor highlights to character positions in the text
-        if hasattr(glyph_block, "extra_value_data") and glyph_block.extra_value_data:
-            glyph_block.extra_value_data = update_glyph_extra_value_data(
-                glyph_block.extra_value_data, new_offset, len(highlight_text), crdt_base_id
-            )
-
-        logger.debug(
-            f"Adjusted highlight '{highlight_text[:30]}...' by delta=({x_delta:.1f}, {y_delta:.1f}), "
-            f"offset={old_offset}->{new_offset}, confidence={anchor.confidence:.2f}"
-        )
-
-        return glyph_block
 
     def paginate_content(self, blocks: list[ContentBlock]) -> list[list[ContentBlock]]:
         """Split content blocks into pages based on line count.
