@@ -212,41 +212,86 @@ class TestResetCommand:
     """Test reset command."""
 
     def test_reset_with_confirmation(
-        self, runner: CliRunner, config_file: Path, temp_vault: Path, tmp_path: Path
+        self,
+        runner: CliRunner,
+        config_file: Path,
+        temp_vault: Path,
+        tmp_path: Path,
+        mock_cloud_sync,
     ) -> None:
         """Test reset clears state when confirmed."""
+        from rock_paper_sync.state import StateManager
+
         # Create and sync a file
         (temp_vault / "test.md").write_text("# Test")
-        runner.invoke(cli.main, ["--config", str(config_file), "sync"])
+        sync_result = runner.invoke(cli.main, ["--config", str(config_file), "sync"])
+        assert sync_result.exit_code == 0, f"Sync failed: {sync_result.output}"
+        assert (
+            "Synced 1/1" in sync_result.output or "1" in sync_result.output
+        ), f"Expected sync output: {sync_result.output}"
 
-        # State database should exist
+        # State database should exist with some records
         state_db = tmp_path / "state.db"
         assert state_db.exists()
+        state = StateManager(state_db)
+        # Stats might be keyed by vault name, not "default"
+        stats_before = state.get_stats()  # Get all stats
+        state.close()
+        total_before = sum(stats_before.values())
+        assert total_before > 0, f"Should have synced at least one file. Stats: {stats_before}"
 
         # Reset with confirmation
         result = runner.invoke(cli.main, ["--config", str(config_file), "reset"], input="y\n")
 
         assert result.exit_code == 0
         assert "Sync state cleared" in result.output
-        assert not state_db.exists()
+
+        # State should be cleared (no records), but file still exists
+        state = StateManager(state_db)
+        stats_after = state.get_stats()  # Get all stats
+        state.close()
+        total_after = sum(stats_after.values())
+        assert total_after == 0, f"State should be cleared after reset. Stats: {stats_after}"
 
     def test_reset_without_confirmation(
-        self, runner: CliRunner, config_file: Path, temp_vault: Path, tmp_path: Path
+        self,
+        runner: CliRunner,
+        config_file: Path,
+        temp_vault: Path,
+        tmp_path: Path,
+        mock_cloud_sync,
     ) -> None:
         """Test reset aborts when not confirmed."""
+        from rock_paper_sync.state import StateManager
+
         # Create and sync a file
         (temp_vault / "test.md").write_text("# Test")
-        runner.invoke(cli.main, ["--config", str(config_file), "sync"])
+        sync_result = runner.invoke(cli.main, ["--config", str(config_file), "sync"])
+        assert sync_result.exit_code == 0, f"Sync failed: {sync_result.output}"
 
         state_db = tmp_path / "state.db"
         assert state_db.exists()
+
+        # Verify state has records before reset
+        state = StateManager(state_db)
+        stats_before = state.get_stats()  # Get all stats
+        state.close()
+        total_before = sum(stats_before.values())
+        assert total_before > 0, f"Should have synced at least one file. Stats: {stats_before}"
 
         # Reset without confirmation
         result = runner.invoke(cli.main, ["--config", str(config_file), "reset"], input="n\n")
 
         assert result.exit_code == 1  # Aborted
-        # State should still exist
-        assert state_db.exists()
+
+        # State should still have records
+        state = StateManager(state_db)
+        stats_after = state.get_stats()  # Get all stats
+        state.close()
+        total_after = sum(stats_after.values())
+        assert (
+            total_after == total_before
+        ), f"State should be unchanged after abort. Before: {stats_before}, After: {stats_after}"
 
     def test_reset_no_state(self, runner: CliRunner, config_file: Path) -> None:
         """Test reset when no state exists."""
