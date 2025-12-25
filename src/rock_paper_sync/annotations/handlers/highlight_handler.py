@@ -9,6 +9,11 @@ Characteristics:
 - Include extracted text content
 - Simple coordinate transform: absolute_y = text_origin_y + native_y
 
+Relocation:
+    Highlights use RelocationStrategy.CONTENT_DELTA, meaning the RelocationService
+    handles coordinate transformation using text anchor matching and layout delta.
+    The pure functions defined in this module are used by RelocationService.
+
 Example:
     handler = HighlightHandler()
     annotations = handler.detect(rm_file_path)
@@ -28,6 +33,7 @@ from rock_paper_sync.annotations.common.spatial import find_nearest_paragraph_by
 from rock_paper_sync.annotations.common.text_extraction import extract_text_blocks_from_rm
 from rock_paper_sync.annotations.core.data_types import ExtractedAnnotation, RenderConfig
 from rock_paper_sync.annotations.core_types import HeuristicTextAnchor
+from rock_paper_sync.annotations.relocation import RelocationStrategy
 
 if TYPE_CHECKING:
     from typing import Any
@@ -270,12 +276,24 @@ class HighlightHandler:
     Implements AnnotationHandler Protocol for highlights using text-based
     matching. Highlights are the most stable annotation type because they
     include the actual highlighted text content.
+
+    Relocation is handled by RelocationService using CONTENT_DELTA strategy.
     """
 
     @property
     def annotation_type(self) -> str:
         """Return unique identifier for highlights."""
         return "highlight"
+
+    @property
+    def relocation_strategy(self) -> RelocationStrategy:
+        """Highlights use content-based delta relocation.
+
+        The RelocationService finds the highlighted text in both old and new
+        document versions, calculates the position delta using the layout engine,
+        and applies it to preserve pixel-perfect rectangle positions.
+        """
+        return RelocationStrategy.CONTENT_DELTA
 
     def detect(self, rm_file_path: Path) -> list[Annotation]:
         """Extract highlight annotations from .rm file.
@@ -516,129 +534,10 @@ class HighlightHandler:
             color=highlight.color if hasattr(highlight, "color") else None,
         )
 
-    def relocate(
-        self,
-        block: "Any",
-        old_text: str,
-        new_text: str,
-        old_origin: tuple[float, float],
-        new_origin: tuple[float, float],
-        layout_engine: "WordWrapLayoutEngine",
-        geometry: "DeviceGeometry",
-        crdt_base_id: int | None = None,
-    ) -> "Any":
-        """Relocate highlight using content-based anchoring.
-
-        Uses delta-based approach to preserve pixel-perfect rectangle positions:
-        1. Find where highlighted text was in old document (anchor)
-        2. Resolve where that text is in new document (new_offset)
-        3. Calculate position delta using SAME layout model for both
-        4. Apply delta to original pixel-perfect rectangles
-        5. Update CRDT anchor in extra_value_data for firmware 3.6+
-
-        Args:
-            block: SceneGlyphItemBlock containing highlight rectangles
-            old_text: Page text before modification
-            new_text: Page text after modification
-            old_origin: (x, y) origin of old text block
-            new_origin: (x, y) origin of new text block
-            layout_engine: WordWrapLayoutEngine for position calculations
-            geometry: DeviceGeometry for layout parameters
-            crdt_base_id: Base ID from RootTextBlock for CRDT offset calculation
-
-        Returns:
-            Modified block with adjusted rectangles and CRDT anchor
-        """
-        # Lazy import to avoid circular dependency
-        from rock_paper_sync.generator import update_glyph_extra_value_data
-
-        # Step 1: Extract highlight information from block
-        highlight_info = extract_glyph_highlight_info(block)
-        if highlight_info is None:
-            logger.warning("Could not extract highlight info, keeping original position")
-            return block
-
-        highlight_text, rectangles, old_position = highlight_info
-        glyph_value = block.item.value
-
-        # Step 2: Find anchor in old text and resolve to new position
-        anchor_result = find_and_resolve_anchor(
-            highlight_text=highlight_text,
-            old_text=old_text,
-            new_text=new_text,
-            old_position=old_position,
-        )
-        if anchor_result is None:
-            logger.warning("Could not resolve anchor, keeping original position")
-            return block
-
-        old_offset, new_offset, confidence = anchor_result
-
-        # Step 3: Calculate position delta using layout engine
-        delta = calculate_position_delta(
-            old_offset=old_offset,
-            new_offset=new_offset,
-            old_text=old_text,
-            new_text=new_text,
-            old_origin=old_origin,
-            new_origin=new_origin,
-            layout_engine=layout_engine,
-            text_width=geometry.text_width,
-        )
-        if delta is None:
-            logger.warning("Could not calculate position delta, keeping original position")
-            return block
-
-        x_delta, y_delta = delta
-
-        # Step 4: Check for reflow (highlight spanning different number of lines)
-        old_rect_count = len(rectangles)
-        new_end_offset = new_offset + len(highlight_text)
-        new_rects = layout_engine.calculate_highlight_rectangles(
-            new_offset, new_end_offset, new_text, new_origin, geometry.text_width
-        )
-        new_rect_count = len(new_rects)
-
-        if new_rect_count != old_rect_count:
-            # Reflow case: rebuild rectangles for new line structure
-            logger.debug(f"  Reflow detected: {old_rect_count} rect(s) → {new_rect_count} rect(s)")
-            new_rectangles = rebuild_rectangles_for_reflow(
-                original_rectangles=list(rectangles),
-                new_rects_from_layout=new_rects,
-                delta=delta,
-                geometry=geometry,
-                new_origin=new_origin,
-            )
-            glyph_value.rectangles.clear()
-            glyph_value.rectangles.extend(new_rectangles)
-        else:
-            # Delta case: apply delta to preserve pixel-perfect positions
-            apply_delta_to_rectangles(rectangles, delta)
-
-        # Step 5: Update glyph metadata
-        glyph_value.start = new_offset
-
-        new_highlighted_text = new_text[new_offset : new_offset + len(highlight_text)]
-        if new_highlighted_text:
-            glyph_value.text = new_highlighted_text
-            glyph_value.length = len(new_highlighted_text)
-
-        # Step 6: Update CRDT anchor for firmware 3.6+
-        if (
-            crdt_base_id is not None
-            and hasattr(block, "extra_value_data")
-            and block.extra_value_data
-        ):
-            block.extra_value_data = update_glyph_extra_value_data(
-                block.extra_value_data, new_offset, len(highlight_text), crdt_base_id
-            )
-
-        logger.debug(
-            f"Adjusted highlight '{highlight_text[:30]}...' by delta=({x_delta:.1f}, {y_delta:.1f}), "
-            f"offset={old_offset}->{new_offset}, confidence={confidence:.2f}"
-        )
-
-        return block
+    # NOTE: relocate() method was intentionally removed.
+    # Relocation is handled by RelocationService using relocation_strategy.
+    # The pure functions (extract_glyph_highlight_info, find_and_resolve_anchor,
+    # calculate_position_delta, etc.) are used by RelocationService._relocate_highlight().
 
     def extract_from_markdown(
         self,

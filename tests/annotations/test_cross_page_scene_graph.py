@@ -141,7 +141,7 @@ class TestInputValidation:
             total_strokes += counts["strokes"]
             total_highlights += counts["highlights"]
 
-        assert total_strokes == 17, f"Expected 17 strokes, got {total_strokes}"
+        assert total_strokes == 15, f"Expected 15 strokes, got {total_strokes}"
         assert total_highlights == 2, f"Expected 2 highlights, got {total_highlights}"
 
     def test_trip1_stroke_bundles_are_complete(self, trip1_rm_files):

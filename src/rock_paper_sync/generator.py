@@ -33,6 +33,11 @@ from .annotations.domain import (
     StrokePlacement,
 )
 from .annotations.merging import AnnotationMerger, MergeContext
+from .annotations.relocation import (
+    RelocationContext,
+    RelocationService,
+    RelocationStrategy,
+)
 from .annotations.scene_adapter import (
     PageTransformExecutor,
     StrokeBundle,
@@ -594,92 +599,91 @@ class RemarkableGenerator:
 
             block_type = type(block).__name__
 
+            # Determine relocation strategy based on block type
             if "Glyph" in block_type:
-                # Highlight - use HighlightHandler.relocate for delta-based positioning
-                # This preserves original rectangle precision while correctly shifting positions
-                from rock_paper_sync.annotations.handlers.highlight_handler import HighlightHandler
+                strategy = RelocationStrategy.CONTENT_DELTA
+            elif "Line" in block_type:
+                strategy = RelocationStrategy.ANCHOR_DELTA
+            else:
+                logger.warning(f"Unknown block type {block_type}, skipping")
+                continue
 
-                # Get old text from source page using source_page_idx
-                source_page_idx = doc_anno.source_page_idx
-                old_text = ""
-                old_origin = new_origin  # Default to same origin
+            # Get old text and origin from source page
+            source_page_idx = doc_anno.source_page_idx
+            old_text = ""
+            old_origin = new_origin  # Default to same origin
 
-                # Find source .rm file from uuid_to_rm_path using page index
-                # The uuid_to_rm_path maps page UUIDs to .rm files
-                if source_page_idx is not None and uuid_to_rm_path:
-                    # Get the rm_path for the source page (UUIDs are ordered by page)
-                    rm_paths = list(uuid_to_rm_path.values())
-                    if source_page_idx < len(rm_paths):
-                        source_rm_path = rm_paths[source_page_idx]
-                        try:
-                            _, old_origin_y, old_text = self._extract_text_blocks_from_rm(
-                                source_rm_path
-                            )
-                            old_origin = (self.geometry.text_pos_x, old_origin_y)
-                        except Exception as e:
-                            logger.warning(f"Could not get old text from {source_rm_path}: {e}")
+            if source_page_idx is not None and uuid_to_rm_path:
+                rm_paths = list(uuid_to_rm_path.values())
+                if source_page_idx < len(rm_paths):
+                    source_rm_path = rm_paths[source_page_idx]
+                    try:
+                        _, old_origin_y, old_text = self._extract_text_blocks_from_rm(
+                            source_rm_path
+                        )
+                        old_origin = (self.geometry.text_pos_x, old_origin_y)
+                    except Exception as e:
+                        logger.warning(f"Could not get old text from {source_rm_path}: {e}")
 
-                if old_text:
-                    # Use HighlightHandler.relocate for delta-based positioning
-                    handler = HighlightHandler()
-                    adjusted_block = handler.relocate(
-                        block,
-                        old_text,
-                        page_text,
-                        old_origin,
-                        new_origin,
-                        self.layout_engine,
-                        self.geometry,
-                        crdt_base_id=16,  # Default CRDT base
-                    )
-                else:
-                    # Fallback to simple projection when no old text available
+            if old_text:
+                # Use RelocationService for coordinate transformation
+                relocation_context = RelocationContext(
+                    old_text=old_text,
+                    new_text=page_text,
+                    old_origin=old_origin,
+                    new_origin=new_origin,
+                    layout_engine=self.layout_engine,
+                    geometry=self.geometry,
+                    crdt_base_id=16,  # Default CRDT base
+                )
+                relocation_service = RelocationService()
+                adjusted_block = relocation_service.relocate_block(
+                    block, strategy, relocation_context
+                )
+            else:
+                # Fallback when no old text available
+                if "Glyph" in block_type:
                     adjusted_block = self._adjust_highlight_for_projection(
                         block,
                         page_text,
                         new_origin,
                         doc_anno.anchor_context,
                     )
+                else:
+                    # For strokes without old text, keep original (can't relocate)
+                    adjusted_block = block
 
-                if adjusted_block:
-                    ctx.annotations.append(adjusted_block)
+            if adjusted_block:
+                ctx.annotations.append(adjusted_block)
 
-            elif "Line" in block_type:
-                # Stroke - keep original coordinates (relative to text anchor)
-                ctx.annotations.append(block)
+            # Handle TreeNodeBlock for strokes
+            if "Line" in block_type and doc_anno.original_tree_node:
+                # Calculate target char offset in page text
+                # Each stroke uses its own anchor to preserve relative X positions
+                target_offset = self._calculate_annotation_page_offset(
+                    doc_anno.anchor_context, page_text
+                )
 
-                # Handle TreeNodeBlock for strokes
-                if doc_anno.original_tree_node:
-                    # Calculate target char offset in page text
-                    # Each stroke uses its own anchor to preserve relative X positions
-                    target_offset = self._calculate_annotation_page_offset(
-                        doc_anno.anchor_context, page_text
+                # Store ORIGINAL TreeNodeBlock, SceneGroupItemBlock, and SceneTreeBlock - roundtrip code will reanchor/inject them
+                node_id = (
+                    doc_anno.original_tree_node.group.node_id
+                    if hasattr(doc_anno.original_tree_node, "group")
+                    and doc_anno.original_tree_node.group
+                    else None
+                )
+                logger.debug(
+                    f"Adding to ctx.tree_nodes for page {projection.page_index}: "
+                    f"node_id={node_id}, target_offset={target_offset}, "
+                    f"cluster={doc_anno.cluster_id or 'none'}"
+                )
+                ctx.tree_nodes.append(
+                    (
+                        doc_anno.original_tree_node,
+                        target_offset,
+                        doc_anno.original_scene_group_item,
+                        doc_anno.original_scene_tree_block,
                     )
-
-                    # Store ORIGINAL TreeNodeBlock, SceneGroupItemBlock, and SceneTreeBlock - roundtrip code will reanchor/inject them
-                    node_id = (
-                        doc_anno.original_tree_node.group.node_id
-                        if hasattr(doc_anno.original_tree_node, "group")
-                        and doc_anno.original_tree_node.group
-                        else None
-                    )
-                    logger.debug(
-                        f"Adding to ctx.tree_nodes for page {projection.page_index}: "
-                        f"node_id={node_id}, target_offset={target_offset}, "
-                        f"cluster={doc_anno.cluster_id or 'none'}"
-                    )
-                    ctx.tree_nodes.append(
-                        (
-                            doc_anno.original_tree_node,
-                            target_offset,
-                            doc_anno.original_scene_group_item,
-                            doc_anno.original_scene_tree_block,
-                        )
-                    )
-
-            else:
-                # Unknown type - keep as-is
-                ctx.annotations.append(block)
+                )
 
         # Set source .rm path and populate exclude_ids
         if projection.page_uuid in uuid_to_rm_path:

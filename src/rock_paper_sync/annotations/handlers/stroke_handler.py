@@ -15,6 +15,12 @@ Characteristics:
 
 For coordinate transformation details, see docs/STROKE_ANCHORING.md.
 
+Relocation:
+    Strokes use RelocationStrategy.ANCHOR_DELTA, meaning the RelocationService
+    handles coordinate transformation when content changes. The handler does
+    not implement relocate() - this is intentional to prevent the class of bugs
+    where relocation is silently skipped.
+
 Example (traditional interface):
     handler = StrokeHandler(ocr_processor)
     annotations = handler.detect(rm_file_path)
@@ -42,6 +48,7 @@ from rock_paper_sync.annotations.core.data_types import (
     ExtractedAnnotation,
     RenderConfig,
 )
+from rock_paper_sync.annotations.relocation import RelocationStrategy
 from rock_paper_sync.coordinate_transformer import (
     CoordinateTransformer,
     build_parent_anchor_map,
@@ -71,6 +78,8 @@ class StrokeHandler:
     Implements AnnotationHandler Protocol for strokes using coordinate
     transformation and OCR processing. Strokes require special handling
     because they use the dual-anchor coordinate system.
+
+    Relocation is handled by RelocationService using ANCHOR_DELTA strategy.
     """
 
     def __init__(self, ocr_processor: OCRProcessor | None = None):
@@ -85,6 +94,17 @@ class StrokeHandler:
     def annotation_type(self) -> str:
         """Return unique identifier for strokes."""
         return "stroke"
+
+    @property
+    def relocation_strategy(self) -> RelocationStrategy:
+        """Strokes use anchor-based relocation with Y adjustment.
+
+        The RelocationService handles coordinate transformation when strokes
+        move between pages. This uses the TreeNodeBlock anchor offset to find
+        the stroke's position in old text, resolves it in new text, and applies
+        the Y delta to all stroke points.
+        """
+        return RelocationStrategy.ANCHOR_DELTA
 
     def detect(self, rm_file_path: Path) -> list[Annotation]:
         """Extract stroke annotations from .rm file.
@@ -264,39 +284,9 @@ class StrokeHandler:
             context_after=context_after,
         )
 
-    def relocate(
-        self,
-        block,
-        old_text: str,
-        new_text: str,
-        old_origin: tuple[float, float],
-        new_origin: tuple[float, float],
-        layout_engine,
-        geometry,
-        crdt_base_id: int | None = None,
-    ):
-        """Relocate stroke annotation (pass-through).
-
-        Strokes don't need coordinate adjustment during regeneration because:
-        1. Their positions are relative to TreeNodeBlock anchors
-        2. The roundtrip mechanism updates anchor_ids automatically
-
-        Args:
-            block: Raw rmscene SceneLineItemBlock
-            old_text: Page text before modification (unused)
-            new_text: Page text after modification (unused)
-            old_origin: Origin of old text block (unused)
-            new_origin: Origin of new text block (unused)
-            layout_engine: Layout engine (unused)
-            geometry: Device geometry (unused)
-            crdt_base_id: CRDT base ID (unused)
-
-        Returns:
-            Block unchanged - anchor roundtrip handles stroke relocation
-        """
-        # Strokes use anchor-based positioning via TreeNodeBlocks
-        # The roundtrip mechanism in generate_rm_file handles updating anchor_ids
-        return block
+    # NOTE: relocate() method was intentionally removed.
+    # Relocation is handled by RelocationService using relocation_strategy.
+    # This prevents the class of bugs where relocation is silently skipped.
 
     def extract_from_markdown(
         self,

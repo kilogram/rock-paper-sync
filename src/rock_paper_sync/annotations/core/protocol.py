@@ -8,13 +8,17 @@ Design principles:
 - Use typing.Protocol for structural subtyping (not ABC)
 - Handlers are pure processors (no state beyond config)
 - Corrections are managed separately by CorrectionManager
-- Coordinate transformation is a shared utility (not handler-specific)
+- Coordinate transformation is centralized in RelocationService (not handler-specific)
 - Layout context provides unified access to text positioning (shared infrastructure)
 - CRDT operations delegated to CrdtService (not handler-specific)
 
 Method categories:
-- REQUIRED: annotation_type, detect(), map(), create_anchor(), extract_from_markdown()
-- OPTIONAL: relocate() - only needed for content-based repositioning (highlights)
+- REQUIRED: annotation_type, relocation_strategy, detect(), map(), create_anchor(), extract_from_markdown()
+
+Relocation architecture:
+- Handlers declare a RelocationStrategy via the relocation_strategy property
+- The actual relocation logic lives in RelocationService (annotations/relocation.py)
+- This prevents the class of bugs where a handler implements relocate() as a silent no-op
 
 For stroke handling, StrokeHandler also provides cluster-based methods:
 - detect_clusters() - extract StrokeClusters with CRDT context
@@ -26,6 +30,10 @@ Example usage (traditional interface):
         @property
         def annotation_type(self) -> str:
             return "stroke"
+
+        @property
+        def relocation_strategy(self) -> RelocationStrategy:
+            return RelocationStrategy.ANCHOR_DELTA
 
         def detect(self, rm_file_path: Path) -> list[Annotation]:
             # Extract stroke annotations from .rm file
@@ -44,6 +52,8 @@ Example usage (cluster-based interface for migration):
 
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+
+from rock_paper_sync.annotations.relocation import RelocationStrategy
 
 if TYPE_CHECKING:
     from rock_paper_sync.annotations.common.anchors import AnnotationAnchor
@@ -65,8 +75,11 @@ class AnnotationHandler(Protocol):
     4. Extraction: Parse annotations from rendered markdown
 
     Method categories:
-    - REQUIRED: annotation_type, detect(), map(), create_anchor(), extract_from_markdown()
-    - OPTIONAL: relocate() - only for content-based repositioning (highlights)
+    - REQUIRED: annotation_type, relocation_strategy, detect(), map(), create_anchor(), extract_from_markdown()
+
+    Relocation is handled by RelocationService, not by handlers. Handlers
+    declare their relocation_strategy to indicate how their annotations
+    should be relocated when content changes.
 
     CRDT operations (ID generation, block cloning) are delegated to CrdtService,
     not handled by individual handlers.
@@ -81,6 +94,21 @@ class AnnotationHandler(Protocol):
 
         Returns:
             Type identifier (e.g., "highlight", "stroke", "sketch")
+        """
+        ...
+
+    @property
+    def relocation_strategy(self) -> RelocationStrategy:
+        """Strategy for relocating annotations when content changes.
+
+        This property is REQUIRED. Handlers must declare how their annotations
+        should be relocated. The actual relocation is performed by RelocationService.
+
+        Returns:
+            RelocationStrategy enum value:
+            - CONTENT_DELTA: Text anchor + layout delta (for highlights)
+            - ANCHOR_DELTA: TreeNodeBlock anchor + Y adjustment (for strokes)
+            - ABSOLUTE: Explicit no-op for root layer items
         """
         ...
 
@@ -151,41 +179,6 @@ class AnnotationHandler(Protocol):
                 paragraph_index=5,
                 page_num=0
             )
-        """
-        ...
-
-    def relocate(
-        self,
-        block: Any,
-        old_text: str,
-        new_text: str,
-        old_origin: tuple[float, float],
-        new_origin: tuple[float, float],
-        layout_engine: Any,
-        geometry: Any,
-        crdt_base_id: int | None = None,
-    ) -> Any:
-        """Relocate annotation when content changes.
-
-        Adjusts annotation coordinates when document text shifts. Used by
-        the generator during document regeneration.
-
-        Args:
-            block: Raw rmscene annotation block
-            old_text: Page text before modification
-            new_text: Page text after modification
-            old_origin: (x, y) origin of old text block
-            new_origin: (x, y) origin of new text block
-            layout_engine: WordWrapLayoutEngine for position calculations
-            geometry: DeviceGeometry for layout parameters
-            crdt_base_id: Base ID for CRDT offset calculation (highlights only)
-
-        Returns:
-            Modified block with adjusted coordinates/anchors
-
-        Note:
-            - Highlights use content-based anchoring with delta calculation
-            - Strokes return block unchanged (anchor roundtrip handles them)
         """
         ...
 
