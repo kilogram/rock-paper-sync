@@ -419,13 +419,15 @@ if p.exists():
         # Online mode: uses user's real credentials, no cleanup needed
 
 
-@pytest.fixture(scope="session")
-def testdata_store(fixtures_dir: Path):
-    """Create TestdataStore instance for test session."""
+@pytest.fixture(scope="function")
+def testdata_store(fixtures_dir: Path, tmp_path: Path):
+    """Create TestdataStore instance with test-specific diagnostic directory."""
     TestdataStore = _get_testdata_store()  # noqa: N806
     # Testdata is now at tests/record_replay/testdata/
     testdata_dir = fixtures_dir.parent / "testdata"
-    return TestdataStore(testdata_dir)
+    diagnostic_dir = tmp_path / "diagnostics"
+    print(f"\n[testdata_store] Diagnostics: {diagnostic_dir}")
+    return TestdataStore(testdata_dir, diagnostic_dir=diagnostic_dir)
 
 
 @pytest.fixture(scope="function")
@@ -954,6 +956,8 @@ def visual_validator(testdata_store, tmp_path):
             test_rm_files: dict[str, bytes],
             golden_rm_files: dict[str, bytes],
             name: str = "comparison",
+            test_page_order: list[str] | None = None,
+            golden_page_order: list[str] | None = None,
         ) -> list[Path]:
             """Save debug images for failed comparisons.
 
@@ -961,12 +965,20 @@ def visual_validator(testdata_store, tmp_path):
                 test_rm_files: page_uuid -> .rm bytes from test output
                 golden_rm_files: page_uuid -> .rm bytes from golden reference
                 name: Subdirectory name for debug images
+                test_page_order: Optional page UUIDs in display order for test
+                golden_page_order: Optional page UUIDs in display order for golden
 
             Returns:
                 List of saved image paths
             """
             output_dir = self.debug_dir / name
-            return save_comparison_debug_images(test_rm_files, golden_rm_files, output_dir)
+            return save_comparison_debug_images(
+                test_rm_files,
+                golden_rm_files,
+                output_dir,
+                test_page_order=test_page_order,
+                golden_page_order=golden_page_order,
+            )
 
         def compare_with_testdata(
             self,
@@ -996,7 +1008,7 @@ def visual_validator(testdata_store, tmp_path):
             test_id: str,
             trip_number: int,
             mode: str = "offline",
-        ) -> dict[str, bytes] | None:
+        ) -> tuple[dict[str, bytes], list[str]] | None:
             """Load uploaded_rm files from trip diagnostic directory.
 
             Args:
@@ -1005,23 +1017,40 @@ def visual_validator(testdata_store, tmp_path):
                 mode: "offline" or "online" diagnostic directory
 
             Returns:
-                Dict of page_uuid -> .rm bytes, or None if not found
+                Tuple of (rm_files dict, page_order list), or None if not found
             """
-            trip = self.testdata_store.get_trip(test_id, trip_number)
-            if not trip or not trip.diagnostic_path:
+            diag_path = self.testdata_store.get_trip_diagnostic_dir(test_id, trip_number)
+            if not diag_path:
                 return None
 
             # Try mode-specific path first, then legacy path
-            uploaded_dir = trip.diagnostic_path / mode / "uploaded_rm" / "rm_files"
+            uploaded_dir = diag_path / mode / "uploaded_rm"
             if not uploaded_dir.exists():
-                uploaded_dir = trip.diagnostic_path / "uploaded_rm" / "rm_files"
+                uploaded_dir = diag_path / "uploaded_rm"
             if not uploaded_dir.exists():
                 return None
 
+            rm_dir = uploaded_dir / "rm_files"
+            if not rm_dir.exists():
+                return None
+
             rm_files = {}
-            for rm_file in uploaded_dir.glob("*.rm"):
+            for rm_file in rm_dir.glob("*.rm"):
                 rm_files[rm_file.stem] = rm_file.read_bytes()
-            return rm_files if rm_files else None
+
+            if not rm_files:
+                return None
+
+            # Load page order from metadata
+            page_order: list[str] = []
+            metadata_file = uploaded_dir / "metadata.json"
+            if metadata_file.exists():
+                import json
+
+                metadata = json.loads(metadata_file.read_text())
+                page_order = metadata.get("page_order", [])
+
+            return rm_files, page_order
 
         def assert_uploaded_matches_golden(
             self,
@@ -1048,28 +1077,40 @@ def visual_validator(testdata_store, tmp_path):
             Raises:
                 AssertionError: If comparison failed or data missing
             """
-            # Load uploaded_rm
-            uploaded_rm = self.load_uploaded_rm(test_id, trip_number, mode)
-            if not uploaded_rm:
+            # Load uploaded_rm with page order
+            result = self.load_uploaded_rm(test_id, trip_number, mode)
+            if not result:
                 raise AssertionError(
                     f"No uploaded_rm found for {test_id} trip {trip_number} ({mode} mode). "
                     f"Run the test to capture diagnostic files."
                 )
+            uploaded_rm, test_page_order = result
 
-            # Load golden
+            # Load golden with page order
             golden = self.testdata_store.get_golden(test_id)
             if not golden or not golden.annotations:
                 raise AssertionError(f"No golden annotations for {test_id}")
             golden_rm = golden.annotations.rm_files
+            golden_page_order = golden.annotations.page_uuids
 
             # Compare and assert
-            result = self.compare(uploaded_rm, golden_rm)
+            comparison = self.compare(uploaded_rm, golden_rm)
 
             # Save debug images before assertion (so they're available on failure)
             if save_debug:
-                self.save_debug_images(uploaded_rm, golden_rm, name=test_id)
+                saved = self.save_debug_images(
+                    uploaded_rm,
+                    golden_rm,
+                    name=test_id,
+                    test_page_order=test_page_order,
+                    golden_page_order=golden_page_order,
+                )
+                if saved:
+                    print(f"\nDebug images saved to: {saved[0].parent}")
 
-            self.assert_match(result, max_hash_distance)
-            return result
+            self.assert_match(comparison, max_hash_distance)
+            return comparison
 
-    return VisualValidator(testdata_store, tmp_path / "visual_debug")
+    debug_dir = tmp_path / "visual_debug"
+    print(f"\n[visual_validator] Debug output: {debug_dir}")
+    return VisualValidator(testdata_store, debug_dir)

@@ -75,6 +75,7 @@ class OfflineEmulator(DeviceInteractionManager):
         self.bench = bench
         self._current_test_id: str | None = None
         self._doc_uuid: str | None = None
+        self._cached_page_order: list[str] = []
 
         # Trip-based format (new)
         self._trips: list[TripData] = []
@@ -356,6 +357,7 @@ class OfflineEmulator(DeviceInteractionManager):
                     trip_number=trip_number,
                     diagnostic_name="offline/uploaded_rm",
                     rm_files=uploaded_rm,
+                    page_order=self._cached_page_order,
                 )
                 self.bench.observe(
                     f"Trip {trip_number}: Saved diagnostic ({len(uploaded_rm)} uploaded .rm files)"
@@ -468,6 +470,7 @@ class OfflineEmulator(DeviceInteractionManager):
                     trip_number=trip_number,
                     diagnostic_name="offline/uploaded_rm",
                     rm_files=uploaded_rm,
+                    page_order=self._cached_page_order,
                 )
                 self.bench.observe(
                     f"Trip {trip_number}: Saved diagnostic "
@@ -818,6 +821,8 @@ class OfflineEmulator(DeviceInteractionManager):
         Clears the cache directory first to avoid mixing files from
         different sync operations.
 
+        Also stores page order in self._cached_page_order for later use.
+
         Args:
             doc_uuid: Document UUID
         """
@@ -830,6 +835,9 @@ class OfflineEmulator(DeviceInteractionManager):
         try:
             page_uuids = sync.get_existing_page_uuids(doc_uuid)
             if page_uuids:
+                # Store page order for diagnostic saving
+                self._cached_page_order = page_uuids
+
                 # Clear and recreate cache directory to avoid stale files
                 cache_dir = self.workspace.cache_dir / "annotations" / doc_uuid
                 if cache_dir.exists():

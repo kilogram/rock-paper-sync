@@ -51,7 +51,7 @@ from pathlib import Path
 import imagehash
 from PIL import Image
 
-from rock_paper_sync.annotations import AnnotationType, read_annotations
+from rock_paper_sync.annotations import read_annotations
 from rock_paper_sync.annotations.core_types import Rectangle
 
 # reMarkable page dimensions (Paper Pro)
@@ -225,6 +225,8 @@ def rm_to_png_bytes(
         )
 
     # cairosvg is imported here to avoid import errors when rmc isn't needed
+    import re
+
     import cairosvg
 
     with tempfile.NamedTemporaryFile(suffix=".rm", delete=False) as rm_file:
@@ -246,9 +248,20 @@ def rm_to_png_bytes(
                 result.returncode, "rmc", output=result.stdout, stderr=result.stderr
             )
 
+        # Fix the SVG viewBox to use full page dimensions
+        # rmc generates a cropped viewBox; we need the full page
+        # reMarkable uses centered coords: x from -702 to 702, y from -936 to 936
+        svg_content = svg_path.read_text()
+
+        # Replace viewBox and dimensions with full page
+        full_viewbox = f'viewBox="-702 -936 {width} {height}"'
+        svg_content = re.sub(r'viewBox="[^"]*"', full_viewbox, svg_content)
+        svg_content = re.sub(r'width="[^"]*"', f'width="{width}"', svg_content)
+        svg_content = re.sub(r'height="[^"]*"', f'height="{height}"', svg_content)
+
         # Convert SVG to PNG
         png_bytes = cairosvg.svg2png(
-            url=str(svg_path),
+            bytestring=svg_content.encode(),
             output_width=width,
             output_height=height,
         )
@@ -260,8 +273,11 @@ def rm_to_png_bytes(
         svg_path.unlink(missing_ok=True)
 
 
-def extract_stroke_bboxes(rm_data: bytes) -> list[Rectangle]:
-    """Extract stroke bounding boxes from .rm file bytes.
+def extract_annotation_bboxes(rm_data: bytes) -> list[Rectangle]:
+    """Extract bounding boxes from all annotations in .rm file bytes.
+
+    Extracts bounding boxes from both strokes (handwritten annotations)
+    and highlights (text selections).
 
     Args:
         rm_data: Raw bytes of .rm file
@@ -271,9 +287,14 @@ def extract_stroke_bboxes(rm_data: bytes) -> list[Rectangle]:
     """
     bboxes = []
     for annotation in read_annotations(io.BytesIO(rm_data)):
-        if annotation.type == AnnotationType.STROKE and annotation.stroke:
-            bboxes.append(annotation.stroke.bounding_box)
+        bbox = annotation.bounding_box
+        if bbox is not None:
+            bboxes.append(bbox)
     return bboxes
+
+
+# Backwards compatibility alias
+extract_stroke_bboxes = extract_annotation_bboxes
 
 
 def cluster_strokes(
@@ -368,27 +389,31 @@ def compute_region_bounds(
 ) -> tuple[int, int, int, int] | None:
     """Compute fixed comparison region around a bounding box.
 
+    reMarkable uses a centered coordinate system where (0,0) is at the
+    page center. This converts to pixel coordinates for image cropping.
+
     Args:
-        bbox: Stroke bounding box (may be in relative coordinates)
+        bbox: Annotation bounding box in reMarkable centered coordinates
         padding: Pixels to add around bbox
         page_width: Page width for clamping
         page_height: Page height for clamping
 
     Returns:
-        (x, y, w, h) tuple for the region, or None if invalid
+        (x, y, w, h) tuple for the region in pixel coordinates, or None if invalid
     """
     if not is_valid_bbox(bbox):
         return None
 
-    # Convert to absolute coordinates if negative
-    # For relative coords, shift to positive region
-    abs_x = bbox.x if bbox.x >= 0 else page_width / 2 + bbox.x
-    abs_y = bbox.y if bbox.y >= 0 else page_height / 2 + bbox.y
+    # Convert from centered reMarkable coords to pixel coords
+    # reMarkable: (0,0) at center, x from -702 to +702, y from -936 to +936
+    # Pixels: (0,0) at top-left, x from 0 to 1404, y from 0 to 1872
+    pixel_x = page_width / 2 + bbox.x
+    pixel_y = page_height / 2 + bbox.y
 
-    x = max(0, int(abs_x - padding))
-    y = max(0, int(abs_y - padding))
-    x2 = min(page_width, int(abs_x + bbox.w + padding))
-    y2 = min(page_height, int(abs_y + bbox.h + padding))
+    x = max(0, int(pixel_x - padding))
+    y = max(0, int(pixel_y - padding))
+    x2 = min(page_width, int(pixel_x + bbox.w + padding))
+    y2 = min(page_height, int(pixel_y + bbox.h + padding))
 
     # Ensure valid region
     w = x2 - x
@@ -670,6 +695,8 @@ def save_comparison_debug_images(
     padding: int = 50,
     test_name: str | None = None,
     cluster_distance: float = 80.0,
+    test_page_order: list[str] | None = None,
+    golden_page_order: list[str] | None = None,
 ) -> list[Path]:
     """Save debug images showing comparison regions.
 
@@ -684,8 +711,8 @@ def save_comparison_debug_images(
             page{N}_cluster{i}_golden.png  - Cropped golden cluster region
             page{N}_cluster{i}_test.png    - Cropped test cluster region
 
-    Note: Pages are matched by index order, not by UUID, since UUIDs differ
-    between test and golden runs.
+    Note: Pages are ordered by the provided page_order lists, falling back
+    to UUID sort if not provided.
 
     Args:
         test_rm_files: page_uuid -> .rm bytes from test output
@@ -694,6 +721,8 @@ def save_comparison_debug_images(
         padding: Pixels to add around each cluster region
         test_name: Optional subdirectory name (e.g., test ID or timestamp)
         cluster_distance: Max distance to group strokes into clusters
+        test_page_order: Optional list of test page UUIDs in display order
+        golden_page_order: Optional list of golden page UUIDs in display order
 
     Returns:
         List of paths to saved images
@@ -706,9 +735,19 @@ def save_comparison_debug_images(
     output_dir.mkdir(parents=True, exist_ok=True)
     saved_paths = []
 
-    # Sort pages by UUID to get consistent ordering
-    golden_pages = sorted(golden_rm_files.items())
-    test_pages = sorted(test_rm_files.items())
+    # Order pages by provided order, falling back to UUID sort
+    def order_pages(
+        rm_files: dict[str, bytes], page_order: list[str] | None
+    ) -> list[tuple[str, bytes]]:
+        if page_order:
+            # Use provided order, only including UUIDs that exist in rm_files
+            return [(uuid, rm_files[uuid]) for uuid in page_order if uuid in rm_files]
+        else:
+            # Fall back to UUID sort
+            return sorted(rm_files.items())
+
+    golden_pages = order_pages(golden_rm_files, golden_page_order)
+    test_pages = order_pages(test_rm_files, test_page_order)
 
     # Process golden pages by index
     for page_idx, (golden_uuid, golden_rm_data) in enumerate(golden_pages):

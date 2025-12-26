@@ -298,16 +298,21 @@ class TestdataStore:
             print(f"{manifest.test_id}: {manifest.description}")
     """
 
-    def __init__(self, base_dir: Path) -> None:
+    def __init__(self, base_dir: Path, diagnostic_dir: Path | None = None) -> None:
         """Initialize testdata store.
 
         Args:
             base_dir: Base directory for testdata storage
+            diagnostic_dir: Optional separate directory for diagnostic output.
+                           If None, diagnostics are saved within base_dir.
         """
         self.base_dir = base_dir
+        self.diagnostic_dir = diagnostic_dir
 
         # Ensure base directory exists
         self.base_dir.mkdir(parents=True, exist_ok=True)
+        if self.diagnostic_dir:
+            self.diagnostic_dir.mkdir(parents=True, exist_ok=True)
 
     def save_artifacts(
         self,
@@ -1051,6 +1056,29 @@ class TestdataStore:
                 return trip
         return None
 
+    def get_trip_diagnostic_dir(self, test_id: str, trip_number: int) -> Path | None:
+        """Get the diagnostic directory for a trip.
+
+        If diagnostic_dir is set, returns {diagnostic_dir}/{test_id}/trip{N}/
+        Otherwise returns {base_dir}/{test_id}/trips/{N}/_diagnostic/ if it exists.
+
+        Args:
+            test_id: Test identifier
+            trip_number: Trip number (1-indexed)
+
+        Returns:
+            Path to diagnostic directory, or None if not found
+        """
+        if self.diagnostic_dir:
+            diag_path = self.diagnostic_dir / test_id / f"trip{trip_number}"
+            if diag_path.exists():
+                return diag_path
+            return None
+        else:
+            # Fall back to legacy location
+            trip = self.get_trip(test_id, trip_number)
+            return trip.diagnostic_path if trip else None
+
     def save_trip_vault(
         self,
         test_id: str,
@@ -1134,23 +1162,29 @@ class TestdataStore:
         trip_number: int,
         diagnostic_name: str,
         rm_files: dict[str, bytes],
+        page_order: list[str] | None = None,
     ) -> Path:
         """Save diagnostic data for a trip.
 
         Diagnostic data is for debugging only and not used in replay.
-        Stored in _diagnostic/{diagnostic_name}/ directory.
+        If diagnostic_dir is set, saves to {diagnostic_dir}/{test_id}/trip{N}/{diagnostic_name}/
+        Otherwise saves to {base_dir}/{test_id}/trips/{N}/_diagnostic/{diagnostic_name}/
 
         Args:
             test_id: Test identifier
             trip_number: Trip number (1-indexed)
             diagnostic_name: Name for this diagnostic (e.g., "uploaded_rm")
             rm_files: Dict of page_uuid -> .rm bytes
+            page_order: Optional list of page UUIDs in display order
 
         Returns:
             Path to diagnostic directory
         """
-        test_dir = self.base_dir / test_id
-        diag_dir = test_dir / "trips" / str(trip_number) / "_diagnostic" / diagnostic_name
+        if self.diagnostic_dir:
+            diag_dir = self.diagnostic_dir / test_id / f"trip{trip_number}" / diagnostic_name
+        else:
+            test_dir = self.base_dir / test_id
+            diag_dir = test_dir / "trips" / str(trip_number) / "_diagnostic" / diagnostic_name
         rm_dir = diag_dir / "rm_files"
 
         rm_dir.mkdir(parents=True, exist_ok=True)
@@ -1158,11 +1192,12 @@ class TestdataStore:
         for page_uuid, rm_bytes in rm_files.items():
             (rm_dir / f"{page_uuid}.rm").write_bytes(rm_bytes)
 
-        # Save metadata
+        # Save metadata with page order
         metadata = {
             "rm_files_count": len(rm_files),
             "timestamp": datetime.now().isoformat(),
             "purpose": "diagnostic_only",
+            "page_order": page_order or [],
         }
         (diag_dir / "metadata.json").write_text(json.dumps(metadata, indent=2))
 
