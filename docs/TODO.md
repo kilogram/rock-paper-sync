@@ -179,3 +179,28 @@ annotations/
 ```
 
 Per plan: Do all at once in a single commit to avoid broken imports.
+
+---
+
+## Paragraph Spacing Preservation
+
+**Files:** `parser.py`, `generator.py`
+
+Extra blank lines between paragraphs in markdown are not preserved in generated .rm files.
+
+**Current behavior:**
+- Markdown with double blank lines between paragraphs
+- Parser outputs separate ContentBlock per paragraph (loses spacing info)
+- Generator joins blocks with single `\n`
+- Result: all paragraphs have uniform spacing
+
+**Device-native behavior:**
+- Extra blank lines render as `\n\n` in RootTextBlock text content
+- Creates visual spacing between paragraph groups
+
+**Proposed fix:**
+1. Add `preceding_blank_lines: int = 0` field to `ContentBlock`
+2. Parser tracks blank line count before each block
+3. Generator inserts extra `\n` characters based on count
+
+Risk: Low - additive change to parser output structure.

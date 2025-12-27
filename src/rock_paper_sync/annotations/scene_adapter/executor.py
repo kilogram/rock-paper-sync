@@ -58,6 +58,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Base item ID for text CrdtSequenceItem.
+# When generating RootTextBlock, we use item_id=CrdtId(1, TEXT_BASE_ITEM_ID).
+# Anchor offsets must include this base to correctly map character positions
+# to CrdtIds in build_anchor_pos().
+TEXT_BASE_ITEM_ID = 16
+
 
 @dataclass
 class ExecutionContext:
@@ -86,6 +92,9 @@ class ExecutionContext:
 
     # Computed anchor delta (for relative stroke positioning)
     anchor_offset_delta: int = 0
+
+    # Whether first line is a heading (determines paragraph style)
+    first_line_is_heading: bool = False
 
 
 class PageTransformExecutor:
@@ -127,7 +136,10 @@ class PageTransformExecutor:
         Raises:
             ValueError: If scene graph validation fails
         """
-        ctx = ExecutionContext(page_text=plan.page_text)
+        ctx = ExecutionContext(
+            page_text=plan.page_text,
+            first_line_is_heading=plan.first_line_is_heading,
+        )
 
         # Step 1: PARTITION - Load and partition source blocks
         if plan.source_rm_path and plan.source_rm_path.exists():
@@ -259,8 +271,8 @@ class PageTransformExecutor:
         """
         text = ctx.page_text or " "
 
-        # Build text styles with newline markers
-        styles = self._build_text_styles(text)
+        # Build text styles (single paragraph style based on first block type)
+        styles = self._build_text_styles(ctx)
 
         structural_blocks = [
             # Header blocks
@@ -286,7 +298,7 @@ class PageTransformExecutor:
                     items=CrdtSequence(
                         [
                             CrdtSequenceItem(
-                                item_id=CrdtId(1, 16),
+                                item_id=CrdtId(1, TEXT_BASE_ITEM_ID),
                                 left_id=CrdtId(0, 0),
                                 right_id=CrdtId(0, 0),
                                 deleted_length=0,
@@ -327,29 +339,24 @@ class PageTransformExecutor:
 
         ctx.output_blocks.extend(structural_blocks)
 
-    def _build_text_styles(self, text: str) -> dict:
-        """Build rmscene styles dictionary with newline markers.
+    def _build_text_styles(self, ctx: ExecutionContext) -> dict:
+        """Build rmscene styles dictionary.
 
-        Creates a styles dictionary for rmscene Text blocks with format code 10
-        (newline marker) for each \\n character.
+        Creates a styles dictionary for rmscene Text blocks with a single
+        paragraph style at position (0,0). The style is HEADING if the first
+        line is a markdown heading, otherwise PLAIN.
+
+        Device-native .rm files use only one style entry at (0,0) - they don't
+        use format code 10 for newlines.
 
         Args:
-            text: Text content to build styles for
+            ctx: Execution context with page text and heading flag
 
         Returns:
             Dictionary mapping CrdtId positions to LwwValue styles
         """
-        styles = {CrdtId(0, 0): LwwValue(timestamp=CrdtId(1, 15), value=si.ParagraphStyle.PLAIN)}
-
-        # Add format code 10 (newline marker) for each \n character
-        for i, char in enumerate(text):
-            if char == "\n":
-                styles[CrdtId(0, i)] = LwwValue(
-                    timestamp=CrdtId(1, 15),
-                    value=10,  # Format code 10 = newline
-                )
-
-        return styles
+        style = si.ParagraphStyle.HEADING if ctx.first_line_is_heading else si.ParagraphStyle.PLAIN
+        return {CrdtId(0, 0): LwwValue(timestamp=CrdtId(1, 15), value=style)}
 
     def _apply_stroke_placement(
         self,
@@ -403,8 +410,20 @@ class PageTransformExecutor:
         if new_anchor_offset > len(ctx.page_text):
             new_anchor_offset = len(ctx.page_text)
 
-        # Reanchor the bundle
-        reanchored = self.translator.reanchor_bundle(bundle, new_anchor_offset)
+        # Add base item ID to convert character offset to CrdtId part2.
+        # The generated RootTextBlock uses item_id=CrdtId(1, TEXT_BASE_ITEM_ID),
+        # so anchor_id must be CrdtId(1, TEXT_BASE_ITEM_ID + char_offset) to
+        # correctly map to the paragraph Y position in build_anchor_pos().
+        crdt_anchor_offset = new_anchor_offset + TEXT_BASE_ITEM_ID
+
+        logger.info(
+            f"Reanchoring stroke {bundle.node_id}: "
+            f"original_anchor={original_anchor}, char_offset={new_anchor_offset}, "
+            f"crdt_offset={crdt_anchor_offset}, page_text_len={len(ctx.page_text)}"
+        )
+
+        # Reanchor the bundle with the CRDT-adjusted offset
+        reanchored = self.translator.reanchor_bundle(bundle, crdt_anchor_offset)
 
         # Prepare for injection (reset CRDT neighbors for new page)
         prepared = self.translator.prepare_bundle_for_injection(reanchored)

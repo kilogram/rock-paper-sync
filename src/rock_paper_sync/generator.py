@@ -14,7 +14,6 @@ from pathlib import Path
 import rmscene
 from rmscene import scene_items as si
 from rmscene.crdt_sequence import CrdtId
-from rmscene.tagged_block_common import LwwValue
 
 from .annotations import (
     HeuristicTextAnchor,
@@ -278,6 +277,7 @@ class RemarkablePage:
     text_blocks: list[TextBlock] = field(default_factory=list)
     annotation_context: PageAnnotationContext | None = None
     content_blocks: list = field(default_factory=list)
+    first_block_is_heading: bool = False  # If True, use HEADING paragraph style
 
 
 @dataclass
@@ -423,33 +423,6 @@ class RemarkableGenerator:
 
         return None
 
-    def _build_text_styles(self, text: str) -> dict:
-        """Build rmscene styles dictionary with newline markers.
-
-        Creates a styles dictionary for rmscene Text blocks with format code 10
-        (newline marker) for each \\n character. This is a workaround for rmscene
-        not yet supporting ParagraphStyle.NEWLINE.
-
-        See docs/RMSCENE_NEWLINE_WORKAROUND.md for details.
-
-        Args:
-            text: Text content to build styles for
-
-        Returns:
-            Dictionary mapping CrdtId positions to LwwValue styles
-        """
-        styles = {CrdtId(0, 0): LwwValue(timestamp=CrdtId(1, 15), value=si.ParagraphStyle.PLAIN)}
-
-        # Add format code 10 (newline marker) for each \n character
-        for i, char in enumerate(text):
-            if char == "\n":
-                styles[CrdtId(0, i)] = LwwValue(
-                    timestamp=CrdtId(1, 15),
-                    value=10,  # Format code 10 = newline
-                )
-
-        return styles
-
     def generate_document(
         self,
         md_doc: MarkdownDocument,
@@ -527,10 +500,17 @@ class RemarkableGenerator:
             # Convert content blocks to text items
             text_items, text_blocks = self.blocks_to_text_items(projection.content_blocks)
 
+            # Check if first block is a heading (for paragraph style selection)
+            first_block_is_heading = (
+                len(projection.content_blocks) > 0
+                and projection.content_blocks[0].type == BlockType.HEADER
+            )
+
             page = RemarkablePage(
                 uuid=projection.page_uuid,
                 text_items=text_items,
                 text_blocks=text_blocks,
+                first_block_is_heading=first_block_is_heading,
             )
 
             # Add annotations from projection
@@ -1616,6 +1596,7 @@ class RemarkableGenerator:
             stroke_placements=stroke_placements,
             highlight_placements=highlight_placements,
             source_rm_path=ctx.source_rm_path if ctx else None,
+            first_line_is_heading=page.first_block_is_heading,
         )
 
     def generate_rm_file(self, page: RemarkablePage) -> bytes:

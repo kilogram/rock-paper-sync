@@ -261,7 +261,7 @@ PAPER_PRO_MOVE: Final[DeviceGeometry] = DeviceGeometry(
     # Text area positioning (centered: text_pos_x = -text_width/2)
     text_width=750.0,
     text_pos_x=-375.0,
-    text_pos_y=94.0,  # Top margin, ~2 lines
+    text_pos_y=234.0,  # Top margin - matches device-native reference (4 lines)
     # Layout engine text width (calibrated 2025-12-08 from cross-page annotation test)
     # Device allows lines ~8px wider than text_width before wrapping
     layout_text_width=758.0,
