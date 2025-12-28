@@ -259,7 +259,20 @@ adipisci velit, sed quia non numquam eius modi tempora incidunt.
             from tests.record_replay.harness.comparison import (
                 assert_highlights_match,
                 print_highlight_comparison,
+                save_comparison_images,
             )
+
+            # Save debug images for visual inspection
+            debug_dir = visual_validator.debug_dir / "golden_comparison"
+            saved_images = save_comparison_images(
+                after_state.rm_files,
+                golden_state.rm_files,
+                debug_dir,
+            )
+            if saved_images:
+                print(f"\n📸 Debug images saved to: {debug_dir}")
+                for img_path in saved_images:
+                    print(f"   - {img_path.name}")
 
             print("\n📌 GOLDEN COMPARISON: Re-anchored vs Device-Native")
             print_highlight_comparison(after_state.rm_files, golden_state.rm_files)

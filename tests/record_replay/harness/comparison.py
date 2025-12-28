@@ -19,6 +19,7 @@ from __future__ import annotations
 import io
 import math
 from dataclasses import dataclass
+from pathlib import Path
 
 from rock_paper_sync.annotations import AnnotationType, read_annotations
 from rock_paper_sync.annotations.core_types import Rectangle
@@ -554,3 +555,60 @@ def print_stroke_comparison(
 
     print(f"\nMax delta: {result.max_delta_px:.1f}px")
     print("=" * 60)
+
+
+# =============================================================================
+# DEBUG IMAGE GENERATION
+# =============================================================================
+
+
+def save_comparison_images(
+    reanchored_rm_files: dict[str, bytes],
+    golden_rm_files: dict[str, bytes],
+    output_dir: Path,
+    prefix: str = "",
+) -> list[Path]:
+    """Render and save .rm files as PNG images for visual debugging.
+
+    Saves rendered PNGs for both re-anchored and golden .rm files,
+    making it easy to visually compare the annotation positions.
+
+    Args:
+        reanchored_rm_files: page_uuid -> .rm bytes from re-anchored document
+        golden_rm_files: page_uuid -> .rm bytes from device-native document
+        output_dir: Directory to save the images
+        prefix: Optional prefix for filenames (e.g., test name)
+
+    Returns:
+        List of paths to saved images
+    """
+    from tools.rmlib import RmRenderer
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    saved_paths = []
+
+    renderer = RmRenderer()
+    prefix_str = f"{prefix}_" if prefix else ""
+
+    # Render re-anchored files
+    for i, (page_uuid, rm_data) in enumerate(sorted(reanchored_rm_files.items())):
+        try:
+            img = renderer.render_bytes(rm_data)
+            out_path = output_dir / f"{prefix_str}reanchored_page{i}_{page_uuid[:8]}.png"
+            img.save(out_path)
+            saved_paths.append(out_path)
+        except Exception as e:
+            print(f"Failed to render reanchored page {page_uuid}: {e}")
+
+    # Render golden files
+    for i, (page_uuid, rm_data) in enumerate(sorted(golden_rm_files.items())):
+        try:
+            img = renderer.render_bytes(rm_data)
+            out_path = output_dir / f"{prefix_str}golden_page{i}_{page_uuid[:8]}.png"
+            img.save(out_path)
+            saved_paths.append(out_path)
+        except Exception as e:
+            print(f"Failed to render golden page {page_uuid}: {e}")
+
+    return saved_paths
