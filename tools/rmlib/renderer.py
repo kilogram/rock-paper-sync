@@ -21,6 +21,11 @@ import rmscene
 from PIL import Image, ImageDraw, ImageFont
 from rmscene import CrdtId, RootTextBlock, SceneGlyphItemBlock, SceneLineItemBlock, si
 
+from src.rock_paper_sync.coordinate_transformer import (
+    END_OF_DOC_ANCHOR_MARKER,
+    ParentAnchorResolver,
+)
+
 from .colors import BACKGROUND_COLOR, get_highlight_rgba, get_pen_color
 
 logger = logging.getLogger(__name__)
@@ -35,9 +40,6 @@ PAGE_CENTER_X = 702.0  # 1404 / 2
 # Text origin offset (from device geometry)
 TEXT_ORIGIN_X = -375.0
 TEXT_ORIGIN_Y = 234.0
-
-# End-of-document anchor marker (sentinel value)
-END_OF_DOC_ANCHOR_MARKER = 281474976710655
 
 # Typography model (calibrated 2025-12-28 against device thumbnails)
 #
@@ -77,9 +79,6 @@ BODY_LINE_HEIGHT = 68  # 57 × 1.168 = 66.6, calibrated to 68
 HEADING_LINE_HEIGHT = 104  # ~1.53× body line height
 BODY_FONT_SIZE = 31  # 10pt at 226 DPI = 31.4px
 HEADING_FONT_SIZE = 65  # ~2.1× body (from visual calibration)
-
-# Layer ID that indicates absolute coordinates (not text-relative)
-ROOT_LAYER_ID = CrdtId(0, 11)
 
 # Font search paths (same as font_metrics.py - Noto Sans Regular is used on reMarkable)
 FONT_SEARCH_PATHS = [
@@ -162,14 +161,14 @@ class RmRenderer:
         # Parse blocks
         blocks = list(rmscene.read_blocks(io.BytesIO(rm_bytes)))
 
-        # Extract text first (needed for anchor positioning)
+        # Extract text first (needed for text rendering and anchor positioning)
         text, text_origin_x, text_origin_y, paragraph_styles = self._extract_text_with_styles(
             blocks
         )
 
-        # Build index for coordinate transformation
-        tree_nodes = self._index_tree_nodes(blocks)
-        anchor_map = self._build_anchor_map(blocks, tree_nodes, text, text_origin_y)
+        # Use ParentAnchorResolver for CRDT ID -> char offset mapping,
+        # then compute visual coordinates ourselves
+        anchor_map = self._build_anchor_map(blocks, text, text_origin_y)
 
         # Create image with RGBA for alpha blending (highlights)
         image = Image.new("RGBA", (self.width, self.height), (*self.background_color, 255))
@@ -201,127 +200,80 @@ class RmRenderer:
         image = self.render(rm_path)
         image.save(output_path, "PNG")
 
-    def _index_tree_nodes(self, blocks: list) -> dict[CrdtId, rmscene.TreeNodeBlock]:
-        """Build index of TreeNodeBlocks by node_id."""
-        tree_nodes = {}
-        for block in blocks:
-            if isinstance(block, rmscene.TreeNodeBlock):
-                node_id = block.group.node_id
-                tree_nodes[node_id] = block
-        return tree_nodes
-
-    def _build_crdt_to_char_map(self, blocks: list) -> dict[CrdtId, int]:
-        """Build map from CRDT item IDs to character offsets.
-
-        The anchor_id in TreeNodeBlocks is a CrdtId that references a specific
-        character in the text. This is NOT the same as the character offset -
-        each character has its own CRDT ID (item_id + index within the item).
-
-        Args:
-            blocks: All rmscene blocks
-
-        Returns:
-            Dict mapping CrdtId -> character offset in the combined text
-        """
-        crdt_to_char: dict[CrdtId, int] = {}
-
-        for block in blocks:
-            if isinstance(block, RootTextBlock):
-                text_data = block.value
-                char_offset = 0
-
-                for item in text_data.items.sequence_items():
-                    item_id = item.item_id
-                    if hasattr(item, "value") and isinstance(item.value, str):
-                        text = item.value
-                        # Each character in this run gets a sequential CRDT ID
-                        for i in range(len(text)):
-                            char_crdt_id = CrdtId(item_id.part1, item_id.part2 + i)
-                            crdt_to_char[char_crdt_id] = char_offset + i
-                        char_offset += len(text)
-                break
-
-        return crdt_to_char
-
     def _build_anchor_map(
         self,
         blocks: list,
-        tree_nodes: dict[CrdtId, rmscene.TreeNodeBlock],
         text: str,
         text_origin_y: float,
     ) -> dict[CrdtId, tuple[float, float]]:
         """Build map from parent_id to page coordinate offsets.
 
-        Coordinate system:
-        - Stroke coordinates are relative to their anchor position
-        - anchor_origin_x is in text coordinates (x=0 is page center)
-        - To convert to page coordinates: page_x = PAGE_CENTER_X + anchor_origin_x + stroke.x
+        Uses ParentAnchorResolver for CRDT ID -> character offset mapping,
+        then computes visual Y positions using LINE_HEIGHT (68px) for
+        thumbnail comparison accuracy.
 
-        This map provides the (page_offset_x, page_offset_y) to add to stroke coords.
+        Coordinate transformation:
+        - ParentAnchorResolver provides: anchor_x (text-relative), char_offset
+        - We compute: page_x = PAGE_CENTER_X + anchor_x
+        - We compute: page_y = text_origin_y + (line_num * LINE_HEIGHT)
 
         Args:
             blocks: All rmscene blocks
-            tree_nodes: Index of TreeNodeBlocks by node_id
             text: Full text content for computing line positions
             text_origin_y: Y coordinate of text origin
 
         Returns:
             Dict mapping parent_id -> (page_offset_x, page_offset_y)
         """
-        anchor_map: dict[CrdtId, tuple[float, float]] = {}
+        # Use ParentAnchorResolver for CRDT ID -> char offset mapping
+        resolver = ParentAnchorResolver.from_blocks(blocks)
 
-        # ROOT_LAYER uses coordinates relative to page center
-        anchor_map[ROOT_LAYER_ID] = (PAGE_CENTER_X, 0.0)
-
-        # Build CRDT ID -> character offset mapping
-        crdt_to_char = self._build_crdt_to_char_map(blocks)
-
-        # Build character offset -> line number mapping from actual text
+        # Build character offset -> line number mapping for visual Y positions
         char_to_line: dict[int, int] = {}
+        total_lines = 0
         if text:
             char_offset = 0
             for line_num, line in enumerate(text.split("\n")):
-                # Map all characters in this line to this line number
-                for i in range(len(line) + 1):  # +1 to include the newline position
+                for i in range(len(line) + 1):  # +1 for newline position
                     char_to_line[char_offset + i] = line_num
                 char_offset += len(line) + 1
-            # Total lines in text
             total_lines = len(text.split("\n"))
-        else:
-            total_lines = 0
 
-        # For each TreeNodeBlock, compute the page offset
-        for node_id, tree_node in tree_nodes.items():
-            # Get anchor_origin_x (text-relative X offset)
-            anchor_origin_x = 0.0
-            if tree_node.group and tree_node.group.anchor_origin_x:
-                anchor_origin_x = tree_node.group.anchor_origin_x.value
+        # Build anchor map for all stroke parents
+        anchor_map: dict[CrdtId, tuple[float, float]] = {}
 
-            # Get Y offset from anchor_id (CRDT ID -> char offset -> line position)
-            y_offset = text_origin_y  # Default to text start
-            if tree_node.group and tree_node.group.anchor_id:
-                anchor_crdt = tree_node.group.anchor_id.value
-                if isinstance(anchor_crdt, CrdtId):
-                    # Check for end-of-document sentinel
-                    if anchor_crdt.part2 == END_OF_DOC_ANCHOR_MARKER:
-                        # End-of-doc strokes: position after all text lines
-                        y_offset = text_origin_y + (total_lines * LINE_HEIGHT)
-                    elif anchor_crdt in crdt_to_char:
-                        # Look up actual character offset from CRDT ID
-                        char_offset = crdt_to_char[anchor_crdt]
-                        if char_offset in char_to_line:
-                            line_num = char_to_line[char_offset]
-                            y_offset = text_origin_y + (line_num * LINE_HEIGHT)
-                    else:
-                        # Unknown CRDT ID - position after last line
-                        logger.debug(f"Unknown anchor CRDT ID: {anchor_crdt}")
-                        y_offset = text_origin_y + (total_lines * LINE_HEIGHT)
+        # Collect all parent_ids from strokes
+        parent_ids: set[CrdtId] = set()
+        for block in blocks:
+            if isinstance(block, SceneLineItemBlock):
+                parent_ids.add(block.parent_id)
 
-            # Page offset = center + text-relative anchor
-            page_offset_x = PAGE_CENTER_X + anchor_origin_x
-            page_offset_y = y_offset
+        # ROOT_LAYER uses page-center-relative coordinates
+        root_layer_id = CrdtId(0, 11)
+        anchor_map[root_layer_id] = (PAGE_CENTER_X, 0.0)
 
-            anchor_map[node_id] = (page_offset_x, page_offset_y)
+        for parent_id in parent_ids:
+            if parent_id == root_layer_id:
+                continue  # Already handled
+
+            # Get anchor data from resolver (reuses CRDT ID -> char offset mapping)
+            anchor = resolver.get_anchor(parent_id)
+
+            # Compute page X: add PAGE_CENTER_X to text-relative anchor_x
+            page_x = PAGE_CENTER_X + anchor.anchor_x
+
+            # Compute visual Y using our LINE_HEIGHT (68px, not resolver's 57px)
+            if anchor.char_offset is None:
+                page_y = text_origin_y
+            elif anchor.char_offset == END_OF_DOC_ANCHOR_MARKER:
+                page_y = text_origin_y + (total_lines * LINE_HEIGHT)
+            elif anchor.char_offset in char_to_line:
+                line_num = char_to_line[anchor.char_offset]
+                page_y = text_origin_y + (line_num * LINE_HEIGHT)
+            else:
+                page_y = text_origin_y + (total_lines * LINE_HEIGHT)
+
+            anchor_map[parent_id] = (page_x, page_y)
 
         return anchor_map
 
