@@ -1,0 +1,16 @@
+{
+  "test_id": "010_device_native_ref",
+  "description": "Device-native reference file with text, highlight, and strokes. Full integration test including: header text, highlighted word, margin stroke (star), inter-paragraph stroke (horizontal line), and end-of-document stroke (arrow + 'ok'). This is the ground truth file created 100% on-device.",
+  "source": {
+    "doc_name": "device-native-ref",
+    "doc_uuid": "5d430b89-2a5e-4e2d-8e55-ec9bc53c1d3d",
+    "page_uuid": "fdf0de96-142b-4227-8096-5f376e85ac71"
+  },
+  "captured_at": "2025-12-27T00:00:00",
+  "expected_elements": {
+    "text": ["Ref", "Para one highlight.", "Para two margin.", "Para three middle.", "End notes."],
+    "highlights": 1,
+    "strokes": 4,
+    "stroke_types": ["margin star", "inter-para line", "end-of-doc arrow", "end-of-doc text 'ok'"]
+  }
+}

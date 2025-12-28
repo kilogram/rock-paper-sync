@@ -4,7 +4,8 @@ Validates stroke appearance by comparing rendered regions at fixed positions,
 ensuring both position accuracy AND stroke shape similarity.
 
 The comparison works at the CLUSTER level (not individual strokes):
-1. Rendering both .rm files to PNG using rmc + cairosvg
+1. Rendering both .rm files to PNG using our custom RmRenderer
+   (replaces the unreliable rmc tool as of 2025-12-28)
 2. Extracting stroke bounding boxes and clustering nearby strokes
 3. For each cluster in golden:
    - Computing a combined bounding box for the cluster
@@ -53,6 +54,7 @@ from PIL import Image
 
 from rock_paper_sync.annotations import read_annotations
 from rock_paper_sync.annotations.core_types import Rectangle
+from tools.rmlib import RmRenderer
 
 # reMarkable page dimensions (Paper Pro)
 RM_PAGE_WIDTH = 1404
@@ -271,6 +273,48 @@ def rm_to_png_bytes(
     finally:
         rm_path.unlink(missing_ok=True)
         svg_path.unlink(missing_ok=True)
+
+
+def rm_to_png_bytes_renderer(
+    rm_data: bytes, width: int = RM_PAGE_WIDTH, height: int = RM_PAGE_HEIGHT
+) -> bytes:
+    """Convert .rm file bytes to PNG bytes using our custom RmRenderer.
+
+    This is the preferred method over rm_to_png_bytes (which uses rmc)
+    as our renderer is calibrated against device thumbnails.
+
+    Args:
+        rm_data: Raw bytes of .rm file
+        width: Output width in pixels (used for renderer dimensions)
+        height: Output height in pixels (used for renderer dimensions)
+
+    Returns:
+        PNG image as bytes
+    """
+    renderer = RmRenderer(width=width, height=height)
+    image = renderer.render_bytes(rm_data)
+
+    # Convert to bytes
+    output = io.BytesIO()
+    image.save(output, format="PNG")
+    return output.getvalue()
+
+
+def rm_to_png_image(
+    rm_data: bytes, width: int = RM_PAGE_WIDTH, height: int = RM_PAGE_HEIGHT
+) -> Image.Image:
+    """Convert .rm file bytes to PIL Image using our custom RmRenderer.
+
+    Args:
+        rm_data: Raw bytes of .rm file
+        width: Output width in pixels
+        height: Output height in pixels
+
+    Returns:
+        PIL Image object
+    """
+    renderer = RmRenderer(width=width, height=height)
+    return renderer.render_bytes(rm_data)
 
 
 def extract_annotation_bboxes(rm_data: bytes) -> list[Rectangle]:
@@ -754,13 +798,12 @@ def save_comparison_debug_images(
         golden_bboxes = extract_stroke_bboxes(golden_rm_data)
         golden_clusters = cluster_strokes(golden_bboxes, cluster_distance)
 
-        # Render golden page
+        # Render golden page using our custom renderer
         try:
-            golden_png = rm_to_png_bytes(golden_rm_data)
+            golden_image = rm_to_png_image(golden_rm_data)
             golden_path = output_dir / f"page{page_idx}_golden.png"
-            golden_path.write_bytes(golden_png)
+            golden_image.save(golden_path, "PNG")
             saved_paths.append(golden_path)
-            golden_image = Image.open(io.BytesIO(golden_png))
         except Exception:
             continue
 
@@ -780,13 +823,12 @@ def save_comparison_debug_images(
         test_bboxes = extract_stroke_bboxes(test_rm_data)
         test_clusters = cluster_strokes(test_bboxes, cluster_distance)
 
-        # Render test page
+        # Render test page using our custom renderer
         try:
-            test_png = rm_to_png_bytes(test_rm_data)
+            test_image = rm_to_png_image(test_rm_data)
             test_path = output_dir / f"page{page_idx}_test.png"
-            test_path.write_bytes(test_png)
+            test_image.save(test_path, "PNG")
             saved_paths.append(test_path)
-            test_image = Image.open(io.BytesIO(test_png))
         except Exception:
             continue
 
