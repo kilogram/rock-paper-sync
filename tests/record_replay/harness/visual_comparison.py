@@ -62,7 +62,11 @@ RM_PAGE_HEIGHT = 1872
 
 
 def check_rmc_installed() -> bool:
-    """Check if rmc is available in PATH."""
+    """Check if rmc is available in PATH.
+
+    DEPRECATED: No longer needed. Use rm_to_png_bytes_renderer() or
+    rm_to_png_image() instead, which use our custom RmRenderer.
+    """
     return shutil.which("rmc") is not None
 
 
@@ -206,6 +210,12 @@ def rm_to_png_bytes(
     rm_data: bytes, width: int = RM_PAGE_WIDTH, height: int = RM_PAGE_HEIGHT
 ) -> bytes:
     """Convert .rm file bytes to PNG bytes using rmc + cairosvg.
+
+    DEPRECATED: Use rm_to_png_bytes_renderer() instead, which uses our
+    custom RmRenderer that is calibrated against device thumbnails.
+    This rmc-based function has known issues:
+    - Does not render highlights
+    - Mispositions unanchored strokes
 
     Args:
         rm_data: Raw bytes of .rm file

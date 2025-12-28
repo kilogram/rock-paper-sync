@@ -279,14 +279,9 @@ adipisci velit, sed quia non numquam eius modi tempora incidunt.
             print("\n⚠️  Comparison module not available")
 
         # Visual comparison: assert uploaded_rm matches golden
-        from tests.record_replay.harness.visual_comparison import check_rmc_installed
-
-        if check_rmc_installed():
-            print("\n📌 VISUAL COMPARISON: Asserting uploaded_rm matches golden")
-            result = visual_validator.assert_uploaded_matches_golden(test_id, trip_number=2)
-            print(f"✅ Visual comparison passed: {len(result.matches)} cluster(s) matched")
-        else:
-            print("\n⚠️  rmc not installed - skipping visual comparison assertion")
+        print("\n📌 VISUAL COMPARISON: Asserting uploaded_rm matches golden")
+        result = visual_validator.assert_uploaded_matches_golden(test_id, trip_number=2)
+        print(f"✅ Visual comparison passed: {len(result.matches)} cluster(s) matched")
     else:
         print("\n⚠️  No golden annotations captured - skipping comparison")
 

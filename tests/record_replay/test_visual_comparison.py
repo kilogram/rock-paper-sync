@@ -9,11 +9,10 @@ import pytest
 
 from tests.record_replay.harness.visual_comparison import (
     VisualComparisonResult,
-    check_rmc_installed,
     compare_rm_files_visually,
     extract_stroke_bboxes,
     print_visual_comparison,
-    rm_to_png_bytes,
+    rm_to_png_bytes_renderer,
 )
 
 
@@ -36,9 +35,8 @@ def cross_page_testdata(testdata_store):
     }
 
 
-@pytest.mark.skipif(not check_rmc_installed(), reason="rmc not installed")
 def test_rm_to_png_renders_file(cross_page_testdata):
-    """Test that .rm files can be rendered to PNG."""
+    """Test that .rm files can be rendered to PNG using our custom renderer."""
     golden = cross_page_testdata["golden"]
     if not golden or not golden.annotations:
         pytest.skip("No golden annotations")
@@ -50,8 +48,8 @@ def test_rm_to_png_renders_file(cross_page_testdata):
 
     page_uuid, rm_data = next(iter(rm_files.items()))
 
-    # Render to PNG
-    png_bytes = rm_to_png_bytes(rm_data)
+    # Render to PNG using our renderer
+    png_bytes = rm_to_png_bytes_renderer(rm_data)
 
     assert png_bytes is not None
     assert len(png_bytes) > 0
@@ -85,7 +83,6 @@ def test_extract_stroke_bboxes(cross_page_testdata):
     print(f"\nTotal strokes across all pages: {total_strokes}")
 
 
-@pytest.mark.skipif(not check_rmc_installed(), reason="rmc not installed")
 def test_compare_identical_files(cross_page_testdata):
     """Test that comparing identical files returns perfect match."""
     golden = cross_page_testdata["golden"]
@@ -112,7 +109,6 @@ def test_compare_identical_files(cross_page_testdata):
         assert result.max_hash_distance == 0, f"Max hash distance: {result.max_hash_distance}"
 
 
-@pytest.mark.skipif(not check_rmc_installed(), reason="rmc not installed")
 def test_compare_trip_vs_golden(cross_page_testdata):
     """Test comparing trip annotations against golden."""
     golden = cross_page_testdata["golden"]
@@ -160,7 +156,6 @@ def test_compare_trip_vs_golden(cross_page_testdata):
                 print(f"    Hash distance: {match.hash_distance}")
 
 
-@pytest.mark.skipif(not check_rmc_installed(), reason="rmc not installed")
 def test_visual_validator_fixture(visual_validator, cross_page_testdata):
     """Test the visual_validator fixture."""
     golden = cross_page_testdata["golden"]
@@ -183,7 +178,6 @@ def test_visual_validator_fixture(visual_validator, cross_page_testdata):
     visual_validator.assert_visual_match(rm_files, rm_files)
 
 
-@pytest.mark.skipif(not check_rmc_installed(), reason="rmc not installed")
 def test_print_visual_comparison(cross_page_testdata, capsys):
     """Test print_visual_comparison output."""
     golden = cross_page_testdata["golden"]
