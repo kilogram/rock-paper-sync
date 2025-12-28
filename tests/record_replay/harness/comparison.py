@@ -180,19 +180,81 @@ def match_rectangles_by_proximity(
     )
 
 
+def match_rectangles_by_text(
+    reanchored: list[tuple[Rectangle, str]],
+    golden: list[tuple[Rectangle, str]],
+) -> ComparisonResult:
+    """Match rectangles by highlight text (not position).
+
+    This is useful when pagination differs between re-anchored and golden,
+    but we want to verify highlights are on the same text.
+
+    Args:
+        reanchored: List of (rect, text) from re-anchored document
+        golden: List of (rect, text) from golden document
+
+    Returns:
+        ComparisonResult with matches based on text content
+    """
+    matches = []
+    used_golden = set()
+    unmatched_reanchored = []
+
+    for ra_rect, ra_text in reanchored:
+        # Find golden rectangle with same text
+        best_match = None
+        best_idx = -1
+
+        for i, (g_rect, g_text) in enumerate(golden):
+            if i in used_golden:
+                continue
+
+            # Match by text content (case-insensitive, strip whitespace)
+            if ra_text.strip().lower() == g_text.strip().lower():
+                best_match = (g_rect, g_text)
+                best_idx = i
+                break
+
+        if best_match:
+            matches.append(
+                RectangleMatch(
+                    reanchored=ra_rect,
+                    golden=best_match[0],
+                    reanchored_text=ra_text,
+                    golden_text=best_match[1],
+                )
+            )
+            used_golden.add(best_idx)
+        else:
+            unmatched_reanchored.append((ra_rect, ra_text))
+
+    # Collect unmatched golden rectangles
+    unmatched_golden = [
+        (rect, text) for i, (rect, text) in enumerate(golden) if i not in used_golden
+    ]
+
+    return ComparisonResult(
+        matches=matches,
+        unmatched_reanchored=unmatched_reanchored,
+        unmatched_golden=unmatched_golden,
+    )
+
+
 def compare_highlights(
     reanchored_rm_files: dict[str, bytes],
     golden_rm_files: dict[str, bytes],
+    match_by_text: bool = False,
 ) -> ComparisonResult:
     """Compare highlight rectangles between re-anchored and golden documents.
 
-    Extracts all rectangles from all highlights and matches by proximity.
-    This handles cases where highlight structure differs (e.g., 1 multi-rect
-    highlight vs multiple single-rect highlights).
+    Extracts all rectangles from all highlights and matches by proximity
+    or by text content.
 
     Args:
         reanchored_rm_files: page_uuid -> .rm bytes from re-anchored document
         golden_rm_files: page_uuid -> .rm bytes from device-native document
+        match_by_text: If True, match by highlight text instead of position.
+                       Useful when pagination differs between sources.
 
     Returns:
         ComparisonResult with matched and unmatched rectangles
@@ -206,6 +268,8 @@ def compare_highlights(
     for rm_data in golden_rm_files.values():
         golden_rects.extend(extract_rectangles_from_rm(rm_data))
 
+    if match_by_text:
+        return match_rectangles_by_text(reanchored_rects, golden_rects)
     return match_rectangles_by_proximity(reanchored_rects, golden_rects)
 
 
@@ -213,22 +277,25 @@ def assert_highlights_match(
     reanchored_rm_files: dict[str, bytes],
     golden_rm_files: dict[str, bytes],
     tolerance_px: float = 5.0,
+    match_by_text: bool = False,
 ) -> None:
     """Assert that highlight rectangle positions match within tolerance.
 
     Compares re-anchored rectangles against device-native ground truth
-    using spatial proximity matching. Fails if any matched rectangle
-    exceeds the tolerance.
+    using spatial proximity matching or text matching. Fails if any
+    matched rectangle exceeds the tolerance.
 
     Args:
         reanchored_rm_files: page_uuid -> .rm bytes from re-anchored document
         golden_rm_files: page_uuid -> .rm bytes from device-native document
         tolerance_px: Maximum allowed position difference in pixels
+        match_by_text: If True, match highlights by text content instead of
+                       position. Useful when pagination differs.
 
     Raises:
         AssertionError: If any rectangle position exceeds tolerance
     """
-    result = compare_highlights(reanchored_rm_files, golden_rm_files)
+    result = compare_highlights(reanchored_rm_files, golden_rm_files, match_by_text=match_by_text)
 
     if not result.matches:
         ra_count = sum(len(extract_rectangles_from_rm(rm)) for rm in reanchored_rm_files.values())
@@ -237,6 +304,13 @@ def assert_highlights_match(
             f"No matching rectangles found to compare.\n"
             f"Re-anchored has {ra_count} rectangle(s), golden has {g_count} rectangle(s)."
         )
+
+    # When matching by text, we only verify text matches (position tolerance is informational)
+    if match_by_text:
+        print(f"Matched {len(result.matches)} highlight(s) by text content")
+        for m in result.matches:
+            print(f"  '{m.reanchored_text[:30]}...' → position delta: {m.distance:.1f}px")
+        return
 
     failures = [m for m in result.matches if not m.within_tolerance(tolerance_px)]
 
