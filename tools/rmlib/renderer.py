@@ -229,8 +229,8 @@ class RmRenderer:
         resolver = ParentAnchorResolver.from_blocks(blocks)
 
         # Build character offset -> line number mapping for visual Y positions
-        # Note: newlines at the END of non-empty lines map to the NEXT line,
-        # because strokes anchored to a newline appear below that text.
+        # Note: ALL newlines map to the NEXT line, because strokes anchored
+        # to a newline should appear below that line's text (or below empty lines).
         char_to_line: dict[int, int] = {}
         total_lines = 0
         if text:
@@ -241,11 +241,9 @@ class RmRenderer:
                 # Map content characters to this line
                 for i in range(len(line)):
                     char_to_line[char_offset + i] = line_num
-                # Newline at end of non-empty line maps to next line
-                # (strokes anchored here should appear below the text)
-                # But empty lines: the newline IS the line content
+                # Newlines always map to next line (strokes appear below)
                 newline_pos = char_offset + len(line)
-                if len(line) > 0 and line_num < total_lines - 1:
+                if line_num < total_lines - 1:
                     char_to_line[newline_pos] = line_num + 1
                 else:
                     char_to_line[newline_pos] = line_num
