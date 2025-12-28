@@ -435,9 +435,11 @@ class ParentAnchorResolver:
         from .layout import LayoutContext, TextAreaConfig
 
         # Extract text content and origin from RootTextBlock
+        # Also build CRDT ID -> character offset mapping
         full_text = ""
         text_pos_x = DEFAULT_TEXT_ORIGIN_X
         text_pos_y = DEFAULT_TEXT_ORIGIN_Y
+        crdt_to_char: dict[CrdtId, int] = {}
 
         for block in blocks:
             if "RootText" in type(block).__name__:
@@ -445,11 +447,22 @@ class ParentAnchorResolver:
                 text_pos_x = text_data.pos_x
                 text_pos_y = text_data.pos_y
 
-                # Extract text from CrdtSequence
+                # Extract text from CrdtSequence and build CRDT ID mapping
+                # The anchor_id in TreeNodeBlocks is a CrdtId that references a
+                # specific character. Each character has its own CRDT ID:
+                # CrdtId(item_id.part1, item_id.part2 + index_within_item)
                 text_parts = []
+                char_offset = 0
                 for item in text_data.items.sequence_items():
                     if hasattr(item, "value") and isinstance(item.value, str):
-                        text_parts.append(item.value)
+                        text = item.value
+                        item_id = item.item_id
+                        # Map each character's CRDT ID to its offset
+                        for i in range(len(text)):
+                            char_crdt_id = CrdtId(item_id.part1, item_id.part2 + i)
+                            crdt_to_char[char_crdt_id] = char_offset + i
+                        text_parts.append(text)
+                        char_offset += len(text)
                 full_text = "".join(text_parts)
                 break
 
@@ -480,11 +493,19 @@ class ParentAnchorResolver:
                     ):
                         parent_to_anchor_x[node_id] = g.anchor_origin_x.value
 
-                    # Get anchor_id (character offset)
+                    # Get anchor_id and resolve CRDT ID to character offset
                     if hasattr(g, "anchor_id") and g.anchor_id and g.anchor_id.value:
-                        anchor_id = g.anchor_id.value
-                        if hasattr(anchor_id, "part2"):
-                            parent_to_char_offset[node_id] = anchor_id.part2
+                        anchor_crdt = g.anchor_id.value
+                        if hasattr(anchor_crdt, "part2"):
+                            # Check for end-of-document sentinel
+                            if anchor_crdt.part2 == END_OF_DOC_ANCHOR_MARKER:
+                                parent_to_char_offset[node_id] = END_OF_DOC_ANCHOR_MARKER
+                            elif anchor_crdt in crdt_to_char:
+                                # Look up actual character offset from CRDT ID
+                                parent_to_char_offset[node_id] = crdt_to_char[anchor_crdt]
+                            else:
+                                # Unknown CRDT ID - log and skip
+                                logger.debug(f"Unknown anchor CRDT ID: {anchor_crdt}")
 
         return cls(parent_to_anchor_x, parent_to_char_offset, layout_ctx, default_origin)
 
