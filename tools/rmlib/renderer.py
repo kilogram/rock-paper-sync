@@ -210,6 +210,39 @@ class RmRenderer:
                 tree_nodes[node_id] = block
         return tree_nodes
 
+    def _build_crdt_to_char_map(self, blocks: list) -> dict[CrdtId, int]:
+        """Build map from CRDT item IDs to character offsets.
+
+        The anchor_id in TreeNodeBlocks is a CrdtId that references a specific
+        character in the text. This is NOT the same as the character offset -
+        each character has its own CRDT ID (item_id + index within the item).
+
+        Args:
+            blocks: All rmscene blocks
+
+        Returns:
+            Dict mapping CrdtId -> character offset in the combined text
+        """
+        crdt_to_char: dict[CrdtId, int] = {}
+
+        for block in blocks:
+            if isinstance(block, RootTextBlock):
+                text_data = block.value
+                char_offset = 0
+
+                for item in text_data.items.sequence_items():
+                    item_id = item.item_id
+                    if hasattr(item, "value") and isinstance(item.value, str):
+                        text = item.value
+                        # Each character in this run gets a sequential CRDT ID
+                        for i in range(len(text)):
+                            char_crdt_id = CrdtId(item_id.part1, item_id.part2 + i)
+                            crdt_to_char[char_crdt_id] = char_offset + i
+                        char_offset += len(text)
+                break
+
+        return crdt_to_char
+
     def _build_anchor_map(
         self,
         blocks: list,
@@ -240,6 +273,9 @@ class RmRenderer:
         # ROOT_LAYER uses coordinates relative to page center
         anchor_map[ROOT_LAYER_ID] = (PAGE_CENTER_X, 0.0)
 
+        # Build CRDT ID -> character offset mapping
+        crdt_to_char = self._build_crdt_to_char_map(blocks)
+
         # Build character offset -> line number mapping from actual text
         char_to_line: dict[int, int] = {}
         if text:
@@ -261,22 +297,24 @@ class RmRenderer:
             if tree_node.group and tree_node.group.anchor_origin_x:
                 anchor_origin_x = tree_node.group.anchor_origin_x.value
 
-            # Get Y offset from anchor_id (character offset -> line position)
+            # Get Y offset from anchor_id (CRDT ID -> char offset -> line position)
             y_offset = text_origin_y  # Default to text start
             if tree_node.group and tree_node.group.anchor_id:
-                anchor_val = tree_node.group.anchor_id.value
-                if isinstance(anchor_val, CrdtId):
-                    char_offset = anchor_val.part2
+                anchor_crdt = tree_node.group.anchor_id.value
+                if isinstance(anchor_crdt, CrdtId):
                     # Check for end-of-document sentinel
-                    if char_offset == END_OF_DOC_ANCHOR_MARKER:
+                    if anchor_crdt.part2 == END_OF_DOC_ANCHOR_MARKER:
                         # End-of-doc strokes: position after all text lines
                         y_offset = text_origin_y + (total_lines * LINE_HEIGHT)
-                    elif char_offset in char_to_line:
-                        # Normal anchor: use actual line number
-                        line_num = char_to_line[char_offset]
-                        y_offset = text_origin_y + (line_num * LINE_HEIGHT)
+                    elif anchor_crdt in crdt_to_char:
+                        # Look up actual character offset from CRDT ID
+                        char_offset = crdt_to_char[anchor_crdt]
+                        if char_offset in char_to_line:
+                            line_num = char_to_line[char_offset]
+                            y_offset = text_origin_y + (line_num * LINE_HEIGHT)
                     else:
-                        # Character offset beyond text - position after last line
+                        # Unknown CRDT ID - position after last line
+                        logger.debug(f"Unknown anchor CRDT ID: {anchor_crdt}")
                         y_offset = text_origin_y + (total_lines * LINE_HEIGHT)
 
             # Page offset = center + text-relative anchor
