@@ -641,6 +641,8 @@ def save_comparison_images(
     golden_rm_files: dict[str, bytes],
     output_dir: Path,
     prefix: str = "",
+    reanchored_page_order: list[str] | None = None,
+    golden_page_order: list[str] | None = None,
 ) -> list[Path]:
     """Render and save .rm files as PNG images for visual debugging.
 
@@ -652,6 +654,8 @@ def save_comparison_images(
         golden_rm_files: page_uuid -> .rm bytes from device-native document
         output_dir: Directory to save the images
         prefix: Optional prefix for filenames (e.g., test name)
+        reanchored_page_order: Optional list of page UUIDs in correct order
+        golden_page_order: Optional list of page UUIDs in correct order
 
     Returns:
         List of paths to saved images
@@ -665,8 +669,15 @@ def save_comparison_images(
     renderer = RmRenderer()
     prefix_str = f"{prefix}_" if prefix else ""
 
-    # Render re-anchored files
-    for i, (page_uuid, rm_data) in enumerate(sorted(reanchored_rm_files.items())):
+    # Use provided page order, or preserve dict insertion order (Python 3.7+)
+    reanchored_order = reanchored_page_order or list(reanchored_rm_files.keys())
+    golden_order = golden_page_order or list(golden_rm_files.keys())
+
+    # Render re-anchored files in correct page order
+    for i, page_uuid in enumerate(reanchored_order):
+        if page_uuid not in reanchored_rm_files:
+            continue
+        rm_data = reanchored_rm_files[page_uuid]
         try:
             img = renderer.render_bytes(rm_data)
             out_path = output_dir / f"{prefix_str}reanchored_page{i}_{page_uuid[:8]}.png"
@@ -675,8 +686,11 @@ def save_comparison_images(
         except Exception as e:
             print(f"Failed to render reanchored page {page_uuid}: {e}")
 
-    # Render golden files
-    for i, (page_uuid, rm_data) in enumerate(sorted(golden_rm_files.items())):
+    # Render golden files in correct page order
+    for i, page_uuid in enumerate(golden_order):
+        if page_uuid not in golden_rm_files:
+            continue
+        rm_data = golden_rm_files[page_uuid]
         try:
             img = renderer.render_bytes(rm_data)
             out_path = output_dir / f"{prefix_str}golden_page{i}_{page_uuid[:8]}.png"

@@ -261,6 +261,57 @@ def _reorder_blocks_for_device(self, blocks: list) -> list:
 
 This is called in both the roundtrip and from-scratch generation paths.
 
+### CRDT IDs: Understanding part1 and part2
+
+**CRITICAL**: `CrdtId.part2` is NOT a character offset. It is a CRDT sequence number.
+
+A `CrdtId(part1, part2)` consists of:
+- `part1`: Author/namespace identifier (see "System Nodes vs User Nodes" below)
+- `part2`: Sequence number within that author's CRDT operations
+
+**Common Bug Pattern** (AVOID THIS):
+```python
+# ❌ WRONG - part2 is NOT a character offset!
+for crdt_id, style in text_data.styles.items():
+    char_offset = crdt_id.part2  # BUG: This is a sequence number, not position!
+    paragraph_styles[char_offset] = style
+
+# ❌ WRONG - Same bug for anchor resolution
+for anchor in anchors:
+    char_offset = anchor.crdt_id.part2  # BUG!
+```
+
+**Correct Approach** - Build a CRDT ID → character offset map:
+```python
+# ✅ CORRECT - Build mapping from CRDT IDs to actual character offsets
+crdt_to_char: dict[CrdtId, int] = {}
+char_offset = 0
+for item in text_data.items.sequence_items():
+    if hasattr(item, "value") and isinstance(item.value, str):
+        text = item.value
+        item_id = item.item_id
+        # Each character gets a CRDT ID based on item_id + position in string
+        for i in range(len(text)):
+            char_crdt_id = CrdtId(item_id.part1, item_id.part2 + i)
+            crdt_to_char[char_crdt_id] = char_offset + i
+        char_offset += len(text)
+
+# Now use the mapping to resolve CRDT IDs to character positions
+for crdt_id, style in text_data.styles.items():
+    if crdt_id in crdt_to_char:
+        actual_char_offset = crdt_to_char[crdt_id]
+        paragraph_styles[actual_char_offset] = style
+```
+
+**Why this matters**: CRDT sequence numbers are unique identifiers for collaborative
+editing operations, not positions. A document could have CRDT IDs like:
+- `CrdtId(1, 16)` → character 0
+- `CrdtId(1, 17)` → character 1
+- `CrdtId(1, 100)` → character 5 (if characters were inserted non-sequentially)
+
+The mapping between CRDT IDs and character positions depends on how the document
+was edited and in what order operations were applied.
+
 ### System Nodes vs User Nodes
 
 Node IDs follow a convention based on `CrdtId.part1`:

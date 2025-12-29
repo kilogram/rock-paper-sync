@@ -268,6 +268,8 @@ adipisci velit, sed quia non numquam eius modi tempora incidunt.
                 after_state.rm_files,
                 golden_state.rm_files,
                 debug_dir,
+                reanchored_page_order=after_state.page_uuids,
+                golden_page_order=golden_state.page_uuids,
             )
             if saved_images:
                 print(f"\n📸 Debug images saved to: {debug_dir}")

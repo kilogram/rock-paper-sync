@@ -168,7 +168,9 @@ class RmRenderer:
 
         # Use ParentAnchorResolver for CRDT ID -> char offset mapping,
         # then compute visual coordinates ourselves
-        anchor_map = self._build_anchor_map(blocks, text, text_origin_y)
+        anchor_map = self._build_anchor_map(
+            blocks, text, text_origin_x, text_origin_y, paragraph_styles
+        )
 
         # Create image with RGBA for alpha blending (highlights)
         image = Image.new("RGBA", (self.width, self.height), (*self.background_color, 255))
@@ -204,50 +206,96 @@ class RmRenderer:
         self,
         blocks: list,
         text: str,
+        text_origin_x: float,
         text_origin_y: float,
+        paragraph_styles: dict[int, si.ParagraphStyle],
     ) -> dict[CrdtId, tuple[float, float]]:
         """Build map from parent_id to page coordinate offsets.
 
         Uses ParentAnchorResolver for CRDT ID -> character offset mapping,
-        then computes visual Y positions using LINE_HEIGHT (68px) for
-        thumbnail comparison accuracy.
+        then computes visual Y positions accounting for word wrapping and
+        different line heights for headings vs body text.
 
         Coordinate transformation:
         - ParentAnchorResolver provides: anchor_x (text-relative), char_offset
         - We compute: page_x = PAGE_CENTER_X + anchor_x
-        - We compute: page_y = text_origin_y + (line_num * LINE_HEIGHT)
+        - We compute: page_y using cumulative line heights with word wrapping
 
         Args:
             blocks: All rmscene blocks
             text: Full text content for computing line positions
+            text_origin_x: X coordinate of text origin (text-relative)
             text_origin_y: Y coordinate of text origin
+            paragraph_styles: Map of character offset to paragraph style
 
         Returns:
             Dict mapping parent_id -> (page_offset_x, page_offset_y)
         """
+        from rock_paper_sync.layout import WordWrapLayoutEngine
+
         # Use ParentAnchorResolver for CRDT ID -> char offset mapping
         resolver = ParentAnchorResolver.from_blocks(blocks)
 
-        # Build character offset -> line number mapping for visual Y positions
-        # Note: ALL newlines map to the NEXT line, because strokes anchored
-        # to a newline should appear below that line's text (or below empty lines).
-        char_to_line: dict[int, int] = {}
-        total_lines = 0
+        # Calculate text width the same way as _render_text does
+        # This ensures anchor Y positions match rendered text Y positions
+        page_x = PAGE_CENTER_X + text_origin_x
+        max_text_width = self.width - page_x - 50  # 50px right margin (same as _render_text)
+
+        # Build a map of character offset -> cumulative Y position
+        # This accounts for word wrapping AND different line heights for headings
+        char_to_y: dict[int, float] = {}
+
         if text:
-            lines = text.split("\n")
-            total_lines = len(lines)
-            char_offset = 0
-            for line_num, line in enumerate(lines):
-                # Map content characters to this line
-                for i in range(len(line)):
-                    char_to_line[char_offset + i] = line_num
-                # Newlines always map to next line (strokes appear below)
-                newline_pos = char_offset + len(line)
-                if line_num < total_lines - 1:
-                    char_to_line[newline_pos] = line_num + 1
+            engine = WordWrapLayoutEngine(
+                text_width=max_text_width,
+                use_font_metrics=True,
+            )
+
+            # Process each paragraph separately to handle different line heights
+            current_y = text_origin_y
+            current_offset = 0
+
+            for paragraph in text.split("\n"):
+                # Get style for this paragraph
+                style = paragraph_styles.get(current_offset, si.ParagraphStyle.BASIC)
+                is_heading = style == si.ParagraphStyle.HEADING
+                line_height = HEADING_LINE_HEIGHT if is_heading else BODY_LINE_HEIGHT
+
+                if paragraph:
+                    # Calculate line breaks within this paragraph
+                    para_line_breaks = engine.calculate_line_breaks(
+                        paragraph, max_text_width
+                    )
+
+                    # Track the Y of the last visual line for newline mapping
+                    last_line_y = current_y
+
+                    # Map each character in the paragraph to its Y position
+                    for i, break_pos in enumerate(para_line_breaks):
+                        if i + 1 < len(para_line_breaks):
+                            end_pos = para_line_breaks[i + 1]
+                        else:
+                            end_pos = len(paragraph)
+
+                        # All chars on this visual line have the same Y
+                        for j in range(break_pos, end_pos):
+                            char_to_y[current_offset + j] = current_y
+
+                        last_line_y = current_y  # Track last line Y before incrementing
+                        current_y += line_height
+
+                    # Map newline to the same Y as the last visual line
+                    # (not the next line's Y)
+                    char_to_y[current_offset + len(paragraph)] = last_line_y
                 else:
-                    char_to_line[newline_pos] = line_num
-                char_offset += len(line) + 1
+                    # Empty line - map newline to current Y, then add line height
+                    char_to_y[current_offset] = current_y
+                    current_y += BODY_LINE_HEIGHT
+                current_offset += len(paragraph) + 1  # +1 for newline
+
+            total_y = current_y
+        else:
+            total_y = text_origin_y
 
         # Build anchor map for all stroke parents
         anchor_map: dict[CrdtId, tuple[float, float]] = {}
@@ -272,16 +320,16 @@ class RmRenderer:
             # Compute page X: add PAGE_CENTER_X to text-relative anchor_x
             page_x = PAGE_CENTER_X + anchor.anchor_x
 
-            # Compute visual Y using our LINE_HEIGHT (68px, not resolver's 57px)
+            # Compute visual Y using the pre-calculated char_to_y map
             if anchor.char_offset is None:
                 page_y = text_origin_y
             elif anchor.char_offset == END_OF_DOC_ANCHOR_MARKER:
-                page_y = text_origin_y + (total_lines * LINE_HEIGHT)
-            elif anchor.char_offset in char_to_line:
-                line_num = char_to_line[anchor.char_offset]
-                page_y = text_origin_y + (line_num * LINE_HEIGHT)
+                page_y = total_y
+            elif anchor.char_offset in char_to_y:
+                page_y = char_to_y[anchor.char_offset]
             else:
-                page_y = text_origin_y + (total_lines * LINE_HEIGHT)
+                # Character offset not found - use end of text
+                page_y = total_y
 
             anchor_map[parent_id] = (page_x, page_y)
 
@@ -312,18 +360,29 @@ class RmRenderer:
                 origin_x = text_data.pos_x if hasattr(text_data, "pos_x") else TEXT_ORIGIN_X
                 origin_y = text_data.pos_y if hasattr(text_data, "pos_y") else TEXT_ORIGIN_Y
 
-                # Extract text content from CRDT items
+                # Extract text content from CRDT items and build CRDT ID -> char offset map
                 text_parts = []
+                crdt_to_char: dict[CrdtId, int] = {}
+                char_offset = 0
                 for item in text_data.items.sequence_items():
                     if hasattr(item, "value") and isinstance(item.value, str):
-                        text_parts.append(item.value)
+                        text = item.value
+                        item_id = item.item_id
+                        # Map each character's CRDT ID to its offset
+                        for i in range(len(text)):
+                            char_crdt_id = CrdtId(item_id.part1, item_id.part2 + i)
+                            crdt_to_char[char_crdt_id] = char_offset + i
+                        text_parts.append(text)
+                        char_offset += len(text)
 
-                # Extract paragraph styles
+                # Extract paragraph styles using CRDT ID -> char offset mapping
                 paragraph_styles: dict[int, si.ParagraphStyle] = {}
                 if hasattr(text_data, "styles") and text_data.styles:
-                    for crdt_id, lww_value in text_data.styles.items():
-                        char_offset = crdt_id.part2
-                        paragraph_styles[char_offset] = lww_value.value
+                    for style_crdt_id, lww_value in text_data.styles.items():
+                        # Look up actual character offset from CRDT ID
+                        if style_crdt_id in crdt_to_char:
+                            actual_char_offset = crdt_to_char[style_crdt_id]
+                            paragraph_styles[actual_char_offset] = lww_value.value
 
                 return "".join(text_parts), origin_x, origin_y, paragraph_styles
 
@@ -337,7 +396,7 @@ class RmRenderer:
         origin_y: float,
         paragraph_styles: dict[int, si.ParagraphStyle],
     ) -> None:
-        """Render text content to the image with proper formatting.
+        """Render text content to the image with proper formatting and word wrap.
 
         Args:
             draw: PIL ImageDraw object
@@ -352,6 +411,13 @@ class RmRenderer:
         # Convert text-relative X to page coordinates
         page_x = PAGE_CENTER_X + origin_x
 
+        # Calculate available width for text (from origin to right margin)
+        # The right margin is roughly symmetric to the left margin
+        right_margin = PAGE_CENTER_X + origin_x  # Mirror of left margin
+        max_text_width = self.width - page_x - (self.width - right_margin - page_x)
+        # Simpler: use the distance from origin_x to edge, mirrored
+        max_text_width = self.width - page_x - 50  # 50px right margin
+
         # Build list of (paragraph_text, style) by splitting on newlines
         # and determining style for each paragraph
         paragraphs = []
@@ -363,7 +429,7 @@ class RmRenderer:
             paragraphs.append((line, style))
             current_offset += len(line) + 1  # +1 for the newline
 
-        # Render each paragraph
+        # Render each paragraph with word wrapping
         current_y = origin_y
         prev_was_empty = False
 
@@ -374,8 +440,11 @@ class RmRenderer:
             line_height = HEADING_LINE_HEIGHT if is_heading else BODY_LINE_HEIGHT
 
             if line_text:
-                draw.text((page_x, current_y), line_text, fill=TEXT_COLOR, font=font)
-                current_y += line_height
+                # Word wrap the line
+                wrapped_lines = self._wrap_text(line_text, max_text_width)
+                for wrapped_line in wrapped_lines:
+                    draw.text((page_x, current_y), wrapped_line, fill=TEXT_COLOR, font=font)
+                    current_y += line_height
                 prev_was_empty = False
             else:
                 # Empty line - add inter-paragraph spacing
@@ -383,6 +452,37 @@ class RmRenderer:
                 if not prev_was_empty:
                     current_y += BODY_LINE_HEIGHT
                 prev_was_empty = True
+
+    def _wrap_text(self, text: str, max_width: float) -> list[str]:
+        """Wrap text to fit within max_width using the layout engine.
+
+        Args:
+            text: Text to wrap (single paragraph, no newlines)
+            max_width: Maximum width in pixels
+
+        Returns:
+            List of wrapped lines
+        """
+        if not text:
+            return [""]
+
+        # Use the existing WordWrapLayoutEngine for consistent wrapping
+        from rock_paper_sync.layout import WordWrapLayoutEngine
+
+        engine = WordWrapLayoutEngine(use_font_metrics=True)
+        line_breaks = engine.calculate_line_breaks(text, max_width)
+
+        # Convert line breaks to list of strings
+        lines = []
+        for i, start in enumerate(line_breaks):
+            if i + 1 < len(line_breaks):
+                end = line_breaks[i + 1]
+                # Strip trailing space from wrapped line
+                lines.append(text[start:end].rstrip())
+            else:
+                lines.append(text[start:].rstrip())
+
+        return lines if lines else [""]
 
     def _render_stroke(
         self,
