@@ -1,12 +1,12 @@
-<!-- ANNOTATED: 10 strokes -->
+<!-- ANNOTATED: 12 strokes -->
 # Cross-Page Annotation Re-Anchoring Test
 <!-- /ANNOTATED -->
 
-## INSERTED CONTENT BLOCK
-
 <!-- ANNOTATED: 5 strokes -->
-This is a large block of inserted text that will push all subsequent content down by several pages. The purpose is to test that annotations follow their paragraph content across page boundaries.
+## INSERTED CONTENT BLOCK
 <!-- /ANNOTATED -->
+
+This is a large block of inserted text that will push all subsequent content down by several pages. The purpose is to test that annotations follow their paragraph content across page boundaries.
 
 Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris.
 
