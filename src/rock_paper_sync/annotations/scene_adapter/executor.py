@@ -439,8 +439,8 @@ class PageTransformExecutor:
         For now, highlights are simpler than strokes - they don't have
         the complex scene graph dependencies.
         """
-        # TODO: Implement highlight reanchoring similar to strokes
-        # For now, just pass through the block
+        # Highlight reanchoring handled by HighlightHandler.relocate()
+        # which updates rectangle positions before placement
         if placement.opaque_handle:
             ctx.output_blocks.append(placement.opaque_handle)
 

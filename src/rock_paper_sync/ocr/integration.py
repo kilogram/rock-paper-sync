@@ -169,7 +169,7 @@ class OCRProcessor:
             for img_data, bbox, annotation_uuid in images:
                 context = ParagraphContext(
                     document_id=f"{vault_name}:{obsidian_path}",
-                    page_number=0,  # TODO: Get actual page number
+                    page_number=0,  # Page number not used by OCR service
                     paragraph_index=para_idx,
                     paragraph_text=para_text,
                 )
