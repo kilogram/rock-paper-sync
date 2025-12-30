@@ -134,7 +134,6 @@ class PageTransformPlan:
     highlight_placements: list[HighlightPlacement] = field(default_factory=list)
     unknown_blocks: list[PreserveUnknown] = field(default_factory=list)
     source_rm_path: Path | None = None
-    first_line_is_heading: bool = False  # If True, use ParagraphStyle.HEADING
 
     @property
     def has_annotations(self) -> bool:

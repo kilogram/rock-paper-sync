@@ -277,7 +277,6 @@ class RemarkablePage:
     text_blocks: list[TextBlock] = field(default_factory=list)
     annotation_context: PageAnnotationContext | None = None
     content_blocks: list = field(default_factory=list)
-    first_block_is_heading: bool = False  # If True, use HEADING paragraph style
 
 
 @dataclass
@@ -500,17 +499,10 @@ class RemarkableGenerator:
             # Convert content blocks to text items
             text_items, text_blocks = self.blocks_to_text_items(projection.content_blocks)
 
-            # Check if first block is a heading (for paragraph style selection)
-            first_block_is_heading = (
-                len(projection.content_blocks) > 0
-                and projection.content_blocks[0].type == BlockType.HEADER
-            )
-
             page = RemarkablePage(
                 uuid=projection.page_uuid,
                 text_items=text_items,
                 text_blocks=text_blocks,
-                first_block_is_heading=first_block_is_heading,
             )
 
             # Add annotations from projection
@@ -1596,7 +1588,6 @@ class RemarkableGenerator:
             stroke_placements=stroke_placements,
             highlight_placements=highlight_placements,
             source_rm_path=ctx.source_rm_path if ctx else None,
-            first_line_is_heading=page.first_block_is_heading,
         )
 
     def generate_rm_file(self, page: RemarkablePage) -> bytes:

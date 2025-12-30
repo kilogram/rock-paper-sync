@@ -93,9 +93,6 @@ class ExecutionContext:
     # Computed anchor delta (for relative stroke positioning)
     anchor_offset_delta: int = 0
 
-    # Whether first line is a heading (determines paragraph style)
-    first_line_is_heading: bool = False
-
 
 class PageTransformExecutor:
     """Executes transformation plans to generate .rm bytes.
@@ -138,7 +135,6 @@ class PageTransformExecutor:
         """
         ctx = ExecutionContext(
             page_text=plan.page_text,
-            first_line_is_heading=plan.first_line_is_heading,
         )
 
         # Step 1: PARTITION - Load and partition source blocks
@@ -350,13 +346,13 @@ class PageTransformExecutor:
         use format code 10 for newlines.
 
         Args:
-            ctx: Execution context with page text and heading flag
+            ctx: Execution context with page text
 
         Returns:
             Dictionary mapping CrdtId positions to LwwValue styles
         """
-        style = si.ParagraphStyle.HEADING if ctx.first_line_is_heading else si.ParagraphStyle.PLAIN
-        return {CrdtId(0, 0): LwwValue(timestamp=CrdtId(1, 15), value=style)}
+        # TODO: Support heading styles per-paragraph (see docs/TODO.md)
+        return {CrdtId(0, 0): LwwValue(timestamp=CrdtId(1, 15), value=si.ParagraphStyle.PLAIN)}
 
     def _apply_stroke_placement(
         self,
