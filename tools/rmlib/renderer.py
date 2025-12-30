@@ -75,8 +75,10 @@ STROKE_WIDTH_SCALE = 0.15  # Scale factor for stroke width
 
 # Text rendering parameters
 TEXT_COLOR = (0, 0, 0)  # Black text
-BODY_LINE_HEIGHT = 68  # 57 × 1.168 = 66.6, calibrated to 68
-HEADING_LINE_HEIGHT = 104  # ~1.53× body line height
+# Use 57px line height to match device coordinate system for highlights/strokes
+# (68px was calibrated for thumbnail comparison, but coordinates use 57px)
+BODY_LINE_HEIGHT = 57  # Device anchor line height
+HEADING_LINE_HEIGHT = 87  # ~1.53× body line height (57 × 1.53)
 BODY_FONT_SIZE = 31  # 10pt at 226 DPI = 31.4px
 HEADING_FONT_SIZE = 65  # ~2.1× body (from visual calibration)
 
@@ -162,14 +164,14 @@ class RmRenderer:
         blocks = list(rmscene.read_blocks(io.BytesIO(rm_bytes)))
 
         # Extract text first (needed for text rendering and anchor positioning)
-        text, text_origin_x, text_origin_y, paragraph_styles = self._extract_text_with_styles(
-            blocks
+        text, text_origin_x, text_origin_y, text_width, paragraph_styles = (
+            self._extract_text_with_styles(blocks)
         )
 
         # Use ParentAnchorResolver for CRDT ID -> char offset mapping,
         # then compute visual coordinates ourselves
         anchor_map = self._build_anchor_map(
-            blocks, text, text_origin_x, text_origin_y, paragraph_styles
+            blocks, text, text_origin_x, text_origin_y, text_width, paragraph_styles
         )
 
         # Create image with RGBA for alpha blending (highlights)
@@ -177,7 +179,7 @@ class RmRenderer:
         draw = ImageDraw.Draw(image)
 
         # Render text first (background layer)
-        self._render_text(draw, text, text_origin_x, text_origin_y, paragraph_styles)
+        self._render_text(draw, text, text_origin_x, text_origin_y, text_width, paragraph_styles)
 
         # Extract and render strokes
         strokes = self._extract_strokes(blocks)
@@ -208,6 +210,7 @@ class RmRenderer:
         text: str,
         text_origin_x: float,
         text_origin_y: float,
+        text_width: float | None,
         paragraph_styles: dict[int, si.ParagraphStyle],
     ) -> dict[CrdtId, tuple[float, float]]:
         """Build map from parent_id to page coordinate offsets.
@@ -226,6 +229,7 @@ class RmRenderer:
             text: Full text content for computing line positions
             text_origin_x: X coordinate of text origin (text-relative)
             text_origin_y: Y coordinate of text origin
+            text_width: Text width from .rm file (for word wrapping), or None for default
             paragraph_styles: Map of character offset to paragraph style
 
         Returns:
@@ -236,10 +240,12 @@ class RmRenderer:
         # Use ParentAnchorResolver for CRDT ID -> char offset mapping
         resolver = ParentAnchorResolver.from_blocks(blocks)
 
-        # Calculate text width the same way as _render_text does
-        # This ensures anchor Y positions match rendered text Y positions
-        page_x = PAGE_CENTER_X + text_origin_x
-        max_text_width = self.width - page_x - 50  # 50px right margin (same as _render_text)
+        # Use text_width from .rm file if available, otherwise calculate from page width
+        if text_width is not None:
+            max_text_width = text_width
+        else:
+            page_x = PAGE_CENTER_X + text_origin_x
+            max_text_width = self.width - page_x - 50  # 50px right margin
 
         # Build a map of character offset -> cumulative Y position
         # This accounts for word wrapping AND different line heights for headings
@@ -345,20 +351,21 @@ class RmRenderer:
 
     def _extract_text_with_styles(
         self, blocks: list
-    ) -> tuple[str, float, float, dict[int, si.ParagraphStyle]]:
-        """Extract text content, origin, and paragraph styles from RootTextBlock.
+    ) -> tuple[str, float, float, float, dict[int, si.ParagraphStyle]]:
+        """Extract text content, origin, text_width, and paragraph styles from RootTextBlock.
 
         Returns:
-            Tuple of (text_content, origin_x, origin_y, paragraph_styles)
+            Tuple of (text_content, origin_x, origin_y, text_width, paragraph_styles)
             paragraph_styles maps character offset to ParagraphStyle
         """
         for block in blocks:
             if isinstance(block, RootTextBlock):
                 text_data = block.value
 
-                # Get text origin position
+                # Get text origin position and width
                 origin_x = text_data.pos_x if hasattr(text_data, "pos_x") else TEXT_ORIGIN_X
                 origin_y = text_data.pos_y if hasattr(text_data, "pos_y") else TEXT_ORIGIN_Y
+                text_width = text_data.width if hasattr(text_data, "width") else None
 
                 # Extract text content from CRDT items and build CRDT ID -> char offset map
                 text_parts = []
@@ -379,14 +386,23 @@ class RmRenderer:
                 paragraph_styles: dict[int, si.ParagraphStyle] = {}
                 if hasattr(text_data, "styles") and text_data.styles:
                     for style_crdt_id, lww_value in text_data.styles.items():
-                        # Look up actual character offset from CRDT ID
-                        if style_crdt_id in crdt_to_char:
+                        # Style CRDT IDs may have different author IDs (part1) than text items.
+                        # For system-generated styles (part1=0), part2 is the character offset.
+                        # For user-generated styles, look up in the crdt_to_char map.
+                        if style_crdt_id.part1 == 0:
+                            # System style - part2 is the character offset directly
+                            actual_char_offset = style_crdt_id.part2
+                        elif style_crdt_id in crdt_to_char:
+                            # User style - look up in the map
                             actual_char_offset = crdt_to_char[style_crdt_id]
-                            paragraph_styles[actual_char_offset] = lww_value.value
+                        else:
+                            # Unknown style CRDT ID - skip
+                            continue
+                        paragraph_styles[actual_char_offset] = lww_value.value
 
-                return "".join(text_parts), origin_x, origin_y, paragraph_styles
+                return "".join(text_parts), origin_x, origin_y, text_width, paragraph_styles
 
-        return "", TEXT_ORIGIN_X, TEXT_ORIGIN_Y, {}
+        return "", TEXT_ORIGIN_X, TEXT_ORIGIN_Y, None, {}
 
     def _render_text(
         self,
@@ -394,6 +410,7 @@ class RmRenderer:
         text: str,
         origin_x: float,
         origin_y: float,
+        text_width: float | None,
         paragraph_styles: dict[int, si.ParagraphStyle],
     ) -> None:
         """Render text content to the image with proper formatting and word wrap.
@@ -403,6 +420,7 @@ class RmRenderer:
             text: Full text content
             origin_x: Text origin X (text-relative, x=0 is page center)
             origin_y: Text origin Y (page coordinates)
+            text_width: Text width from .rm file (for word wrapping), or None for default
             paragraph_styles: Map of character offset to paragraph style
         """
         if not text:
@@ -411,12 +429,11 @@ class RmRenderer:
         # Convert text-relative X to page coordinates
         page_x = PAGE_CENTER_X + origin_x
 
-        # Calculate available width for text (from origin to right margin)
-        # The right margin is roughly symmetric to the left margin
-        right_margin = PAGE_CENTER_X + origin_x  # Mirror of left margin
-        max_text_width = self.width - page_x - (self.width - right_margin - page_x)
-        # Simpler: use the distance from origin_x to edge, mirrored
-        max_text_width = self.width - page_x - 50  # 50px right margin
+        # Use text_width from .rm file if available, otherwise calculate from page width
+        if text_width is not None:
+            max_text_width = text_width
+        else:
+            max_text_width = self.width - page_x - 50  # 50px right margin
 
         # Build list of (paragraph_text, style) by splitting on newlines
         # and determining style for each paragraph
