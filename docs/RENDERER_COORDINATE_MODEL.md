@@ -236,7 +236,8 @@ Create a test document with:
 
 ## Related Documentation
 
-- `docs/COORDINATE_SYSTEMS.md` - Page coordinate fundamentals (226 DPI)
-- `docs/STROKE_ANCHORING.md` - How strokes anchor to text
-- `docs/RMSCENE_FINDINGS.md` - Line height calibration history
+- `docs/STROKE_ANCHORING.md` - How strokes anchor to text (production system)
+- `docs/RMSCENE_FINDINGS.md` - rmscene library integration and calibration history
+- `docs/ANNOTATION_ARCHITECTURE_V2.md` - Content-based annotation anchoring
 - `tools/rmlib/renderer.py` - Implementation with detailed comments
+- `docs/archive/COORDINATE_SYSTEMS.md` - Historical page coordinate analysis

@@ -15,36 +15,20 @@ logger = logging.getLogger(__name__)
 class RmCloudSync:
     """Sync documents to rm_cloud using Sync v3 protocol.
 
-    This class implements the reMarkable Sync v3 protocol for uploading documents
-    directly to rm_cloud without filesystem manipulation. Documents sync to the
-    device via WebSocket notifications.
+    Implements the reMarkable Sync v3 protocol for uploading documents
+    to rm_cloud without filesystem manipulation. Documents sync to devices
+    via WebSocket notifications.
 
-    Sync v3 Protocol Overview
-    -------------------------
+    Protocol: Sync v3 with hashOfHashesV3 content addressing and CRDT
+    formatVersion 2. See docs/SYNC_PROTOCOL.md for complete protocol details
+    (required files, CRDT format, double upload pattern).
 
-    **hashOfHashesV3 Algorithm**:
-    - Concatenate binary SHA256 hashes of all document files (sorted by filename)
-    - Compute SHA256 of the concatenated bytes
-    - Used for content addressing and deduplication
+    Args:
+        base_url: Base URL of rm_cloud instance
+        client: Optional RmCloudClient (will create default if not provided)
 
-    **CRDT formatVersion 2** (.content file):
-    - Static timestamp counters: "1:1", "1:2", etc. (NOT Unix timestamps)
-    - "modifed" field (typo intentional): Actual modification time in milliseconds
-    - The "modifed" field signals xochitl that content has changed
-    - cPages structure with lexicographically sortable idx values
-
-    **Required Files**:
-    - {uuid}.metadata: Document metadata (name, parent, type)
-    - {uuid}.content: CRDT page structure (formatVersion 2)
-    - {uuid}.local: Empty JSON "{}" (required by xochitl for recognition)
-    - {uuid}/{page-uuid}.rm: Binary v6 format page content
-
-    **Double Upload Pattern**:
-    - Document index stored under content hash (blob)
-    - Also stored under hashOfHashesV3 (document index)
-    - Ensures CRDT consistency and content deduplication
-
-    For complete protocol details, see docs/SYNC_PROTOCOL.md.
+    Raises:
+        ValueError: If device is not registered with rm_cloud
     """
 
     def __init__(
@@ -52,13 +36,7 @@ class RmCloudSync:
         base_url: str,
         client: RmCloudClient | None = None,
     ):
-        """
-        Initialize rm_cloud sync.
-
-        Args:
-            base_url: Base URL of rm_cloud instance
-            client: Optional RmCloudClient (will create default if not provided)
-        """
+        """Initialize rm_cloud sync client."""
         self.base_url = base_url
         self.client = client or RmCloudClient(base_url=base_url)
 
@@ -100,17 +78,14 @@ class RmCloudSync:
     def _create_content_file(self, page_uuids: list[str]) -> bytes:
         """Create .content file in CRDT formatVersion 2.
 
+        Uses static CRDT timestamp counters and "modifed" field (typo intentional)
+        for update signaling. See docs/SYNC_PROTOCOL.md for CRDT format details.
+
         Args:
             page_uuids: List of page UUIDs in order
 
         Returns:
             JSON-encoded .content file bytes
-
-        Note:
-            The reMarkable device uses STATIC CRDT timestamp counters (e.g., "1:1", "1:2")
-            and indicates content updates via the "modifed" field (note: typo is intentional,
-            device uses "modifed" not "modified"). The "modifed" field contains Unix timestamp
-            in milliseconds and is the primary signal to xochitl that content has changed.
         """
         import uuid as uuid_module
 

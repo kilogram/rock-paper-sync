@@ -232,23 +232,40 @@ new_block = replace(block, group=new_group)
 
 ## Implementation Status
 
-### Completed
+### Completed (Production)
 
 - [x] `ParentAnchorResolver` class extracts per-parent anchor positions
 - [x] Stroke clustering uses correct absolute coordinates
 - [x] TreeNodeBlock anchor_id update on text change
 - [x] Offset delta calculation via content matching
+- [x] **Content-based anchor matching**: Annotations track content, not positions (`AnchorContext`)
+- [x] **Cross-page migration**: Annotations follow content across page boundaries
+- [x] **Proportional stroke routing**: Strokes distribute proportionally when content crosses pages
 
-### Future Work
+### Recent Enhancements
 
-- [ ] Content-based anchor matching for complex edits (deletions, reordering)
-- [ ] anchor_origin_x adjustment for significant reflow cases
+**Proportional Stroke Routing** (2025-12-29):
+When document content changes cause annotations to span multiple pages, strokes are now distributed proportionally based on their Y-position within the original content range. This prevents all strokes from clustering on a single page.
+
+**AnchorContext-Based Migration** (2025-12-21):
+Replaced fragile character-offset anchoring with multi-signal content anchoring using `AnchorContext`. Annotations now track:
+- Content hash (survives formatting changes)
+- Fuzzy text matching (survives minor edits)
+- Context before/after (handles deletions)
+- Structural position (paragraph index, section)
 
 ### Files
 
+**Core Implementation:**
 - `src/rock_paper_sync/coordinate_transformer.py` - ParentAnchorResolver, anchor extraction
-- `src/rock_paper_sync/generator.py` - TreeNodeBlock anchor_id updates in `_generate_rm_file_roundtrip()`
-- `tools/analysis/stroke_visualizer.py` - Debugging tool for stroke positions
+- `src/rock_paper_sync/generator.py` - Document generation with annotation preservation
+- `src/rock_paper_sync/annotations/document_model.py` - AnchorContext and annotation migration
+- `src/rock_paper_sync/annotations/merging.py` - Three-way merge logic
+- `src/rock_paper_sync/annotations/handlers/stroke_handler.py` - Stroke annotation handler
+
+**Debugging Tools:**
+- `tools/analysis/stroke_visualizer.py` - Stroke position visualization
+- `tools/rmlib/validator.py` - Anchor validation
 
 ## Open Questions
 

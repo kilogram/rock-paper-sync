@@ -202,12 +202,28 @@ level = "debug"
 
 ## Key Files
 
+### User Documentation
+- `README.md` - User-facing documentation and quick start
 - `CLAUDE.md` - This file (development guide)
-- `README.md` - User documentation
-- `docs/MULTI_VAULT.md` - Multi-vault user guide
-- `docs/SYNC_PROTOCOL.md` - Technical protocol reference
-- `docs/RMSCENE_FINDINGS.md` - rmscene library notes
-- `src/rock_paper_sync/annotations/README.md` - Annotation system architecture
+- `docs/MULTI_VAULT.md` - Multi-vault configuration guide
+
+### Technical Documentation
+- `docs/SYNC_PROTOCOL.md` - reMarkable Sync v3 protocol (reverse engineered)
+- `docs/RMSCENE_FINDINGS.md` - rmscene library integration notes
+- `docs/STROKE_ANCHORING.md` - Coordinate transformation and stroke anchoring
+- `docs/RENDERER_COORDINATE_MODEL.md` - Current coordinate system model
+- `docs/ANNOTATION_ARCHITECTURE_V2.md` - AnchorContext design document
+- `docs/OCR_SYSTEM.md` - OCR integration architecture
+- `docs/RECORD_REPLAY_FRAMEWORK.md` - Device testing framework
+- `docs/TODO.md` - Technical debt and deferred items
+
+### Annotation System
+- `src/rock_paper_sync/annotations/README.md` - Annotation system overview
+- `src/rock_paper_sync/annotations/docs/STROKES.md` - Stroke handling details
+- `src/rock_paper_sync/annotations/docs/HIGHLIGHTS.md` - Highlight handling details
+
+### Historical Reference
+- `docs/archive/` - Historical calibration data and refactoring notes
 
 ## Getting Help
 

@@ -181,13 +181,13 @@ This replaced the fragile character-offset approach that was prone to bugs when 
 3. **Multi-signal matching**: Falls back gracefully through resolution strategies
 4. **Explicit failures**: No hidden fallback paths that mask bugs
 
-**See**: `docs/ANNOTATION_ARCHITECTURE_V2.md` for detailed design documentation.
+**See**: `../../../../docs/ANNOTATION_ARCHITECTURE_V2.md` for detailed design documentation.
 
 ## Debugging
 
 ### Known Issues
 
-See `docs/bugs/CROSS_PAGE_ANCHOR_BUG.md` for documentation of anchor-related bugs and fixes.
+See `../../../../docs/bugs/CROSS_PAGE_ANCHOR_BUG.md` for documentation of anchor-related bugs and fixes.
 
 ### Anchor Validation
 

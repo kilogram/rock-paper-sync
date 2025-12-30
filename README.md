@@ -16,7 +16,8 @@ Generated documents appear on your reMarkable device as native notebooks with ty
 
 - **Multi-vault support**: Sync multiple Obsidian vaults simultaneously
 - **Optional folder organization**: Each vault can have its own folder on reMarkable
-- **One-way sync**: Obsidian → reMarkable
+- **Annotation preservation**: Preserves highlights and handwritten notes across content updates
+- **One-way sync**: Obsidian → reMarkable with annotation round-trip
 - **Incremental sync**: Only processes changed files
 - **Folder preservation**: Mirrors Obsidian directory structure
 - **Watch mode**: Automatically syncs on file changes
@@ -176,12 +177,18 @@ Generated reMarkable documents have this structure:
 └── {page-2-uuid}-metadata.json # Page 2 settings
 ```
 
-## Limitations
+## Capabilities & Limitations
 
-### Current Phase (Phase 1)
-- **One-way sync only**: Changes on reMarkable are not synced back
+### What Works
+- **Annotation preservation**: Highlights and handwritten notes are preserved when markdown content is updated
+- **Content reanchoring**: Annotations intelligently follow their content across edits, insertions, and page breaks
+- **Multi-vault sync**: Handle multiple Obsidian vaults with folder organization
+- **Incremental updates**: Efficient change detection and partial syncs
+
+### Current Limitations
+- **Content flow**: Obsidian → reMarkable (annotations preserved during updates)
 - **Text-only**: No support for embedded images, diagrams
-- **Basic formatting**: Only bold and italic (no colors, highlights)
+- **Basic formatting**: Paragraph-level styling only (no inline bold/italic rendering)
 - **No math rendering**: LaTeX equations appear as plain text
 - **No table rendering**: Tables converted to text representation
 
@@ -228,11 +235,25 @@ rock-paper-sync/
 └── tests/                 # Test suite
 ```
 
-## Future
+## Architecture
 
-- Annotation preservation (see `src/rock_paper_sync/annotations/README.md`)
-- Bidirectional sync
-- Image embedding
+### Annotation System
+
+The annotation preservation system uses content-based anchoring to maintain highlights and handwritten notes across markdown updates:
+
+- **Content anchoring**: Annotations track their content, not just positions
+- **Cross-page migration**: Annotations follow content across page boundaries
+- **Three-way merge**: Combines old content, new content, and annotations
+- **OCR integration**: Optional handwriting recognition for stroke annotations
+
+See `src/rock_paper_sync/annotations/README.md` for detailed architecture.
+
+## Future Enhancements
+
+- Full bidirectional sync (pull annotations back to Obsidian)
+- Image embedding support
+- Advanced inline formatting (bold, italic rendering)
+- Math equation rendering
 
 ## Contributing
 
