@@ -1237,6 +1237,15 @@ class DocumentModel:
         # IMPORTANT: Strokes in the same cluster (same parent TreeNodeBlock) must go to the same page
         # We use cluster_id for grouped strokes, and parent_id as fallback
 
+        # Calculate original page count from source_page_idx values
+        original_page_count = 1
+        for anno in self.annotations:
+            if anno.source_page_idx is not None:
+                original_page_count = max(original_page_count, anno.source_page_idx + 1)
+
+        new_page_count = len(pages)
+        page_text_height = self.geometry.text_area_height if self.geometry else 1538.0
+
         # Helper to determine target page for an annotation
         def _determine_page_for_annotation(
             annotation: DocumentAnnotation,
@@ -1244,35 +1253,39 @@ class DocumentModel:
             anchor = annotation.anchor_context
             anno_start = self._find_anchor_position(anchor)
 
-            if anno_start is None:
-                return None
-
             target_page_idx = None
 
-            # For strokes with Y-position hints, check if they should spill to next page
+            # For strokes with source page and Y-position hints, use proportional routing
+            # This handles cross-page movement when content is inserted/deleted
             if (
                 annotation.annotation_type == "stroke"
+                and annotation.source_page_idx is not None
                 and anchor.y_position_hint is not None
                 and self.geometry
             ):
-                # Find which page the anchor text is on
-                text_page_idx = None
-                for idx, page in enumerate(pages):
-                    if page.doc_char_start <= anno_start < page.doc_char_end:
-                        text_page_idx = idx
-                        break
+                # Calculate document-level Y position from original page
+                source_page = annotation.source_page_idx
+                doc_level_y = source_page * page_text_height + anchor.y_position_hint
 
-                if text_page_idx is not None:
-                    page_height = 1870  # Device-specific constant
-                    if anchor.y_position_hint > page_height * 0.9 and text_page_idx + 1 < len(
-                        pages
-                    ):
-                        target_page_idx = text_page_idx + 1
-                    else:
-                        target_page_idx = text_page_idx
+                # Calculate total heights
+                total_old_height = max(1, original_page_count) * page_text_height
+                total_new_height = new_page_count * page_text_height
 
-            if target_page_idx is None:
-                # For highlights and strokes without Y hints, use character offset
+                # Map proportionally to new document
+                proportion = doc_level_y / total_old_height
+                new_doc_y = proportion * total_new_height
+
+                # Determine target page from new document-level Y
+                target_page_idx = min(int(new_doc_y / page_text_height), new_page_count - 1)
+
+                logger.debug(
+                    f"Proportional routing: source_page={source_page}, y_hint={anchor.y_position_hint:.1f}, "
+                    f"doc_y={doc_level_y:.1f}, proportion={proportion:.3f}, "
+                    f"new_doc_y={new_doc_y:.1f}, target_page={target_page_idx}"
+                )
+
+            # Fallback to text-based routing for highlights and strokes without position info
+            if target_page_idx is None and anno_start is not None:
                 for idx, page in enumerate(pages):
                     if page.doc_char_start <= anno_start < page.doc_char_end:
                         target_page_idx = idx
@@ -1282,7 +1295,6 @@ class DocumentModel:
 
         # Group stroke annotations by cluster_id
         # Clusters are assigned in _assign_stroke_clusters() using spatial proximity
-        # ALL strokes in a cluster MUST go to the same page - never split clusters
         stroke_clusters: dict[str, list[DocumentAnnotation]] = {}
         unclustered_strokes: list[DocumentAnnotation] = []
         non_stroke_annotations: list[DocumentAnnotation] = []
@@ -1296,34 +1308,43 @@ class DocumentModel:
             else:
                 non_stroke_annotations.append(annotation)
 
-        # Route stroke clusters to pages (entire cluster goes to same page)
+        # Route stroke clusters to pages
+        # When cross-page movement is detected, split the cluster and route each stroke individually
         for cluster_id, cluster_strokes in stroke_clusters.items():
-            # Find the stroke with the LOWEST Y position (cluster leader) to determine page
-            leader = min(
-                cluster_strokes,
-                key=lambda a: a.anchor_context.y_position_hint
-                if a.anchor_context.y_position_hint is not None
-                else float("inf"),
-            )
+            # Calculate target page for EACH stroke in the cluster
+            stroke_pages: dict[int, list[DocumentAnnotation]] = {}
+            unrouted: list[DocumentAnnotation] = []
 
-            target_page_idx = _determine_page_for_annotation(leader)
+            for annotation in cluster_strokes:
+                target_page_idx = _determine_page_for_annotation(annotation)
+                if target_page_idx is not None:
+                    stroke_pages.setdefault(target_page_idx, []).append(annotation)
+                else:
+                    unrouted.append(annotation)
 
-            if target_page_idx is not None:
-                # Assign ALL strokes in this cluster to the same page
+            # If all strokes go to the same page, keep cluster intact
+            if len(stroke_pages) == 1:
+                target_page_idx = next(iter(stroke_pages.keys()))
                 for annotation in cluster_strokes:
                     pages[target_page_idx].annotations.append(annotation)
-
-                logger.warning(
+                logger.debug(
                     f"STROKE CLUSTER ({cluster_id}) -> page {target_page_idx}: "
-                    f"{len(cluster_strokes)} strokes, leader_y={leader.anchor_context.y_position_hint}"
+                    f"{len(cluster_strokes)} strokes (unified)"
                 )
             else:
-                logger.warning(
-                    f"Could not find page for stroke cluster {cluster_id} "
-                    f"({len(cluster_strokes)} strokes)"
+                # Strokes route to different pages - split cluster for cross-page movement
+                for target_page_idx, page_strokes in stroke_pages.items():
+                    for annotation in page_strokes:
+                        pages[target_page_idx].annotations.append(annotation)
+                logger.debug(
+                    f"STROKE CLUSTER ({cluster_id}) SPLIT across {len(stroke_pages)} pages: "
+                    f"{dict((p, len(s)) for p, s in stroke_pages.items())}"
                 )
 
-        # Route unclustered strokes individually (single-stroke "clusters")
+            if unrouted:
+                logger.warning(f"Could not route {len(unrouted)} strokes from cluster {cluster_id}")
+
+        # Route unclustered strokes individually
         for annotation in unclustered_strokes:
             target_page_idx = _determine_page_for_annotation(annotation)
             if target_page_idx is not None:
