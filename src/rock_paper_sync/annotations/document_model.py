@@ -34,13 +34,13 @@ import hashlib
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
 import rmscene
 
 from rock_paper_sync.coordinate_transformer import END_OF_DOC_ANCHOR_MARKER
 
-from .core_types import HeuristicTextAnchor, Point, StrokeData
+from .core_types import Point, StrokeData
 from .scene_graph import SceneGraphIndex, StrokeBundle
 
 if TYPE_CHECKING:
@@ -316,62 +316,39 @@ class AnchorContext:
 
         return score
 
-
-@dataclass
-class ResolvedAnchorContext:
-    """Result of resolving an AnchorContext in a document."""
-
-    start_offset: int
-    end_offset: int
-    confidence: float  # 0.0 to 1.0
-    match_type: Literal["exact", "fuzzy", "diff_anchor", "spatial"]
-    target_paragraph_index: int | None = None
-
-
-# =============================================================================
-# Context Resolver
-# =============================================================================
-
-
-class ContextResolver:
-    """Resolves AnchorContext across document versions.
-
-    Integrates HeuristicTextAnchor for fuzzy matching - this class
-    is preserved and promoted from the current implementation.
-    """
-
-    def __init__(
-        self,
-        context_window: int = 50,
-        fuzzy_threshold: float = 0.8,
-    ):
-        self._heuristic = HeuristicTextAnchor(
-            context_window=context_window,
-            fuzzy_threshold=fuzzy_threshold,
-        )
-        self.fuzzy_threshold = fuzzy_threshold
-
     def resolve(
         self,
-        context: AnchorContext,
         old_text: str,
         new_text: str,
         old_layout: LayoutContext | None = None,
         new_layout: LayoutContext | None = None,
-    ) -> ResolvedAnchorContext | None:
-        """Resolve context in new document.
+        fuzzy_threshold: float = 0.8,
+    ) -> AnchorResolution | None:
+        """Resolve this anchor in new document.
 
-        Strategy (in order of preference):
-        1. Exact content hash match - highest confidence
-        2. Fuzzy match with HeuristicTextAnchor - content + context windows
-        3. Diff anchor resolution - stable neighbor text
-        4. Spatial fallback - Y position + structure hints
+        Resolution strategy (priority order):
+        1. Exact content hash match (confidence: 1.0)
+        2. Fuzzy match with context windows (confidence: 0.8+)
+        3. Diff anchor resolution (confidence: 0.6)
+        4. Spatial fallback via y_position_hint (confidence: 0.4)
+
+        Returns None if all strategies fail (orphaned annotation).
+
+        Args:
+            old_text: Text from old document version
+            new_text: Text from new document version
+            old_layout: Optional layout context for old document
+            new_layout: Optional layout context for new document
+            fuzzy_threshold: Minimum similarity for fuzzy match (0.0-1.0)
+
+        Returns:
+            AnchorResolution with position and confidence, or None
         """
         # Strategy 1: Exact Hash Match
-        hash_matches = self._find_by_hash(context.content_hash, context.text_content, new_text)
+        hash_matches = self._find_by_hash(new_text)
         if len(hash_matches) == 1:
             start, end = hash_matches[0]
-            return ResolvedAnchorContext(
+            return AnchorResolution(
                 start_offset=start,
                 end_offset=end,
                 confidence=1.0,
@@ -379,33 +356,25 @@ class ContextResolver:
             )
         elif len(hash_matches) > 1:
             # Multiple matches - use context to disambiguate
-            best = self._disambiguate_by_context(context, hash_matches, new_text)
+            best = self._disambiguate_by_context(hash_matches, new_text)
             if best:
-                return ResolvedAnchorContext(
+                return AnchorResolution(
                     start_offset=best[0],
                     end_offset=best[1],
                     confidence=0.95,
                     match_type="exact",
                 )
 
-        # Strategy 2: Fuzzy Match with HeuristicTextAnchor
-        old_position = (0.0, context.y_position_hint or 0.0)
-        anchor = self._heuristic.find_anchor(context.text_content, old_text, old_position)
-
-        new_offset = self._heuristic.resolve_anchor(anchor, new_text)
-        if new_offset is not None and anchor.confidence >= self.fuzzy_threshold:
-            return ResolvedAnchorContext(
-                start_offset=new_offset,
-                end_offset=new_offset + len(context.text_content),
-                confidence=anchor.confidence,
-                match_type="fuzzy",
-            )
+        # Strategy 2: Fuzzy Match
+        fuzzy_result = self._fuzzy_match(new_text, fuzzy_threshold)
+        if fuzzy_result:
+            return fuzzy_result
 
         # Strategy 3: Diff Anchor
-        if context.diff_anchor:
-            span = context.diff_anchor.resolve_in(new_text)
+        if self.diff_anchor:
+            span = self.diff_anchor.resolve_in(new_text)
             if span:
-                return ResolvedAnchorContext(
+                return AnchorResolution(
                     start_offset=span[0],
                     end_offset=span[1],
                     confidence=0.6,
@@ -413,10 +382,10 @@ class ContextResolver:
                 )
 
         # Strategy 4: Spatial Fallback
-        if context.y_position_hint is not None and new_layout:
-            spatial_match = self._resolve_by_spatial(context, new_layout, new_text)
+        if self.y_position_hint is not None and new_layout:
+            spatial_match = self._resolve_by_spatial(new_layout, new_text)
             if spatial_match:
-                return ResolvedAnchorContext(
+                return AnchorResolution(
                     start_offset=spatial_match[0],
                     end_offset=spatial_match[1],
                     confidence=0.4,
@@ -425,26 +394,23 @@ class ContextResolver:
 
         return None
 
-    def _find_by_hash(
-        self, content_hash: str, text_content: str, full_text: str
-    ) -> list[tuple[int, int]]:
+    def _find_by_hash(self, full_text: str) -> list[tuple[int, int]]:
         """Find all spans matching content hash."""
         matches = []
         start = 0
         while True:
-            pos = full_text.find(text_content, start)
+            pos = full_text.find(self.text_content, start)
             if pos == -1:
                 break
             # Verify hash matches
-            found_text = full_text[pos : pos + len(text_content)]
-            if _content_hash(found_text) == content_hash:
-                matches.append((pos, pos + len(text_content)))
+            found_text = full_text[pos : pos + len(self.text_content)]
+            if _content_hash(found_text) == self.content_hash:
+                matches.append((pos, pos + len(self.text_content)))
             start = pos + 1
         return matches
 
     def _disambiguate_by_context(
         self,
-        context: AnchorContext,
         candidates: list[tuple[int, int]],
         text: str,
     ) -> tuple[int, int] | None:
@@ -453,11 +419,11 @@ class ContextResolver:
         best_candidate = None
 
         for start, end in candidates:
-            before = text[max(0, start - len(context.context_before)) : start]
-            after = text[end : end + len(context.context_after)]
+            before = text[max(0, start - len(self.context_before)) : start]
+            after = text[end : end + len(self.context_after)]
 
-            before_ratio = difflib.SequenceMatcher(None, before, context.context_before).ratio()
-            after_ratio = difflib.SequenceMatcher(None, after, context.context_after).ratio()
+            before_ratio = difflib.SequenceMatcher(None, before, self.context_before).ratio()
+            after_ratio = difflib.SequenceMatcher(None, after, self.context_after).ratio()
             score = (before_ratio + after_ratio) / 2
 
             if score > best_score:
@@ -466,18 +432,82 @@ class ContextResolver:
 
         return best_candidate if best_score > 0.5 else None
 
+    def _fuzzy_match(self, new_text: str, fuzzy_threshold: float) -> AnchorResolution | None:
+        """Fuzzy match using text content and context windows."""
+        # Try exact match first
+        all_offsets = []
+        start = 0
+        while True:
+            pos = new_text.find(self.text_content, start)
+            if pos == -1:
+                break
+            all_offsets.append(pos)
+            start = pos + 1
+
+        if len(all_offsets) == 1:
+            # Single match - use it
+            offset = all_offsets[0]
+            return AnchorResolution(
+                start_offset=offset,
+                end_offset=offset + len(self.text_content),
+                confidence=1.0,
+                match_type="fuzzy",
+            )
+        elif len(all_offsets) > 1:
+            # Multiple matches - use context scoring
+            best_offset = all_offsets[0]
+            best_score = -float("inf")
+
+            for candidate_offset in all_offsets:
+                # Context score
+                before = new_text[max(0, candidate_offset - 50) : candidate_offset]
+                after = new_text[
+                    candidate_offset + len(self.text_content) : candidate_offset
+                    + len(self.text_content)
+                    + 50
+                ]
+
+                before_score = difflib.SequenceMatcher(None, self.context_before, before).ratio()
+                after_score = difflib.SequenceMatcher(None, self.context_after, after).ratio()
+                context_score = (before_score + after_score) / 2
+
+                if context_score > best_score:
+                    best_score = context_score
+                    best_offset = candidate_offset
+
+            if best_score >= fuzzy_threshold:
+                return AnchorResolution(
+                    start_offset=best_offset,
+                    end_offset=best_offset + len(self.text_content),
+                    confidence=best_score,
+                    match_type="fuzzy",
+                )
+
+        # Fuzzy match as fallback
+        matcher = difflib.SequenceMatcher(None, self.text_content, new_text)
+        match = matcher.find_longest_match(0, len(self.text_content), 0, len(new_text))
+
+        if match.size >= len(self.text_content) * fuzzy_threshold:
+            return AnchorResolution(
+                start_offset=match.b,
+                end_offset=match.b + match.size,
+                confidence=match.size / len(self.text_content),
+                match_type="fuzzy",
+            )
+
+        return None
+
     def _resolve_by_spatial(
         self,
-        context: AnchorContext,
         layout: LayoutContext,
         text: str,
     ) -> tuple[int, int] | None:
         """Resolve using spatial position hints."""
-        if context.y_position_hint is None:
+        if self.y_position_hint is None:
             return None
 
         # Find offset at this Y position
-        offset = layout.position_to_offset(0, context.y_position_hint)
+        offset = layout.position_to_offset(0, self.y_position_hint)
         offset = max(0, min(offset, len(text) - 1))
 
         # Find paragraph boundaries
@@ -487,6 +517,20 @@ class ContextResolver:
         para_end = para_end if para_end != -1 else len(text)
 
         return (para_start, para_end)
+
+
+class AnchorResolution(NamedTuple):
+    """Result of resolving an AnchorContext in a document."""
+
+    start_offset: int
+    end_offset: int
+    confidence: float  # 0.0 to 1.0
+    match_type: Literal["exact", "fuzzy", "diff_anchor", "spatial"]
+    target_paragraph_index: int | None = None
+
+
+# Backwards compatibility alias (deprecated - use AnchorResolution)
+ResolvedAnchorContext = AnchorResolution
 
 
 # =============================================================================

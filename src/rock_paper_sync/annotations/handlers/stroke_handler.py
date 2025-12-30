@@ -35,13 +35,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from rock_paper_sync.annotations import Annotation, AnnotationType, read_annotations
-from rock_paper_sync.annotations.common.anchors import AnnotationAnchor
 from rock_paper_sync.annotations.common.spatial import find_nearest_paragraph_by_y
 from rock_paper_sync.annotations.common.text_extraction import extract_text_blocks_from_rm
 from rock_paper_sync.annotations.core.data_types import (
     ExtractedAnnotation,
     RenderConfig,
 )
+from rock_paper_sync.annotations.document_model import AnchorContext
 from rock_paper_sync.coordinate_transformer import (
     CoordinateTransformer,
     build_parent_anchor_map,
@@ -56,7 +56,6 @@ if TYPE_CHECKING:
 
     from rock_paper_sync.annotations.document_model import (
         AnchorContext,
-        ContextResolver,
         PageProjection,
     )
     from rock_paper_sync.annotations.services.crdt_service import CrdtService
@@ -225,8 +224,8 @@ class StrokeHandler:
         annotation: Annotation,
         paragraph_text: str,
         paragraph_index: int,
-        page_num: int = 0,
-    ) -> AnnotationAnchor:
+        page_num: int = 0,  # noqa: ARG002
+    ) -> AnchorContext:
         """Create anchor from stroke annotation for matching and correction detection.
 
         Args:
@@ -236,34 +235,22 @@ class StrokeHandler:
             page_num: Page number (default: 0)
 
         Returns:
-            AnnotationAnchor with stroke location/content information
+            AnchorContext with spatial anchor using Y position hint
         """
         if not annotation.stroke or not annotation.stroke.bounding_box:
             raise ValueError("Stroke annotation missing bounding box")
 
         bbox = annotation.stroke.bounding_box
-        center_x = bbox.x + bbox.w / 2
         center_y = bbox.y + bbox.h / 2
 
-        # Extract context from paragraph text
-        # For strokes, we don't have the actual text yet (needs OCR)
-        # But we can provide surrounding paragraph context
-        context_before = paragraph_text[:50] if paragraph_text else ""
-        context_after = paragraph_text[-50:] if len(paragraph_text) > 50 else ""
-
-        # Check if we have OCR text from state
-        ocr_text = None
-        # Note: In production, we would load state here to get OCR text
-        # For now, anchors are created without OCR text initially
-
-        return AnnotationAnchor.from_stroke(
-            page_num=page_num,
-            position=(center_x, center_y),
-            bounding_box=(bbox.x, bbox.y, bbox.w, bbox.h),
+        # For strokes, anchor to the entire paragraph with Y position hint
+        # This provides spatial anchoring without requiring OCR text upfront
+        return AnchorContext.from_text_span(
+            full_text=paragraph_text,
+            start=0,
+            end=len(paragraph_text),
             paragraph_index=paragraph_index,
-            ocr_text=ocr_text,
-            context_before=context_before,
-            context_after=context_after,
+            y_position=center_y,
         )
 
     def relocate(
@@ -535,19 +522,19 @@ class StrokeHandler:
         clusters: list[StrokeCluster],
         old_text: str,
         new_text: str,
-        context_resolver: ContextResolver,
+        fuzzy_threshold: float = 0.8,
         crdt_service: CrdtService | None = None,
     ) -> list[StrokeCluster]:
         """Migrate stroke clusters to a new document version.
 
-        Uses ContextResolver to find new anchor positions for each cluster.
+        Uses AnchorContext.resolve() to find new anchor positions for each cluster.
         Clusters that cannot be resolved are dropped with a warning.
 
         Args:
             clusters: List of StrokeCluster objects from detect_clusters()
             old_text: Full text of the original document version
             new_text: Full text of the new document version
-            context_resolver: Resolver for anchor migration
+            fuzzy_threshold: Minimum similarity for fuzzy matching (0.0-1.0)
             crdt_service: Optional CRDT service for reanchoring (creates one if not provided)
 
         Returns:
@@ -571,10 +558,10 @@ class StrokeHandler:
                 continue
 
             # Resolve anchor in new text
-            resolved = context_resolver.resolve(
-                cluster.anchor,
+            resolved = cluster.anchor.resolve(
                 old_text,
                 new_text,
+                fuzzy_threshold=fuzzy_threshold,
             )
 
             if resolved is None:
@@ -646,13 +633,13 @@ class StrokeHandler:
     def _update_anchor_context(
         self,
         old_anchor: AnchorContext,
-        resolved: Any,  # ResolvedAnchorContext
+        resolved: Any,  # AnchorResolution
     ) -> AnchorContext:
         """Update AnchorContext with new resolved position.
 
         Args:
             old_anchor: Original anchor context
-            resolved: Resolved anchor from ContextResolver
+            resolved: Resolved anchor from AnchorContext.resolve()
 
         Returns:
             Updated AnchorContext

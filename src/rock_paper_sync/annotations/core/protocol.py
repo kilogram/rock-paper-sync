@@ -18,7 +18,7 @@ Method categories:
 
 For stroke handling, StrokeHandler also provides cluster-based methods:
 - detect_clusters() - extract StrokeClusters with CRDT context
-- migrate_clusters() - migrate clusters using ContextResolver
+- migrate_clusters() - migrate clusters using AnchorContext.resolve()
 - serialize_for_page() - serialize clusters for specific page
 
 Example usage (traditional interface):
@@ -38,7 +38,7 @@ Example usage (traditional interface):
 Example usage (cluster-based interface for migration):
     handler = StrokeHandler()
     clusters = handler.detect_clusters(rm_file_path)
-    migrated = handler.migrate_clusters(clusters, old_text, new_text, resolver)
+    migrated = handler.migrate_clusters(clusters, old_text, new_text, fuzzy_threshold=0.8)
     blocks = handler.serialize_for_page(migrated, page_projection)
 """
 
@@ -46,8 +46,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from rock_paper_sync.annotations.common.anchors import AnnotationAnchor
     from rock_paper_sync.annotations.core.data_types import ExtractedAnnotation, RenderConfig
+    from rock_paper_sync.annotations.document_model import AnchorContext
     from rock_paper_sync.layout import LayoutContext
 
 
@@ -123,8 +123,8 @@ class AnnotationHandler(Protocol):
         annotation: Any,
         paragraph_text: str,
         paragraph_index: int,
-        page_num: int = 0,
-    ) -> "AnnotationAnchor":
+        page_num: int = 0,  # noqa: ARG002
+    ) -> "AnchorContext":
         """Create an anchor from an annotation for matching and correction detection.
 
         Anchors encapsulate all information needed to:
@@ -142,7 +142,7 @@ class AnnotationHandler(Protocol):
             page_num: Page number (default: 0)
 
         Returns:
-            AnnotationAnchor with all location/content information
+            AnchorContext with content-based anchor using multi-signal approach
 
         Example (HighlightHandler):
             anchor = self.create_anchor(
@@ -151,6 +151,7 @@ class AnnotationHandler(Protocol):
                 paragraph_index=5,
                 page_num=0
             )
+            # Returns AnchorContext.from_text_span(...)
         """
         ...
 

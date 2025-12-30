@@ -3,18 +3,18 @@
 This module provides the AnnotationMerger class which coordinates annotation
 migration across document versions. It acts as an orchestration layer that:
 - Works with already-loaded DocumentModels (preserves layer separation)
-- Injects ContextResolver for testability
+- Uses AnchorContext.resolve() for anchor resolution
 - Delegates to handlers for type-specific migration
 
 Layer responsibilities:
 - converter.py: Policy ("should we merge?") + file orchestration
 - generator.py: Infrastructure (load files, call merger)
-- AnnotationMerger: Orchestration (coordinate handlers + resolver)
+- AnnotationMerger: Orchestration (coordinate handlers + anchor resolution)
 - Handlers: Type-specific migration logic
 
 Example:
-    # Create merger with explicit dependencies
-    merger = AnnotationMerger(resolver=ContextResolver())
+    # Create merger
+    merger = AnnotationMerger(fuzzy_threshold=0.8)
     context = MergeContext(old_model=old, new_model=new)
     result = merger.merge(context)
 
@@ -31,11 +31,10 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from rock_paper_sync.annotations.document_model import (
-        ContextResolver,
+        AnchorResolution,
         DocumentAnnotation,
         DocumentModel,
         MigrationReport,
-        ResolvedAnchorContext,
     )
     from rock_paper_sync.layout import LayoutContext
 
@@ -94,7 +93,7 @@ class AnnotationMerger:
 
     Design principles:
     - Works with DocumentModel (domain), not files (infrastructure)
-    - Injects ContextResolver for testability
+    - Uses AnchorContext.resolve() for anchor resolution
     - Delegates to handlers for type-specific migration
     - Keeps converter/generator layering intact
 
@@ -105,8 +104,7 @@ class AnnotationMerger:
     - Handlers: Type-specific migration logic
 
     Example:
-        resolver = ContextResolver(fuzzy_threshold=0.8)
-        merger = AnnotationMerger(resolver=resolver)
+        merger = AnnotationMerger(fuzzy_threshold=0.8)
 
         context = MergeContext(old_model=old, new_model=new)
         result = merger.merge(context)
@@ -117,19 +115,19 @@ class AnnotationMerger:
 
     def __init__(
         self,
-        resolver: ContextResolver | None = None,
+        fuzzy_threshold: float = 0.8,
         handlers: list[Any] | None = None,
     ):
         """Initialize the AnnotationMerger.
 
         Args:
-            resolver: ContextResolver for anchor resolution. If None, creates
-                a default resolver when merge() is called.
+            fuzzy_threshold: Minimum similarity for fuzzy matching (0.0-1.0).
+                Used when resolving anchors in new document.
             handlers: Optional list of AnnotationHandlers for type-specific
                 migration. Currently unused but reserved for future handler
                 delegation.
         """
-        self._resolver = resolver
+        self._fuzzy_threshold = fuzzy_threshold
         self._handlers = handlers or []
 
     def merge(self, context: MergeContext) -> MergeResult:
@@ -149,7 +147,6 @@ class AnnotationMerger:
             MergeResult with merged model and migration report
         """
         from rock_paper_sync.annotations.document_model import (
-            ContextResolver,
             DocumentModel,
             MigrationReport,
         )
@@ -157,8 +154,6 @@ class AnnotationMerger:
         old_model = context.old_model
         new_model = context.new_model
 
-        # Use provided resolver or create default
-        resolver = self._resolver or ContextResolver()
         report = MigrationReport()
 
         # Build layout contexts for spatial matching
@@ -180,7 +175,7 @@ class AnnotationMerger:
         # Migrate clustered annotations (all follow the leader)
         for cluster_id, indices in clusters.items():
             leader_resolution = self._resolve_cluster_leader(
-                old_model, indices, resolver, new_model, old_layout, new_layout
+                old_model, indices, new_model, old_layout, new_layout
             )
 
             for idx in indices:
@@ -207,12 +202,12 @@ class AnnotationMerger:
         # Migrate unclustered annotations individually
         for idx in unclustered:
             annotation = old_model.annotations[idx]
-            resolved = resolver.resolve(
-                annotation.anchor_context,
+            resolved = annotation.anchor_context.resolve(
                 old_model.full_text,
                 new_model.full_text,
                 old_layout,
                 new_layout,
+                fuzzy_threshold=self._fuzzy_threshold,
             )
 
             if resolved:
@@ -275,11 +270,10 @@ class AnnotationMerger:
         self,
         old_model: DocumentModel,
         indices: list[int],
-        resolver: ContextResolver,
         new_model: DocumentModel,
         old_layout: LayoutContext | None,
         new_layout: LayoutContext | None,
-    ) -> ResolvedAnchorContext | None:
+    ) -> AnchorResolution | None:
         """Resolve all cluster members, return highest-confidence resolution.
 
         The leader is the annotation whose anchor resolves with highest
@@ -288,7 +282,6 @@ class AnnotationMerger:
         Args:
             old_model: Source document model
             indices: Annotation indices in old_model.annotations
-            resolver: ContextResolver instance
             new_model: Target document model
             old_layout: Layout context for old document
             new_layout: Layout context for new document
@@ -296,16 +289,16 @@ class AnnotationMerger:
         Returns:
             Highest-confidence resolution, or None if no member resolves
         """
-        resolutions: list[ResolvedAnchorContext] = []
+        resolutions: list[AnchorResolution] = []
 
         for idx in indices:
             anno = old_model.annotations[idx]
-            resolved = resolver.resolve(
-                anno.anchor_context,
+            resolved = anno.anchor_context.resolve(
                 old_model.full_text,
                 new_model.full_text,
                 old_layout,
                 new_layout,
+                fuzzy_threshold=self._fuzzy_threshold,
             )
             if resolved:
                 resolutions.append(resolved)
@@ -323,7 +316,7 @@ class AnnotationMerger:
     def _migrate_with_resolution(
         self,
         annotation: DocumentAnnotation,
-        resolution: ResolvedAnchorContext,
+        resolution: AnchorResolution,
         new_model: DocumentModel,
         cluster_id: str | None = None,
     ) -> DocumentAnnotation:

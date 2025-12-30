@@ -32,11 +32,10 @@ from typing import TYPE_CHECKING
 from rmscene import scene_items as si
 
 from rock_paper_sync.annotations import Annotation, AnnotationType, read_annotations
-from rock_paper_sync.annotations.common.anchors import AnnotationAnchor
 from rock_paper_sync.annotations.common.spatial import find_nearest_paragraph_by_y
 from rock_paper_sync.annotations.common.text_extraction import extract_text_blocks_from_rm
 from rock_paper_sync.annotations.core.data_types import ExtractedAnnotation, RenderConfig
-from rock_paper_sync.annotations.core_types import HeuristicTextAnchor
+from rock_paper_sync.annotations.document_model import AnchorContext
 from rock_paper_sync.transform import (
     PositionDelta,
     Rectangle,
@@ -98,7 +97,7 @@ def find_and_resolve_anchor(
     old_text: str,
     new_text: str,
     old_position: tuple[float, float],
-    context_window: int = 50,
+    context_window: int = 50,  # noqa: ARG001
     fuzzy_threshold: float = 0.8,
     min_confidence: float = 0.5,
 ) -> tuple[int, int, float] | None:
@@ -116,43 +115,49 @@ def find_and_resolve_anchor(
     Returns:
         Tuple of (old_offset, new_offset, confidence) or None if resolution fails
     """
-    text_anchor_strategy = HeuristicTextAnchor(
-        context_window=context_window, fuzzy_threshold=fuzzy_threshold
-    )
-
-    # Find anchor in old document
-    anchor = text_anchor_strategy.find_anchor(highlight_text, old_text, old_position)
+    # Find highlight text in old document
+    old_offset = old_text.find(highlight_text)
+    if old_offset == -1:
+        logger.warning(f"Could not find '{highlight_text[:30]}...' in old document")
+        return None
 
     logger.debug(
         f"Highlight '{highlight_text[:30]}...': old_pos=({old_position[0]:.1f}, {old_position[1]:.1f}), "
-        f"old_offset={anchor.char_offset}, confidence={anchor.confidence:.2f}"
+        f"old_offset={old_offset}"
     )
 
-    if anchor.confidence < min_confidence:
+    # Create anchor context from the highlight
+    anchor_context = AnchorContext.from_text_span(
+        full_text=old_text,
+        start=old_offset,
+        end=old_offset + len(highlight_text),
+        y_position=old_position[1],
+    )
+
+    # Resolve anchor in new document
+    resolved = anchor_context.resolve(
+        old_text,
+        new_text,
+        fuzzy_threshold=fuzzy_threshold,
+    )
+
+    if resolved is None:
+        logger.warning(f"Could not resolve '{highlight_text[:30]}...' in new document")
+        return None
+
+    if resolved.confidence < min_confidence:
         logger.warning(
-            f"Low confidence anchor ({anchor.confidence:.2f}) for '{highlight_text[:30]}...', "
+            f"Low confidence resolution ({resolved.confidence:.2f}) for '{highlight_text[:30]}...', "
             f"cannot relocate"
         )
         return None
 
-    # Resolve anchor in new document
-    new_offset = text_anchor_strategy.resolve_anchor(anchor, new_text)
-
-    if new_offset is None:
-        logger.warning(f"Could not find '{highlight_text[:30]}...' in new document")
-        return None
-
-    old_offset = anchor.char_offset
-    if old_offset is None:
-        logger.warning("Anchor has no char_offset")
-        return None
-
     logger.debug(
-        f"  Resolved: old_offset={old_offset} -> new_offset={new_offset} "
-        f"(delta={new_offset - old_offset})"
+        f"  Resolved: old_offset={old_offset} -> new_offset={resolved.start_offset} "
+        f"(delta={resolved.start_offset - old_offset}), confidence={resolved.confidence:.2f}"
     )
 
-    return (old_offset, new_offset, anchor.confidence)
+    return (old_offset, resolved.start_offset, resolved.confidence)
 
 
 def calculate_position_delta(
@@ -473,8 +478,8 @@ class HighlightHandler:
         annotation: Annotation,
         paragraph_text: str,
         paragraph_index: int,
-        page_num: int = 0,
-    ) -> AnnotationAnchor:
+        page_num: int = 0,  # noqa: ARG002
+    ) -> AnchorContext:
         """Create anchor from highlight annotation for matching and correction detection.
 
         Args:
@@ -484,7 +489,7 @@ class HighlightHandler:
             page_num: Page number (default: 0)
 
         Returns:
-            AnnotationAnchor with highlight location/content information
+            AnchorContext with content-based anchor using multi-signal approach
         """
         if not annotation.highlight:
             raise ValueError("Annotation is not a highlight")
@@ -492,46 +497,35 @@ class HighlightHandler:
         highlight = annotation.highlight
         highlight_text = highlight.text.strip() if highlight.text else ""
 
-        # Calculate position from rectangles
+        # Calculate Y position from rectangles for spatial hint
         if highlight.rectangles:
             # Use first rectangle for primary position
             first_rect = highlight.rectangles[0]
-            center_x = first_rect.x + first_rect.w / 2
             center_y = first_rect.y + first_rect.h / 2
-
-            # Calculate overall bounding box
-            min_x = min(r.x for r in highlight.rectangles)
-            min_y = min(r.y for r in highlight.rectangles)
-            max_x = max(r.x + r.w for r in highlight.rectangles)
-            max_y = max(r.y + r.h for r in highlight.rectangles)
-            bbox = (min_x, min_y, max_x - min_x, max_y - min_y)
         else:
             # Fallback if no rectangles
-            center_x, center_y = 0.0, 0.0
-            bbox = None
+            center_y = None
 
-        # Extract context from paragraph
+        # Find highlight text in paragraph to get offsets
         if highlight_text and highlight_text in paragraph_text:
             offset = paragraph_text.find(highlight_text)
-            context_before = paragraph_text[max(0, offset - 50) : offset]
-            context_after = paragraph_text[
-                offset + len(highlight_text) : offset + len(highlight_text) + 50
-            ]
+            return AnchorContext.from_text_span(
+                full_text=paragraph_text,
+                start=offset,
+                end=offset + len(highlight_text),
+                paragraph_index=paragraph_index,
+                y_position=center_y,
+            )
         else:
-            # Fallback: use paragraph boundaries
-            context_before = paragraph_text[:50] if paragraph_text else ""
-            context_after = paragraph_text[-50:] if len(paragraph_text) > 50 else ""
-
-        return AnnotationAnchor.from_highlight(
-            highlight_text=highlight_text,
-            page_num=page_num,
-            position=(center_x, center_y),
-            bounding_box=bbox,
-            paragraph_index=paragraph_index,
-            context_before=context_before,
-            context_after=context_after,
-            color=highlight.color if hasattr(highlight, "color") else None,
-        )
+            # Fallback: anchor to entire paragraph if text not found
+            # This can happen if the highlight text doesn't match extracted markdown
+            return AnchorContext.from_text_span(
+                full_text=paragraph_text,
+                start=0,
+                end=len(paragraph_text),
+                paragraph_index=paragraph_index,
+                y_position=center_y,
+            )
 
     def relocate(
         self,

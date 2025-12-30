@@ -16,12 +16,10 @@ from rmscene import scene_items as si
 from rmscene.crdt_sequence import CrdtId
 
 from .annotations import (
-    HeuristicTextAnchor,
     TextBlock,
 )
 from .annotations.document_model import (
     AnchorContext,
-    ContextResolver,
     DocumentModel,
     PageProjection,
 )
@@ -209,14 +207,8 @@ class RemarkableGenerator:
             use_font_metrics=True,  # Enable Noto Sans font metrics for accuracy
         )
 
-        # Context resolver for annotation migration (V2 architecture)
-        self._context_resolver = ContextResolver(
-            context_window=50,
-            fuzzy_threshold=0.8,
-        )
-
-        # Keep HeuristicTextAnchor for direct use (e.g., highlight adjustment)
-        self.text_anchor_strategy = HeuristicTextAnchor(context_window=50, fuzzy_threshold=0.8)
+        # Fuzzy threshold for annotation migration (V2 architecture)
+        self._fuzzy_threshold = 0.8
 
         # Initialize annotation handlers - they own their relocation logic
         from rock_paper_sync.annotations.handlers.highlight_handler import HighlightHandler
@@ -306,7 +298,7 @@ class RemarkableGenerator:
                     f"generate_document: old_model has {len(old_model.annotations)} annotations"
                 )
                 if old_model.annotations:
-                    merger = AnnotationMerger(resolver=ContextResolver())
+                    merger = AnnotationMerger(fuzzy_threshold=self._fuzzy_threshold)
                     context = MergeContext(old_model=old_model, new_model=new_model)
                     result = merger.merge(context)
                     new_model = result.merged_model

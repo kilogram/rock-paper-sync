@@ -20,12 +20,10 @@ from .core_types import (
     Annotation,
     AnnotationMapping,
     AnnotationType,
-    HeuristicTextAnchor,
     Highlight,
     Point,
     Rectangle,
     Stroke,
-    TextAnchor,
     TextBlock,
     associate_annotations_with_content,
     calculate_position_mapping,
@@ -64,8 +62,6 @@ __all__ = [
     "associate_annotations_with_content",
     "calculate_position_mapping",
     # Text layout engine
-    "TextAnchor",
-    "HeuristicTextAnchor",
     "WordWrapLayoutEngine",
     # Handler architecture
     "AnnotationInfo",
