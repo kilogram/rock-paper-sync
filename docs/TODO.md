@@ -160,36 +160,6 @@ Proposed extraction to `annotations/annotation_store.py`.
 
 ---
 
-## Standardize annotations/ Submodule Structure
-
-**Current issues:**
-- Root-level files mixed with submodules
-- Inconsistent organization
-
-**Target structure:**
-```
-annotations/
-├── __init__.py           # Public API exports
-├── core/
-│   ├── types.py          # Consolidated types
-│   ├── protocol.py       # AnnotationHandler (cleaned)
-│   └── processor.py      # AnnotationProcessor
-├── model/
-│   ├── document.py       # DocumentModel (slimmed)
-│   └── store.py          # AnnotationStore (extracted)
-├── handlers/
-│   ├── highlight.py      # HighlightHandler
-│   └── stroke.py         # StrokeHandler
-├── services/
-│   ├── crdt_service.py
-│   ├── context_resolver.py
-│   └── merger.py         # Renamed from merging.py
-└── scene_adapter/        # Keep as-is
-```
-
-Per plan: Do all at once in a single commit to avoid broken imports.
-
----
 
 ## Heading Style Support
 
