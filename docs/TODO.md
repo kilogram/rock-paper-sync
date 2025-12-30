@@ -4,13 +4,65 @@ This file tracks architectural improvements and code quality issues identified d
 
 ---
 
-## SyncEngine Refactoring
+## SyncEngine Refactoring (CRITICAL - GOD OBJECT)
 
-**File:** `converter.py`
+**File:** `converter.py` (1577 lines)
 
-- Split `sync_file()` (333 lines) into focused methods
-- Extract responsibilities into services (currently 11 responsibilities)
+**Problem:** Single SyncEngine class with 11+ responsibilities:
+1. File discovery
+2. Change detection
+3. Folder hierarchy management
+4. Document generation
+5. Cloud upload
+6. State updates
+7. Annotation downloading
+8. Annotation marker updates
+9. OCR correction detection
+10. Retry logic
+11. Vault/file deletion
+
+**Architecture Review Findings:**
+The god object of the codebase. While well-documented, it's hard to test individual pieces. The `sync_file()` method alone is 333 lines.
+
+**Proposed Split:**
+```
+converter.py ->
+  ├── sync_orchestrator.py (main SyncEngine class, ~300 lines)
+  ├── folder_sync.py (folder hierarchy, ~150 lines)
+  ├── file_sync.py (single file sync, ~400 lines)
+  ├── annotation_sync.py (downloading/markers, ~300 lines)
+  └── vault_operations.py (unsync, delete, ~200 lines)
+```
+
+**Minimum Refactoring:**
+- Extract `sync_file()` into smaller methods
+- Extract annotation-related logic into `AnnotationSyncHelper` class
 - Fix leaky `VirtualDeviceState` abstraction in public API
+
+**Lines Saved:** 0 (restructure, not reduction)
+**Risk:** Medium (large refactor, needs careful coordination)
+**Value:** High (improves testability, reduces cognitive load, enables parallel testing)
+
+---
+
+## Quick Wins from Architecture Review (Deferred to Future)
+
+Based on 2025-12-29 aggressive architecture review, the following were identified but deferred:
+
+### Rectangle/BoundingBox Consolidation
+**Status:** Deferred - low usage, context-specific methods justified
+**Lines:** ~100 lines potential
+**Analysis:** Three Rectangle/BoundingBox classes exist but usage is minimal (1-2 imports each). Each has context-specific methods. Consolidation would create churn without clear value.
+
+### CrdtService to Module Functions
+**Status:** Deferred - only used in one place
+**Lines:** ~100 lines potential
+**Analysis:** CrdtService has only `next_id` state and is only used in stroke_handler.py. Could be module functions with explicit counter, but single-use makes it low priority.
+
+### ContextResolver Inlining
+**Status:** Part of anchor consolidation (see above)
+**Lines:** ~100 lines
+**Analysis:** Thin wrapper around HeuristicTextAnchor. Should be inlined when doing anchor consolidation.
 
 ---
 
@@ -96,23 +148,50 @@ Future extraction candidates:
 
 ---
 
-## Anchor Type Consolidation
+## Anchor Type Consolidation (AGGRESSIVE SIMPLIFICATION)
 
 **Files:** `annotations/document_model.py`, `annotations/core_types.py`, `annotations/common/anchors.py`
 
-Currently there are redundant anchor types:
-- `AnchorContext` in document_model.py - main production anchor for migration
-- `AnnotationAnchor` in common/anchors.py - used by handler Protocol
-- `TextAnchor` in core_types.py (line 534) - used by HeuristicTextAnchor
-- `TextAnchor` in common/anchors.py (line 157) - used by AnnotationAnchor
+**Current State (6+ overlapping types):**
+- `AnchorContext` (document_model.py) - multi-signal identifier with content_hash, text_content, context, spatial hints, diff_anchor
+- `DiffAnchor` (document_model.py) - edit-resilient anchoring with stable_before/after
+- `ResolvedAnchorContext` (document_model.py) - resolution result
+- `AnnotationAnchor` (anchors.py) - unified anchor for handler Protocol
+- `TextAnchor` (core_types.py) - HeuristicTextAnchor return type
+- `TextAnchor` (anchors.py) - DUPLICATE different class, same name
+- `HeuristicTextAnchor` (core_types.py) - service with fuzzy matching methods
+- `PagePosition`, `BoundingBox` (anchors.py) - separate spatial types
 
-Proposed consolidation:
-- Keep `AnchorContext` as unified anchor (already handles text + spatial)
-- Migrate handler `create_anchor()` to return `AnchorContext` instead of `AnnotationAnchor`
-- Remove duplicate `TextAnchor` definitions
-- Keep `HeuristicTextAnchor` as service class (not a data type)
+**Architecture Review Findings:**
+Estimated 400-500 lines of duplication and complexity. Cognitive load from overlapping responsibilities and naming confusion (two different TextAnchor classes).
 
-Risk: High - affects migration pipeline and handler protocol. Requires careful testing.
+**Proposed Aggressive Consolidation:**
+Reduce to 2-3 core types:
+1. **AnchorContext** - keep as comprehensive anchor (production-ready)
+   - Absorb DiffAnchor (make it a field, not separate class)
+   - Add resolve() method (absorb ContextResolver logic)
+   - Keep multi-signal approach (content_hash, text, context, spatial)
+
+2. **ResolvedPosition** - simplify to NamedTuple:
+   ```python
+   ResolvedPosition = NamedTuple('ResolvedPosition', [
+       ('offset', int),
+       ('confidence', float),
+       ('method', str)  # 'hash_match', 'fuzzy', 'spatial'
+   ])
+   ```
+
+3. **Inline HeuristicTextAnchor** - merge into AnchorContext.resolve() method
+
+**Migration Path:**
+- Phase 1: Consolidate duplicate TextAnchor definitions
+- Phase 2: Migrate handler Protocol to use AnchorContext (when refactoring AnnotationHandler)
+- Phase 3: Inline HeuristicTextAnchor into AnchorContext
+- Phase 4: Simplify ResolvedAnchorContext to NamedTuple
+
+**Lines Saved:** 400-500 lines
+**Risk:** High - affects migration pipeline and handler protocol. Requires careful testing.
+**Value:** High - major reduction in cognitive load, eliminates naming confusion
 
 ---
 
