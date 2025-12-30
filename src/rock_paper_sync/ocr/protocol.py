@@ -115,11 +115,11 @@ class TrainingJob:
     error_message: str | None = None
 
 
-class OCRInferenceProtocol(Protocol):
-    """Protocol for OCR inference operations.
+class OCRServiceProtocol(Protocol):
+    """Protocol for OCR services supporting inference and training.
 
-    Providers that only support recognition (e.g., commercial APIs) should
-    implement this interface. Use this for read-only OCR operations.
+    Implementations (LocalOCRService, RunpodsOCRService) provide both
+    text recognition and model fine-tuning capabilities.
     """
 
     def recognize(self, request: OCRRequest) -> OCRResult:
@@ -160,14 +160,6 @@ class OCRInferenceProtocol(Protocol):
         """
         ...
 
-
-class OCRTrainingProtocol(Protocol):
-    """Protocol for OCR training operations.
-
-    Providers that support fine-tuning (e.g., self-hosted) should implement
-    this interface in addition to OCRInferenceProtocol.
-    """
-
     def fine_tune(self, dataset_version: str) -> TrainingJob:
         """Initiate a fine-tuning job.
 
@@ -189,17 +181,3 @@ class OCRTrainingProtocol(Protocol):
             Current job status and metrics
         """
         ...
-
-
-class OCRServiceProtocol(OCRInferenceProtocol, OCRTrainingProtocol, Protocol):
-    """Full OCR service protocol combining inference and training.
-
-    All-in-one providers (local Podman, Runpods) that support both inference
-    and training should implement this interface. This maintains backwards
-    compatibility with existing code.
-
-    For inference-only providers (e.g., commercial APIs), implement only
-    OCRInferenceProtocol instead.
-    """
-
-    ...
