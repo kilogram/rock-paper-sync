@@ -82,6 +82,13 @@ HEADING_LINE_HEIGHT = 87  # ~1.53× body line height (57 × 1.53)
 BODY_FONT_SIZE = 31  # 10pt at 226 DPI = 31.4px
 HEADING_FONT_SIZE = 65  # ~2.1× body (from visual calibration)
 
+# Stroke baseline offset
+# Device anchors strokes to the text baseline, but our char_to_y map stores
+# the top of each text line. This offset shifts stroke anchor Y down to the
+# baseline so handwritten annotations align with text they were written on.
+# Calibrated: 20px positions descenders to touch underscore characters.
+STROKE_BASELINE_OFFSET = 20
+
 # Font search paths (same as font_metrics.py - Noto Sans Regular is used on reMarkable)
 FONT_SEARCH_PATHS = [
     "/usr/share/fonts/noto/NotoSans-Regular.ttf",  # Arch Linux
@@ -336,6 +343,10 @@ class RmRenderer:
             else:
                 # Character offset not found - use end of text
                 page_y = total_y
+
+            # Add baseline offset: device anchors strokes to baseline, but
+            # char_to_y stores top of text line
+            page_y += STROKE_BASELINE_OFFSET
 
             anchor_map[parent_id] = (page_x, page_y)
 
