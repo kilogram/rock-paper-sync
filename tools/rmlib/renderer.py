@@ -3,6 +3,14 @@
 Renders .rm files to PNG images, validated against device thumbnails.
 This replaces the unreliable rmc tool for visual comparison testing.
 
+Coordinate Model:
+    See docs/RENDERER_COORDINATE_MODEL.md for detailed documentation on:
+    - Page coordinate system (1404x1872 @ 226 DPI)
+    - Text width from RootTextBlock (not calculated)
+    - Line height values (57px for coordinates, not 68px)
+    - Stroke baseline offset (20px for proper alignment)
+    - Highlight rectangle positioning (absolute coords)
+
 Usage:
     from tools.rmlib import RmRenderer
 
