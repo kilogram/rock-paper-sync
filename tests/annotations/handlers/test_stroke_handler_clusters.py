@@ -127,14 +127,6 @@ class TestMigrateClusters:
         """Test successful cluster migration."""
         handler = StrokeHandler()
 
-        # Create mock resolver that returns resolved anchor
-        mock_resolver = MagicMock()
-        mock_resolved = MagicMock()
-        mock_resolved.start_offset = 200
-        mock_resolved.confidence = 0.95
-        mock_resolved.match_type = "exact"
-        mock_resolver.resolve.return_value = mock_resolved
-
         # Create mock CrdtService
         mock_crdt_service = MagicMock(spec=CrdtService)
         mock_crdt_service.reanchor_bundle.side_effect = lambda b, offset: b
@@ -142,22 +134,29 @@ class TestMigrateClusters:
         anchor = self._make_mock_anchor()
         cluster = self._make_mock_cluster(anchor=anchor)
 
-        migrated = handler.migrate_clusters(
-            clusters=[cluster],
-            old_text="old document text",
-            new_text="new document text",
-            context_resolver=mock_resolver,
-            crdt_service=mock_crdt_service,
-        )
+        # Mock the anchor.resolve() method
+        with patch.object(anchor, "resolve") as mock_resolve:
+            from rock_paper_sync.annotations.document_model import AnchorResolution
 
-        assert len(migrated) == 1
-        mock_resolver.resolve.assert_called_once()
-        mock_crdt_service.reanchor_bundle.assert_called()
+            mock_resolve.return_value = AnchorResolution(
+                start_offset=200, end_offset=210, confidence=0.95, match_type="exact"
+            )
+
+            migrated = handler.migrate_clusters(
+                clusters=[cluster],
+                old_text="old document text",
+                new_text="new document text",
+                fuzzy_threshold=0.8,
+                crdt_service=mock_crdt_service,
+            )
+
+            assert len(migrated) == 1
+            mock_resolve.assert_called_once()
+            mock_crdt_service.reanchor_bundle.assert_called()
 
     def test_migrate_clusters_no_anchor(self):
         """Test that clusters without anchors are skipped."""
         handler = StrokeHandler()
-        mock_resolver = MagicMock()
 
         # Cluster with no anchor
         cluster = self._make_mock_cluster(anchor=None)
@@ -166,50 +165,51 @@ class TestMigrateClusters:
             clusters=[cluster],
             old_text="old",
             new_text="new",
-            context_resolver=mock_resolver,
+            fuzzy_threshold=0.8,
         )
 
         assert len(migrated) == 0
-        mock_resolver.resolve.assert_not_called()
 
     def test_migrate_clusters_resolve_failure(self):
         """Test that unresolvable clusters are dropped."""
         handler = StrokeHandler()
 
-        mock_resolver = MagicMock()
-        mock_resolver.resolve.return_value = None  # Cannot resolve
-
         anchor = self._make_mock_anchor()
         cluster = self._make_mock_cluster(anchor=anchor)
 
-        migrated = handler.migrate_clusters(
-            clusters=[cluster],
-            old_text="old",
-            new_text="new",
-            context_resolver=mock_resolver,
-        )
+        # Mock the anchor.resolve() method to return None (cannot resolve)
+        with patch.object(anchor, "resolve") as mock_resolve:
+            mock_resolve.return_value = None
 
-        assert len(migrated) == 0
+            migrated = handler.migrate_clusters(
+                clusters=[cluster],
+                old_text="old",
+                new_text="new",
+                fuzzy_threshold=0.8,
+            )
+
+            assert len(migrated) == 0
 
     def test_migrate_clusters_creates_crdt_service_if_none(self):
         """Test that CrdtService is created if not provided."""
         handler = StrokeHandler()
 
-        mock_resolver = MagicMock()
-        mock_resolver.resolve.return_value = None
-
         anchor = self._make_mock_anchor()
         cluster = self._make_mock_cluster(anchor=anchor)
 
-        # Should not raise even without crdt_service
-        migrated = handler.migrate_clusters(
-            clusters=[cluster],
-            old_text="old",
-            new_text="new",
-            context_resolver=mock_resolver,
-        )
+        # Mock the anchor.resolve() to return None
+        with patch.object(anchor, "resolve") as mock_resolve:
+            mock_resolve.return_value = None
 
-        assert len(migrated) == 0
+            # Should not raise even without crdt_service
+            migrated = handler.migrate_clusters(
+                clusters=[cluster],
+                old_text="old",
+                new_text="new",
+                fuzzy_threshold=0.8,
+            )
+
+            assert len(migrated) == 0
 
 
 class TestSerializeForPage:

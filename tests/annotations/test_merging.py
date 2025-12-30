@@ -10,11 +10,9 @@ import pytest
 
 from rock_paper_sync.annotations.document_model import (
     AnchorContext,
-    ContextResolver,
     DocumentAnnotation,
     DocumentModel,
     MigrationReport,
-    ResolvedAnchorContext,
 )
 from rock_paper_sync.annotations.merging import (
     AnnotationMerger,
@@ -87,14 +85,22 @@ class TestAnnotationMerger:
 
     def _make_mock_annotation(
         self,
+        full_text: str = "Test content here",
         annotation_id: str = "test-id",
         annotation_type: str = "highlight",
         cluster_id: str | None = None,
     ) -> DocumentAnnotation:
-        """Create a mock DocumentAnnotation."""
-        anchor = AnchorContext(
-            content_hash="hash123",
-            text_content="test content",
+        """Create a mock DocumentAnnotation with proper anchor."""
+        # Create anchor from the actual text
+        start = full_text.find("content")
+        if start == -1:
+            start = 0
+        end = min(start + 7, len(full_text))
+
+        anchor = AnchorContext.from_text_span(
+            full_text,
+            start,
+            end,
             paragraph_index=0,
         )
         return DocumentAnnotation(
@@ -123,45 +129,37 @@ class TestAnnotationMerger:
         old_model = self._make_document_model(annotations=[])
         new_model = self._make_document_model(full_text="New text")
 
-        merger = AnnotationMerger(resolver=ContextResolver())
+        merger = AnnotationMerger(fuzzy_threshold=0.8)
         result = merger.merge(MergeContext(old_model=old_model, new_model=new_model))
 
         assert len(result.merged_model.annotations) == 0
         assert result.success_rate == 1.0  # 0/0 = 100%
 
-    def test_merger_creates_default_resolver(self):
-        """Test that merger creates resolver if not provided."""
+    def test_merger_uses_default_threshold(self):
+        """Test that merger uses default fuzzy threshold if not provided."""
         old_model = self._make_document_model(annotations=[])
         new_model = self._make_document_model()
 
-        merger = AnnotationMerger()  # No resolver provided
+        merger = AnnotationMerger()  # Uses default fuzzy_threshold=0.8
         result = merger.merge(MergeContext(old_model=old_model, new_model=new_model))
 
         # Should complete without error
         assert result.merged_model is not None
 
-    def test_merger_with_custom_resolver(self):
-        """Test that merger uses provided resolver."""
+    def test_merger_with_custom_threshold(self):
+        """Test that merger uses provided fuzzy threshold."""
+        full_text = "Test content here"
         old_model = self._make_document_model(
-            full_text="Test content here",
-            annotations=[self._make_mock_annotation()],
+            full_text=full_text,
+            annotations=[self._make_mock_annotation(full_text=full_text)],
         )
-        new_model = self._make_document_model(full_text="Test content here")
+        new_model = self._make_document_model(full_text=full_text)
 
-        mock_resolver = MagicMock(spec=ContextResolver)
-        mock_resolution = ResolvedAnchorContext(
-            start_offset=0,
-            end_offset=12,
-            confidence=0.9,
-            match_type="exact",
-        )
-        mock_resolver.resolve.return_value = mock_resolution
-
-        merger = AnnotationMerger(resolver=mock_resolver)
+        # Use high threshold (0.95) for strict matching
+        merger = AnnotationMerger(fuzzy_threshold=0.95)
         result = merger.merge(MergeContext(old_model=old_model, new_model=new_model))
 
-        # Should have called our resolver
-        mock_resolver.resolve.assert_called()
+        # Should successfully migrate with exact match
         assert result.migrated_count == 1
 
     def test_merger_orphans_unresolvable_annotations(self):
@@ -172,35 +170,30 @@ class TestAnnotationMerger:
         )
         new_model = self._make_document_model(full_text="Completely different text")
 
-        mock_resolver = MagicMock(spec=ContextResolver)
-        mock_resolver.resolve.return_value = None  # Cannot resolve
-
-        merger = AnnotationMerger(resolver=mock_resolver)
+        merger = AnnotationMerger(fuzzy_threshold=0.8)
         result = merger.merge(MergeContext(old_model=old_model, new_model=new_model))
 
+        # Anchor cannot resolve in completely different text
         assert result.migrated_count == 0
         assert result.orphan_count == 1
 
     def test_merger_handles_clustered_annotations(self):
         """Test that clustered annotations follow leader resolution."""
-        anno1 = self._make_mock_annotation(annotation_id="anno-1", cluster_id="cluster-A")
-        anno2 = self._make_mock_annotation(annotation_id="anno-2", cluster_id="cluster-A")
+        old_text = "Original text with content"
+        new_text = "New text with content"
+        anno1 = self._make_mock_annotation(
+            full_text=old_text, annotation_id="anno-1", cluster_id="cluster-A"
+        )
+        anno2 = self._make_mock_annotation(
+            full_text=old_text, annotation_id="anno-2", cluster_id="cluster-A"
+        )
         old_model = self._make_document_model(
-            full_text="Original text with content",
+            full_text=old_text,
             annotations=[anno1, anno2],
         )
-        new_model = self._make_document_model(full_text="New text with content")
+        new_model = self._make_document_model(full_text=new_text)
 
-        mock_resolver = MagicMock(spec=ContextResolver)
-        mock_resolution = ResolvedAnchorContext(
-            start_offset=5,
-            end_offset=17,
-            confidence=0.95,
-            match_type="exact",
-        )
-        mock_resolver.resolve.return_value = mock_resolution
-
-        merger = AnnotationMerger(resolver=mock_resolver)
+        merger = AnnotationMerger(fuzzy_threshold=0.8)
         result = merger.merge(MergeContext(old_model=old_model, new_model=new_model))
 
         # Both annotations should be migrated using the leader's resolution
@@ -216,16 +209,7 @@ class TestAnnotationMerger:
         )
         new_model = self._make_document_model(full_text="Test content")
 
-        mock_resolver = MagicMock(spec=ContextResolver)
-        mock_resolution = ResolvedAnchorContext(
-            start_offset=0,
-            end_offset=12,
-            confidence=0.9,
-            match_type="exact",
-        )
-        mock_resolver.resolve.return_value = mock_resolution
-
-        merger = AnnotationMerger(resolver=mock_resolver)
+        merger = AnnotationMerger(fuzzy_threshold=0.8)
         result = merger.merge(MergeContext(old_model=old_model, new_model=new_model))
 
         assert result.merged_model.annotations[0].cluster_id == "my-cluster"
@@ -248,26 +232,26 @@ class TestAnnotationMergerIntegration:
             geometry=None,
         )
 
-    def test_merge_with_default_resolver(self):
-        """Test merging with default ContextResolver."""
+    def test_merge_with_default_threshold(self):
+        """Test merging with default fuzzy threshold."""
         old_model = self._make_document_model(annotations=[])
         new_model = self._make_document_model()
 
-        # Create merger with default resolver
-        merger = AnnotationMerger(resolver=ContextResolver())
+        # Create merger with default threshold (0.8)
+        merger = AnnotationMerger()
         context = MergeContext(old_model=old_model, new_model=new_model)
         result = merger.merge(context)
 
         assert result.merged_model is not None
         assert result.report is not None
 
-    def test_merge_with_custom_resolver(self):
-        """Test merging with custom resolver."""
+    def test_merge_with_custom_threshold(self):
+        """Test merging with custom fuzzy threshold."""
         old_model = self._make_document_model(annotations=[])
         new_model = self._make_document_model()
 
-        mock_resolver = MagicMock(spec=ContextResolver)
-        merger = AnnotationMerger(resolver=mock_resolver)
+        # Use strict threshold
+        merger = AnnotationMerger(fuzzy_threshold=0.95)
         context = MergeContext(old_model=old_model, new_model=new_model)
         result = merger.merge(context)
 
@@ -278,7 +262,7 @@ class TestAnnotationMergerIntegration:
         old_model = self._make_document_model(annotations=[])
         new_model = self._make_document_model()
 
-        merger = AnnotationMerger(resolver=ContextResolver())
+        merger = AnnotationMerger(fuzzy_threshold=0.8)
         context = MergeContext(old_model=old_model, new_model=new_model)
         result = merger.merge(context)
 

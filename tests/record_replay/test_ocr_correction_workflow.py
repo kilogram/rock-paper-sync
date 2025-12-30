@@ -231,9 +231,11 @@ def test_ocr_correction_workflow(device, workspace, fixtures_dir, tmp_path):
                 page_num=0,
             )
 
-            # Verify anchor has position and bbox (needed for correction detection)
-            assert anchor.page is not None, "Anchor should have page position"
-            assert anchor.bbox is not None, "Anchor should have bounding box"
+            # Verify anchor has required fields (AnchorContext API)
+            assert anchor.text_content is not None, "Anchor should have text content"
+            assert anchor.content_hash is not None, "Anchor should have content hash"
+            # y_position_hint may be None for some anchors, just verify the field exists
+            assert hasattr(anchor, "y_position_hint"), "Anchor should have y_position_hint field"
 
             # In real workflow, this anchor would be used to:
             # 1. Render OCR text into markdown

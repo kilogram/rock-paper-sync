@@ -26,7 +26,7 @@ from rmscene import (
     TreeNodeBlock,
 )
 
-from rock_paper_sync.annotations.document_model import ContextResolver, DocumentModel
+from rock_paper_sync.annotations.document_model import DocumentModel
 from rock_paper_sync.annotations.merging import AnnotationMerger, MergeContext
 from rock_paper_sync.annotations.scene_graph import (
     SceneGraphIndex,
@@ -174,7 +174,7 @@ class TestDocumentModelMigration:
         # Create new model and migrate
         new_md_doc = parse_markdown_file(new_markdown)
         new_model = DocumentModel.from_content_blocks(new_md_doc.content, PAPER_PRO_MOVE)
-        merger = AnnotationMerger(resolver=ContextResolver())
+        merger = AnnotationMerger(fuzzy_threshold=0.8)
         context = MergeContext(old_model=old_model, new_model=new_model)
         result = merger.merge(context)
         new_model = result.merged_model
@@ -196,7 +196,7 @@ class TestDocumentModelMigration:
         # Create new model and migrate
         new_md_doc = parse_markdown_file(new_markdown)
         new_model = DocumentModel.from_content_blocks(new_md_doc.content, PAPER_PRO_MOVE)
-        merger = AnnotationMerger(resolver=ContextResolver())
+        merger = AnnotationMerger(fuzzy_threshold=0.8)
         context = MergeContext(old_model=old_model, new_model=new_model)
         result = merger.merge(context)
         new_model = result.merged_model
