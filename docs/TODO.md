@@ -182,6 +182,31 @@ Per plan: Do all at once in a single commit to avoid broken imports.
 
 ---
 
+## Heading Style Support
+
+**Files:** `generator.py`, `annotations/scene_adapter/executor.py`
+
+Generator should set `ParagraphStyle.HEADING` for all markdown headings, not just the first line.
+
+**Current behavior:**
+- Generator only tracks whether the first block is a heading
+- All paragraphs after the first get `ParagraphStyle.PLAIN`
+- Headings mid-document render as body text
+
+**Device-native behavior:**
+- Each paragraph has its own style in the `styles` dictionary
+- Headings use `ParagraphStyle.HEADING` (value 2)
+- Headings render with larger font
+
+**Proposed fix:**
+1. Track heading status per paragraph in `ContentBlock` or `TextItem`
+2. Generator builds styles dictionary with HEADING for each heading paragraph
+3. Renderer already handles HEADING style correctly
+
+Risk: Low - additive change to generator output.
+
+---
+
 ## Paragraph Spacing Preservation
 
 **Files:** `parser.py`, `generator.py`
