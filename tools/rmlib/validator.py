@@ -32,6 +32,11 @@ from rmscene.scene_stream import RootTextBlock, TreeNodeBlock
 # These anchors are intentionally very large and should not be validated
 END_OF_DOC_ANCHOR_MARKER = 281474976710655  # 0xFFFFFFFFFFFF
 
+# Base item ID for text CrdtSequenceItem
+# CRDT anchor_id.part2 = TEXT_BASE_ITEM_ID + char_offset
+# We need to subtract this when validating against page text length
+TEXT_BASE_ITEM_ID = 16
+
 
 @dataclass
 class ValidationError:
@@ -178,43 +183,48 @@ def validate_rm_file(
                 continue
 
             # Check if anchor is within valid range
+            # anchor_offset is CRDT part2 = TEXT_BASE_ITEM_ID + char_offset
+            # Convert to char_offset for comparison with page_text_len
+            char_offset = anchor_offset - TEXT_BASE_ITEM_ID
             if page_text_len is not None:
-                if anchor_offset < 0:
+                if char_offset < 0:
                     errors.append(
                         ValidationError(
                             error_type="NEGATIVE_ANCHOR",
-                            message=f"Anchor offset is negative: {anchor_offset}",
+                            message=f"Anchor offset is negative: {char_offset}",
                             node_id=node_id,
-                            details={"anchor": anchor_offset},
+                            details={"anchor": anchor_offset, "char_offset": char_offset},
                         )
                     )
-                elif anchor_offset > page_text_len:
+                elif char_offset > page_text_len:
                     errors.append(
                         ValidationError(
                             error_type="ANCHOR_OUT_OF_RANGE",
                             message=(
-                                f"Anchor {anchor_offset} exceeds page text length "
+                                f"Anchor {char_offset} > page text length "
                                 f"{page_text_len}"
                             ),
                             node_id=node_id,
                             details={
                                 "anchor": anchor_offset,
+                                "char_offset": char_offset,
                                 "page_text_len": page_text_len,
                             },
                         )
                     )
-                elif anchor_offset > page_text_len * 0.9 and anchor_offset > 100:
+                elif char_offset > page_text_len * 0.9 and char_offset > 100:
                     # Warn about anchors near the end (might indicate wrong page)
                     warnings.append(
                         ValidationError(
                             error_type="ANCHOR_NEAR_END",
                             message=(
-                                f"Anchor {anchor_offset} is near end of text "
+                                f"Anchor {char_offset} is near end of text "
                                 f"({page_text_len})"
                             ),
                             node_id=node_id,
                             details={
                                 "anchor": anchor_offset,
+                                "char_offset": char_offset,
                                 "page_text_len": page_text_len,
                             },
                         )
@@ -317,25 +327,29 @@ def validate_rm_bytes(
                 continue
 
             if effective_text_len is not None:
-                if anchor_offset < 0:
+                # anchor_offset is CRDT part2 = TEXT_BASE_ITEM_ID + char_offset
+                # Convert to char_offset for comparison with text length
+                char_offset = anchor_offset - TEXT_BASE_ITEM_ID
+                if char_offset < 0:
                     errors.append(
                         ValidationError(
                             error_type="NEGATIVE_ANCHOR",
-                            message=f"Anchor offset is negative: {anchor_offset}",
+                            message=f"Anchor offset is negative: {char_offset}",
                             node_id=node_id,
                         )
                     )
-                elif anchor_offset > effective_text_len:
+                elif char_offset > effective_text_len:
                     errors.append(
                         ValidationError(
                             error_type="ANCHOR_OUT_OF_RANGE",
                             message=(
-                                f"Anchor {anchor_offset} > page text length "
+                                f"Anchor {char_offset} > page text length "
                                 f"{effective_text_len}"
                             ),
                             node_id=node_id,
                             details={
                                 "anchor": anchor_offset,
+                                "char_offset": char_offset,
                                 "page_text_len": effective_text_len,
                             },
                         )

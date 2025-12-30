@@ -27,6 +27,11 @@ from rock_paper_sync.parser import parse_markdown_file
 # Path to multi_trip test data
 TESTDATA_DIR = Path(__file__).parent.parent / "record_replay" / "testdata" / "multi_trip"
 
+# CRDT base item ID for text anchors
+# anchor_id.part2 = TEXT_BASE_ITEM_ID + char_offset
+# When comparing anchors to text length, subtract this base
+TEXT_BASE_ITEM_ID = 16
+
 
 def get_page_text_length(rm_bytes: bytes) -> int:
     """Extract page text length from RootTextBlock in .rm file."""
@@ -142,12 +147,14 @@ def test_tree_node_anchors_within_page_bounds(multi_trip_testdata):
         total_strokes += strokes
 
         for node_id, anchor in tree_nodes:
-            if anchor is None or anchor < 0 or anchor > page_text_len:
+            # Convert CRDT anchor to char offset for comparison
+            char_offset = anchor - TEXT_BASE_ITEM_ID if anchor is not None else None
+            if char_offset is None or char_offset < 0 or char_offset > page_text_len:
                 invalid_anchors.append(
                     {
                         "page": i,
                         "node_id": node_id,
-                        "anchor": anchor,
+                        "anchor": char_offset,
                         "page_text_len": page_text_len,
                     }
                 )
@@ -242,12 +249,16 @@ def test_tree_node_anchor_delta_not_applied_to_cross_page():
         tree_nodes = get_user_tree_node_blocks(rm_bytes)
 
         for node_id, anchor in tree_nodes:
+            # Convert CRDT anchor to char offset for comparison
+            char_offset = anchor - TEXT_BASE_ITEM_ID if anchor is not None else None
             # The bug would show anchors that are: original_anchor + delta
             # These would exceed page_text_len
-            assert anchor is not None, f"Page {i}: TreeNodeBlock {node_id} has no anchor"
-            assert anchor >= 0, f"Page {i}: TreeNodeBlock {node_id} has negative anchor {anchor}"
-            assert anchor <= page_text_len, (
-                f"Page {i}: TreeNodeBlock {node_id} anchor={anchor} exceeds "
+            assert char_offset is not None, f"Page {i}: TreeNodeBlock {node_id} has no anchor"
+            assert (
+                char_offset >= 0
+            ), f"Page {i}: TreeNodeBlock {node_id} has negative anchor {char_offset}"
+            assert char_offset <= page_text_len, (
+                f"Page {i}: TreeNodeBlock {node_id} anchor={char_offset} exceeds "
                 f"page_text_len={page_text_len}.\n"
                 f"This is the delta bug: anchor appears to have delta (+{delta}) "
                 f"incorrectly applied.\n"
@@ -378,12 +389,14 @@ def test_anchor_validity_with_positive_delta():
             total_strokes += strokes
 
             for node_id, anchor in tree_nodes:
-                if anchor is None or anchor < 0 or anchor > page_text_len:
+                # Convert CRDT anchor to char offset for comparison
+                char_offset = anchor - TEXT_BASE_ITEM_ID if anchor is not None else None
+                if char_offset is None or char_offset < 0 or char_offset > page_text_len:
                     invalid_anchors.append(
                         {
                             "page": i,
                             "node_id": node_id,
-                            "anchor": anchor,
+                            "anchor": char_offset,
                             "page_text_len": page_text_len,
                             "delta": delta,
                         }
@@ -487,12 +500,14 @@ def validate_anchors_for_modified_markdown(
                 # Skip sentinel anchors (margin notes)
                 if anchor is not None and anchor > 10**14:
                     continue
-                if anchor is None or anchor < 0 or anchor > page_text_len:
+                # Convert CRDT anchor to char offset for comparison
+                char_offset = anchor - TEXT_BASE_ITEM_ID if anchor is not None else None
+                if char_offset is None or char_offset < 0 or char_offset > page_text_len:
                     invalid_anchors.append(
                         {
                             "page": i,
                             "node_id": node_id,
-                            "anchor": anchor,
+                            "anchor": char_offset,
                             "page_text_len": page_text_len,
                         }
                     )
