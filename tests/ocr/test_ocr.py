@@ -1120,7 +1120,7 @@ class TestAnnotationImageRendering:
 
         from PIL import Image
 
-        from rock_paper_sync.annotations.core_types import Point, StrokeData
+        from rock_paper_sync.annotations.core.types import Point, StrokeData
         from rock_paper_sync.annotations.document_model import (
             AnchorContext,
             DocumentAnnotation,
@@ -1217,7 +1217,7 @@ class TestAnnotationImageRendering:
 
         from PIL import Image
 
-        from rock_paper_sync.annotations.core_types import Point, StrokeData
+        from rock_paper_sync.annotations.core.types import Point, StrokeData
         from rock_paper_sync.annotations.document_model import (
             AnchorContext,
             DocumentAnnotation,

@@ -15,7 +15,7 @@ import math
 from collections import defaultdict
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
-from rock_paper_sync.annotations.core_types import StrokeData
+from rock_paper_sync.annotations.core.types import StrokeData
 
 if TYPE_CHECKING:
     pass

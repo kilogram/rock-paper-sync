@@ -28,11 +28,11 @@ from .annotations.domain import (
     PageTransformPlan,
     StrokePlacement,
 )
-from .annotations.merging import AnnotationMerger, MergeContext
 from .annotations.scene_adapter import (
     PageTransformExecutor,
     StrokeBundle,
 )
+from .annotations.services.merger import AnnotationMerger, MergeContext
 from .config import LayoutConfig as AppLayoutConfig
 from .crdt_format import update_glyph_extra_value_data
 from .layout import DeviceGeometry, WordWrapLayoutEngine

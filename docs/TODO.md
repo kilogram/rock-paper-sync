@@ -45,27 +45,6 @@ converter.py ->
 
 ---
 
-## Quick Wins from Architecture Review (Deferred to Future)
-
-Based on 2025-12-29 aggressive architecture review, the following were identified but deferred:
-
-### Rectangle/BoundingBox Consolidation
-**Status:** Deferred - low usage, context-specific methods justified
-**Lines:** ~100 lines potential
-**Analysis:** Three Rectangle/BoundingBox classes exist but usage is minimal (1-2 imports each). Each has context-specific methods. Consolidation would create churn without clear value.
-
-### CrdtService to Module Functions
-**Status:** Deferred - only used in one place
-**Lines:** ~100 lines potential
-**Analysis:** CrdtService has only `next_id` state and is only used in stroke_handler.py. Could be module functions with explicit counter, but single-use makes it low priority.
-
-### ContextResolver Inlining
-**Status:** Part of anchor consolidation (see above)
-**Lines:** ~100 lines
-**Analysis:** Thin wrapper around HeuristicTextAnchor. Should be inlined when doing anchor consolidation.
-
----
-
 ## OCR Submodule Modernization
 
 **Directory:** `ocr/`
@@ -126,16 +105,14 @@ Priority modules needing improved coverage:
 
 ## Generator Refactoring
 
-**File:** `generator.py` (~1935 lines after dead code removal)
+**File:** `generator.py` (1257 lines)
 
 Future extraction candidates:
-- `CrdtFormatter` - CRDT encoding/decoding (lines 59-215)
 - `PageLayoutEngine` - Text positioning and pagination
 - `AnnotationMigrator` - Annotation extraction and adjustment
 - `RmBinaryGenerator` - Binary .rm file generation
 
-~~Dead code to remove:~~
-- ~~`_match_rm_files_to_pages()` (90 lines, never called)~~ (DONE)
+Note: CRDT handling was extracted to `annotations/services/crdt_format.py` module
 
 ---
 
@@ -145,53 +122,6 @@ Future extraction candidates:
 
 - Extract business logic to `ChangeDetector` class
 - ~~Remove unused `reset()` method or wire to CLI for disaster recovery~~ (DONE - wired to CLI)
-
----
-
-## Anchor Type Consolidation (AGGRESSIVE SIMPLIFICATION)
-
-**Files:** `annotations/document_model.py`, `annotations/core_types.py`, `annotations/common/anchors.py`
-
-**Current State (6+ overlapping types):**
-- `AnchorContext` (document_model.py) - multi-signal identifier with content_hash, text_content, context, spatial hints, diff_anchor
-- `DiffAnchor` (document_model.py) - edit-resilient anchoring with stable_before/after
-- `ResolvedAnchorContext` (document_model.py) - resolution result
-- `AnnotationAnchor` (anchors.py) - unified anchor for handler Protocol
-- `TextAnchor` (core_types.py) - HeuristicTextAnchor return type
-- `TextAnchor` (anchors.py) - DUPLICATE different class, same name
-- `HeuristicTextAnchor` (core_types.py) - service with fuzzy matching methods
-- `PagePosition`, `BoundingBox` (anchors.py) - separate spatial types
-
-**Architecture Review Findings:**
-Estimated 400-500 lines of duplication and complexity. Cognitive load from overlapping responsibilities and naming confusion (two different TextAnchor classes).
-
-**Proposed Aggressive Consolidation:**
-Reduce to 2-3 core types:
-1. **AnchorContext** - keep as comprehensive anchor (production-ready)
-   - Absorb DiffAnchor (make it a field, not separate class)
-   - Add resolve() method (absorb ContextResolver logic)
-   - Keep multi-signal approach (content_hash, text, context, spatial)
-
-2. **ResolvedPosition** - simplify to NamedTuple:
-   ```python
-   ResolvedPosition = NamedTuple('ResolvedPosition', [
-       ('offset', int),
-       ('confidence', float),
-       ('method', str)  # 'hash_match', 'fuzzy', 'spatial'
-   ])
-   ```
-
-3. **Inline HeuristicTextAnchor** - merge into AnchorContext.resolve() method
-
-**Migration Path:**
-- Phase 1: Consolidate duplicate TextAnchor definitions
-- Phase 2: Migrate handler Protocol to use AnchorContext (when refactoring AnnotationHandler)
-- Phase 3: Inline HeuristicTextAnchor into AnchorContext
-- Phase 4: Simplify ResolvedAnchorContext to NamedTuple
-
-**Lines Saved:** 400-500 lines
-**Risk:** High - affects migration pipeline and handler protocol. Requires careful testing.
-**Value:** High - major reduction in cognitive load, eliminates naming confusion
 
 ---
 

@@ -16,7 +16,7 @@ from rock_paper_sync.layout import WordWrapLayoutEngine
 from .core.data_types import AnnotationInfo
 from .core.processor import AnnotationProcessor
 from .core.protocol import AnnotationHandler
-from .core_types import (
+from .core.types import (
     Annotation,
     AnnotationMapping,
     AnnotationType,

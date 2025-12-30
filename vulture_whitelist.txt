@@ -1,0 +1,3 @@
+# Intentionally unused function parameters (interface compliance)
+page_num  # AnnotationHandler protocol parameter
+context_window  # HighlightHandler internal parameter

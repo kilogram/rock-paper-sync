@@ -5,9 +5,9 @@ Tests the CRDT-aware Stroke class and spatial StrokeCluster class.
 
 from rmscene import CrdtId
 
-from rock_paper_sync.annotations.core_types import Point
-from rock_paper_sync.annotations.stroke import Stroke
-from rock_paper_sync.annotations.stroke_cluster import StrokeCluster
+from rock_paper_sync.annotations.core.types import Point
+from rock_paper_sync.annotations.domain.stroke import Stroke
+from rock_paper_sync.annotations.domain.stroke_cluster import StrokeCluster
 
 
 class TestStroke:

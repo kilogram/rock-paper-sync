@@ -9,3 +9,4 @@ repos:
     rev: v2.14
     hooks:
       - id: vulture
+        args: [vulture_whitelist.txt]

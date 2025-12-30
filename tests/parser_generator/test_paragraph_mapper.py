@@ -334,7 +334,7 @@ class TestCoordinateTransformation:
 
     def test_stroke_data_has_valid_bounding_box(self):
         """Verify StrokeData bounding boxes are computed correctly."""
-        from rock_paper_sync.annotations.core_types import Point, StrokeData
+        from rock_paper_sync.annotations.core.types import Point, StrokeData
 
         # Create stroke with known points
         points = [Point(x=10, y=100), Point(x=50, y=150), Point(x=100, y=100)]
@@ -355,7 +355,7 @@ class TestCoordinateTransformation:
 
     def test_document_annotation_stores_stroke_data(self):
         """Verify DocumentAnnotation correctly stores StrokeData."""
-        from rock_paper_sync.annotations.core_types import Point, StrokeData
+        from rock_paper_sync.annotations.core.types import Point, StrokeData
         from rock_paper_sync.annotations.document_model import (
             AnchorContext,
             DocumentAnnotation,

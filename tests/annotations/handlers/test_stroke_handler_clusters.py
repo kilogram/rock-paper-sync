@@ -13,10 +13,10 @@ from unittest.mock import MagicMock, patch
 from rmscene import CrdtId, TreeNodeBlock
 
 from rock_paper_sync.annotations.document_model import AnchorContext, PageProjection
+from rock_paper_sync.annotations.domain.stroke import Stroke
+from rock_paper_sync.annotations.domain.stroke_cluster import StrokeCluster
 from rock_paper_sync.annotations.handlers.stroke_handler import StrokeHandler
 from rock_paper_sync.annotations.services.crdt_service import CrdtService
-from rock_paper_sync.annotations.stroke import Stroke
-from rock_paper_sync.annotations.stroke_cluster import StrokeCluster
 
 
 @dataclass
@@ -40,7 +40,7 @@ class TestDetectClusters:
         handler = StrokeHandler()
 
         with patch(
-            "rock_paper_sync.annotations.stroke_cluster.StrokeCluster.from_rm_file"
+            "rock_paper_sync.annotations.domain.stroke_cluster.StrokeCluster.from_rm_file"
         ) as mock_from_rm:
             mock_from_rm.return_value = [
                 StrokeCluster(
@@ -64,7 +64,7 @@ class TestDetectClusters:
         handler = StrokeHandler()
 
         with patch(
-            "rock_paper_sync.annotations.stroke_cluster.StrokeCluster.from_rm_file"
+            "rock_paper_sync.annotations.domain.stroke_cluster.StrokeCluster.from_rm_file"
         ) as mock_from_rm:
             mock_from_rm.return_value = []
 

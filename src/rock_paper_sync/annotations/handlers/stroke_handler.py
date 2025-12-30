@@ -58,8 +58,8 @@ if TYPE_CHECKING:
         AnchorContext,
         PageProjection,
     )
+    from rock_paper_sync.annotations.domain.stroke_cluster import StrokeCluster
     from rock_paper_sync.annotations.services.crdt_service import CrdtService
-    from rock_paper_sync.annotations.stroke_cluster import StrokeCluster
     from rock_paper_sync.layout import DeviceGeometry, LayoutContext
     from rock_paper_sync.ocr.integration import OCRProcessor
 
@@ -511,7 +511,7 @@ class StrokeHandler:
         Returns:
             List of StrokeCluster objects with CRDT context
         """
-        from rock_paper_sync.annotations.stroke_cluster import StrokeCluster
+        from rock_paper_sync.annotations.domain.stroke_cluster import StrokeCluster
 
         clusters = StrokeCluster.from_rm_file(rm_file_path, distance_threshold)
         logger.debug(f"Detected {len(clusters)} stroke cluster(s) from {rm_file_path.name}")
@@ -589,7 +589,7 @@ class StrokeHandler:
                     key = (stroke.bundle.node_id.part1, stroke.bundle.node_id.part2)
                     if key in bundle_map:
                         # Create new stroke with updated bundle reference
-                        from rock_paper_sync.annotations.stroke import Stroke
+                        from rock_paper_sync.annotations.domain.stroke import Stroke
 
                         new_stroke = Stroke(
                             stroke_id=stroke.stroke_id,
@@ -609,7 +609,7 @@ class StrokeHandler:
                     new_strokes.append(stroke)
 
             # Create migrated cluster with updated anchor
-            from rock_paper_sync.annotations.stroke_cluster import StrokeCluster
+            from rock_paper_sync.annotations.domain.stroke_cluster import StrokeCluster
 
             migrated_cluster = StrokeCluster(
                 cluster_id=cluster.cluster_id,

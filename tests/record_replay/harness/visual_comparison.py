@@ -53,7 +53,7 @@ import imagehash
 from PIL import Image
 
 from rock_paper_sync.annotations import read_annotations
-from rock_paper_sync.annotations.core_types import Rectangle
+from rock_paper_sync.annotations.core.types import Rectangle
 from tools.rmlib import RmRenderer
 
 # reMarkable page dimensions (Paper Pro)

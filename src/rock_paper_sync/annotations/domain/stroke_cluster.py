@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .common.spatial import DEFAULT_CLUSTER_THRESHOLD, cluster_bboxes_kdtree
+from ..common.spatial import DEFAULT_CLUSTER_THRESHOLD, cluster_bboxes_kdtree
 from .stroke import Stroke
 
 if TYPE_CHECKING:

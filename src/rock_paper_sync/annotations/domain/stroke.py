@@ -30,12 +30,12 @@ from typing import TYPE_CHECKING
 
 from rmscene import CrdtId, SceneLineItemBlock
 
-from .core_types import Point
+from ..core.types import Point
 
 if TYPE_CHECKING:
-    from .core_types import StrokeData
-    from .scene_adapter.bundle import StrokeBundle
-    from .scene_adapter.scene_index import SceneGraphIndex
+    from ..core.types import StrokeData
+    from ..scene_adapter.bundle import StrokeBundle
+    from ..scene_adapter.scene_index import SceneGraphIndex
 
 
 @dataclass
@@ -171,7 +171,7 @@ class Stroke:
         Returns:
             List of Stroke objects with bundle references
         """
-        from .scene_adapter.bundle import StrokeBundle
+        from ..scene_adapter.bundle import StrokeBundle
 
         # Build bundles first
         bundles = StrokeBundle.from_index(index)
@@ -197,7 +197,7 @@ class Stroke:
         Returns a StrokeData object that can be used by clustering algorithms
         and rendering code without the full CRDT context.
         """
-        from .core_types import StrokeData
+        from ..core.types import StrokeData
 
         return StrokeData(
             bounding_box=self.bounding_box,
@@ -208,7 +208,7 @@ class Stroke:
         )
 
     def __str__(self) -> str:
-        from .scene_adapter.bundle import format_crdt_id
+        from ..scene_adapter.bundle import format_crdt_id
 
         anchor_str = f"anchor={self.anchor_offset}" if self.anchor_offset else "no anchor"
         return (

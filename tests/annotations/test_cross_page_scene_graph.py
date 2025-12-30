@@ -27,12 +27,12 @@ from rmscene import (
 )
 
 from rock_paper_sync.annotations.document_model import DocumentModel
-from rock_paper_sync.annotations.merging import AnnotationMerger, MergeContext
 from rock_paper_sync.annotations.scene_graph import (
     SceneGraphIndex,
     StrokeBundle,
     validate_scene_graph,
 )
+from rock_paper_sync.annotations.services.merger import AnnotationMerger, MergeContext
 from rock_paper_sync.config import LayoutConfig
 from rock_paper_sync.generator import RemarkableGenerator
 from rock_paper_sync.layout import PAPER_PRO_MOVE

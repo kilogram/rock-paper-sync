@@ -40,7 +40,7 @@ import rmscene
 
 from rock_paper_sync.coordinate_transformer import END_OF_DOC_ANCHOR_MARKER
 
-from .core_types import Point, StrokeData
+from .core.types import Point, StrokeData
 from .scene_graph import SceneGraphIndex, StrokeBundle
 
 if TYPE_CHECKING:

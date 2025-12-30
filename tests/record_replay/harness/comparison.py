@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from rock_paper_sync.annotations import AnnotationType, read_annotations
-from rock_paper_sync.annotations.core_types import Rectangle
+from rock_paper_sync.annotations.core.types import Rectangle
 
 
 @dataclass

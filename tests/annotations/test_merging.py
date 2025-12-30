@@ -14,7 +14,7 @@ from rock_paper_sync.annotations.document_model import (
     DocumentModel,
     MigrationReport,
 )
-from rock_paper_sync.annotations.merging import (
+from rock_paper_sync.annotations.services.merger import (
     AnnotationMerger,
     MergeContext,
     MergeResult,
