@@ -1,18 +1,10 @@
 """Virtual device state for atomic cloud sync operations.
 
-This module implements the VirtualDeviceState pattern - a transient mirror of the
-intended cloud state that allows all operations (uploads, deletions, merges) to be
-staged, then applied in a single atomic root update.
+Transient mirror of intended cloud state that allows staging all operations
+(uploads, deletions, merges) before applying them in a single atomic root update.
 
-Analogous to React's Virtual DOM:
-- React: Virtual DOM → compute changes → single DOM update
-- Cloud Sync: VirtualDeviceState → compute changes → single root update
-
-This ensures:
-1. Single generation increment per multi-step operation (not 1 per step)
-2. True all-or-nothing atomicity at cloud level
-3. Zero partial failure states
-4. Safe, idempotent retry semantics
+This ensures single generation increment, all-or-nothing atomicity, and safe
+retry semantics without partial failure states.
 """
 
 import hashlib
@@ -45,9 +37,8 @@ class BlobEntry:
 class VirtualDeviceState:
     """Transient representation of intended cloud state.
 
-    Represents the files/folders we want on the device after sync completes.
-    All operations (uploads, deletes, merges) modify this state.
-    Once all operations staged, compute final root hash and apply atomically.
+    Operations (uploads, deletes, merges) modify this state. Once all operations
+    are staged, compute final root hash and apply atomically to cloud.
 
     Attributes:
         entries: Dict mapping UUID → BlobEntry for O(1) operations
@@ -73,10 +64,6 @@ class VirtualDeviceState:
     def add_or_update_document(self, doc_uuid: str, hash_of_hashes: str, num_files: int) -> None:
         """Stage a document upload or update.
 
-        Creates or updates a document entry in the virtual state. The entry
-        represents a document that has been uploaded to blob storage and is
-        ready to be merged into the root index.
-
         Args:
             doc_uuid: Document UUID
             hash_of_hashes: Hash of all files in document
@@ -94,9 +81,6 @@ class VirtualDeviceState:
     def delete_document(self, doc_uuid: str) -> bool:
         """Stage a document deletion.
 
-        Removes a document entry from the virtual state, representing the
-        deletion of that document from the cloud.
-
         Args:
             doc_uuid: Document UUID to delete
 
@@ -112,15 +96,11 @@ class VirtualDeviceState:
     def compute_final_hash(self) -> str:
         """Compute root hash from staged entries.
 
-        Computes the root hash by:
-        1. Sorting entries by entry_name
-        2. Converting each entry to index line format
-        3. Computing SHA256 of the resulting index content
-
-        This is a pure function - same entries always produce same hash.
+        Pure function: sorts entries by entry_name, converts to index format,
+        and computes SHA256. Same entries always produce same hash.
 
         Returns:
-            Root hash if entries would change, None if unchanged
+            Root hash of staged entries
         """
         # Build index content (same as sync_v3.upload_index)
         lines = [SCHEMA_VERSION]
@@ -134,9 +114,6 @@ class VirtualDeviceState:
 
     def has_changes(self) -> bool:
         """Check if virtual state differs from original cloud state.
-
-        Compares the hash of the virtual state against the original cloud
-        hash to determine if any changes have been staged.
 
         Returns:
             True if virtual state has changes from original, False if unchanged
