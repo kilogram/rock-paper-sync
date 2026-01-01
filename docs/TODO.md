@@ -21,12 +21,12 @@ Note: CRDT format utilities were extracted to `crdt_format.py` module
 
 ## Extract RmFileExtractor
 
-**Files:** `generator.py`, `document_model.py`, `converter.py`, `layout/context.py`
+**Files:** `generator.py`, `document_model.py`, `annotation_sync_helper.py`, `layout/context.py`
 
 Consolidate .rm file reading logic scattered across modules:
 - `generator.py:_extract_text_blocks_from_rm()`
 - `document_model.py:from_rm_files()`
-- `converter.py:_build_annotation_map()` setup
+- `annotation_sync_helper.py:build_annotation_map()` setup
 - `layout/context.py:from_rm_file()`
 
 Proposed interface:
@@ -39,18 +39,21 @@ class RmFileExtractor:
 
 ---
 
-## Extract AnnotationStore from DocumentModel
+## ✅ Extract AnnotationStore from DocumentModel (COMPLETED)
 
-**File:** `annotations/document_model.py` (1437 lines)
+**Status:** ✅ COMPLETED
 
-DocumentModel has mixed responsibilities:
-- Paragraph/content storage (keep)
-- `project_to_pages()` (keep)
-- `DocumentAnnotation` storage and retrieval (extract)
-- `_assign_stroke_clusters()` logic (extract)
-- `get_annotation_clusters()` (extract)
+**Implementation:**
+- Created `annotations/model/annotation_store.py` (~230 lines)
+- DocumentModel now has `annotation_store` field (composition)
+- `get_annotation_clusters()` delegates to annotation_store
+- `_find_anchor_position()` delegates to annotation_store
+- All 922 tests passing, backwards compatible
 
-Proposed extraction to `annotations/model/annotation_store.py`.
+**Extracted to AnnotationStore:**
+- `_assign_stroke_clusters()` → `AnnotationStore._assign_stroke_clusters()`
+- `get_annotation_clusters()` → `AnnotationStore.get_clusters()`
+- `_find_anchor_position()` → `AnnotationStore.find_anchor_position()`
 
 ---
 

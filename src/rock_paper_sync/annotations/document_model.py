@@ -44,6 +44,7 @@ from .core.types import Point, StrokeData
 from .scene_graph import SceneGraphIndex, StrokeBundle
 
 if TYPE_CHECKING:
+    from rock_paper_sync.annotations.model import AnnotationStore
     from rock_paper_sync.layout import DeviceGeometry, LayoutContext, WordWrapLayoutEngine
     from rock_paper_sync.parser import ContentBlock
 
@@ -715,6 +716,10 @@ class DocumentModel:
     full_text: str = ""
     annotations: list[DocumentAnnotation] = field(default_factory=list)
 
+    # Annotation store (composition - Phase 2 of AnnotationStore extraction)
+    # Initially None for backwards compatibility; populated by from_rm_files()
+    annotation_store: AnnotationStore | None = None
+
     # Layout configuration
     geometry: DeviceGeometry | None = None
     lines_per_page: int = 33
@@ -1018,6 +1023,16 @@ class DocumentModel:
         # Assign spatial clusters to stroke annotations
         model._assign_stroke_clusters()
 
+        # Create AnnotationStore with clustered annotations (Phase 3 migration)
+        # Note: clustering already done above, so cluster_strokes=False
+        from rock_paper_sync.annotations.model import AnnotationStore
+
+        model.annotation_store = AnnotationStore.from_annotations(
+            annotations=model.annotations,
+            full_text=full_text,
+            cluster_strokes=False,  # Already clustered by _assign_stroke_clusters()
+        )
+
         return model
 
     @classmethod
@@ -1167,7 +1182,14 @@ class DocumentModel:
         Unclustered annotations are returned as single-element lists.
 
         Used by both OCR processing and annotation reanchoring.
+
+        Note: Delegates to annotation_store.get_clusters() when available.
         """
+        # Delegate to annotation_store if available (Phase 2+ migration)
+        if self.annotation_store is not None:
+            return self.annotation_store.get_clusters()
+
+        # Fallback to legacy implementation
         clusters: dict[str, list[DocumentAnnotation]] = {}
         unclustered: list[DocumentAnnotation] = []
 
@@ -1422,7 +1444,15 @@ class DocumentModel:
         return pages
 
     def _find_anchor_position(self, anchor: AnchorContext) -> int | None:
-        """Find character position of an anchor in the document."""
+        """Find character position of an anchor in the document.
+
+        Note: Delegates to annotation_store.find_anchor_position() when available.
+        """
+        # Delegate to annotation_store if available (Phase 4 migration)
+        if self.annotation_store is not None:
+            return self.annotation_store.find_anchor_position(anchor)
+
+        # Fallback to legacy implementation
         # Try exact match first
         pos = self.full_text.find(anchor.text_content)
         if pos != -1:
