@@ -102,13 +102,16 @@ uv run pytest --cov=src/rock_paper_sync --cov-report=term-missing
 **IMPORTANT: Never amend commits**
 - Create new commits instead of amending
 - Let the user handle fixups and rebasing
-- Pre-commit hooks may modify files - they will block commit, so they should be
-  included in the intended commit.
 - Run lint and type checks before committing:
   ```bash
   uv run ruff check <files>
   uv run python -m py_compile <files>
   ```
+
+**Pre-commit hook behavior:**
+- When pre-commit hooks fail and modify files (e.g., ruff-format), the commit is **aborted**
+- Do NOT use `git commit --amend` (there's nothing to amend - the commit was rejected)
+- Instead: `git add <modified files>` then `git commit` again (same message)
 
 ### Adding Features
 
