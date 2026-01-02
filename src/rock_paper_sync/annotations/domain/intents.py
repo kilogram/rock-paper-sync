@@ -11,6 +11,24 @@ Key design principles:
 2. The opaque_handle field carries Layer 2 data without Layer 1 knowing its type
 3. PageTransformPlan is the ONLY input to PageTransformExecutor.execute()
 
+Handler Placement Types
+-----------------------
+Handlers return one of two placement types from apply_to_page():
+
+- AbsolutePosition: Block with fully-adjusted coordinates (highlights).
+  Ready for direct injection into output.
+
+- CrdtRelativePosition: Block with semantic character offset (strokes).
+  Requires CRDT transformation by executor because the anchor offset
+  depends on how RootTextBlock is generated (TEXT_BASE_ITEM_ID).
+
+This distinction exists because:
+1. Highlights use rectangle coordinates - handler can fully adjust them
+2. Strokes use TreeNodeBlock anchors pointing into RootTextBlock's CrdtSequence
+3. The CRDT anchor ID = semantic_offset + TEXT_BASE_ITEM_ID
+4. TEXT_BASE_ITEM_ID is controlled by executor's structural block generation
+5. Keeping handlers unaware of CRDT mechanics reduces coupling
+
 Example:
     # In domain code (generator.py or similar):
     plan = PageTransformPlan(
@@ -33,6 +51,58 @@ Example:
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+# =============================================================================
+# Handler Placement Results
+# =============================================================================
+# These types are returned by handler.apply_to_page() methods.
+# The union type allows handlers to express whether their result needs
+# further CRDT transformation or is ready for direct injection.
+
+
+@dataclass(frozen=True)
+class AbsolutePosition:
+    """Placement with fully-adjusted coordinates - ready for injection.
+
+    Used by highlights where the handler can fully relocate the block
+    by adjusting rectangle coordinates. No further transformation needed.
+
+    Attributes:
+        block: The adjusted annotation block, ready for output
+    """
+
+    block: Any
+
+
+@dataclass(frozen=True)
+class CrdtRelativePosition:
+    """Placement with semantic offset - needs CRDT transformation.
+
+    Used by strokes where the TreeNodeBlock anchor must be updated.
+    The executor transforms: crdt_offset = semantic_offset + TEXT_BASE_ITEM_ID
+
+    Why this split exists:
+    - TEXT_BASE_ITEM_ID is coupled to how executor generates RootTextBlock
+    - If handler did this, it would depend on executor internals
+    - Keeping handlers unaware of CRDT mechanics reduces coupling
+
+    Attributes:
+        block: The stroke block (coordinates unchanged - relative to anchor)
+        semantic_offset: Character offset in page text (not CRDT offset)
+        tree_node: TreeNodeBlock to clone with new anchor
+        scene_group_item: Associated SceneGroupItemBlock
+        scene_tree_block: Associated SceneTreeBlock
+    """
+
+    block: Any
+    semantic_offset: int
+    tree_node: Any  # TreeNodeBlock
+    scene_group_item: Any  # SceneGroupItemBlock
+    scene_tree_block: Any  # SceneTreeBlock
+
+
+# Union type for handler apply_to_page() return values
+HandlerPlacement = AbsolutePosition | CrdtRelativePosition
 
 
 @dataclass(frozen=True)

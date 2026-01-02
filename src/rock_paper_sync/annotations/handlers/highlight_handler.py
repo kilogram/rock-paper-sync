@@ -46,6 +46,7 @@ from rock_paper_sync.transform import (
 if TYPE_CHECKING:
     from typing import Any
 
+    from rock_paper_sync.annotations.domain.intents import AbsolutePosition
     from rock_paper_sync.layout import DeviceGeometry, LayoutContext, WordWrapLayoutEngine
 
 logger = logging.getLogger(__name__)
@@ -712,13 +713,15 @@ class HighlightHandler:
         old_text: str | None = None,
         old_origin: tuple[float, float] | None = None,
         crdt_base_id: int = 16,
-    ) -> "Any | None":
+    ) -> "AbsolutePosition | None":
         """Apply a highlight annotation to a target page.
 
         This is the unified interface for placing highlights on pages.
         Uses delta-based relocation when old_text is available (preserves
-        pixel-perfect positions), otherwise falls back to projection-based
-        positioning.
+        pixel-perfect positions).
+
+        Returns AbsolutePosition because highlights have fully-adjusted
+        rectangle coordinates - no further CRDT transformation needed.
 
         Args:
             block: SceneGlyphItemBlock containing highlight
@@ -732,11 +735,13 @@ class HighlightHandler:
             crdt_base_id: Base ID from RootTextBlock for CRDT offset calculation
 
         Returns:
-            Adjusted block or None if highlight can't be placed
+            AbsolutePosition with adjusted block, or None if can't be placed
         """
+        from rock_paper_sync.annotations.domain.intents import AbsolutePosition
+
         if old_text and old_origin:
             # Use delta-based relocation (preserves pixel-perfect positions)
-            return self.relocate(
+            adjusted = self.relocate(
                 block,
                 old_text,
                 page_text,
@@ -746,8 +751,11 @@ class HighlightHandler:
                 geometry,
                 crdt_base_id,
             )
+            if adjusted:
+                return AbsolutePosition(block=adjusted)
+            return None
 
         # No old_text available - return block unchanged
         # This is an edge case (source .rm file missing/corrupt)
         logger.warning("No old_text available for highlight relocation, keeping original position")
-        return block
+        return AbsolutePosition(block=block)

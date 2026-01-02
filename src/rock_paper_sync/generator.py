@@ -419,9 +419,8 @@ class RemarkableGenerator:
                         except Exception as e:
                             logger.warning(f"Could not get old text from {source_rm_path}: {e}")
 
-                # Use unified apply_to_page - handles both delta-based relocation
-                # (when old_text available) and projection-based fallback
-                adjusted_block = self._highlight_handler.apply_to_page(
+                # Use unified apply_to_page - returns AbsolutePosition with adjusted block
+                result = self._highlight_handler.apply_to_page(
                     block,
                     page_text,
                     new_origin,
@@ -433,12 +432,12 @@ class RemarkableGenerator:
                     crdt_base_id=16,
                 )
 
-                if adjusted_block:
-                    ctx.annotations.append(adjusted_block)
+                if result:
+                    ctx.annotations.append(result.block)
 
             elif "Line" in block_type:
-                # Stroke - use unified apply_to_page interface
-                adjusted_block, tree_node_info = self._stroke_handler.apply_to_page(
+                # Stroke - returns CrdtRelativePosition with semantic offset
+                result = self._stroke_handler.apply_to_page(
                     block,
                     page_text,
                     self.geometry,
@@ -448,18 +447,26 @@ class RemarkableGenerator:
                     scene_tree_block=doc_anno.original_scene_tree_block,
                 )
 
-                ctx.annotations.append(adjusted_block)
+                if result:
+                    ctx.annotations.append(result.block)
 
-                if tree_node_info:
+                    # Build tree_node_info tuple for later CRDT transformation
+                    tree_node = result.tree_node
                     node_id = (
-                        tree_node_info[0].group.node_id
-                        if hasattr(tree_node_info[0], "group") and tree_node_info[0].group
+                        tree_node.group.node_id
+                        if hasattr(tree_node, "group") and tree_node.group
                         else None
                     )
                     logger.debug(
                         f"Adding to ctx.tree_nodes for page {projection.page_index}: "
-                        f"node_id={node_id}, target_offset={tree_node_info[1]}, "
+                        f"node_id={node_id}, target_offset={result.semantic_offset}, "
                         f"cluster={doc_anno.cluster_id or 'none'}"
+                    )
+                    tree_node_info = (
+                        tree_node,
+                        result.semantic_offset,
+                        result.scene_group_item,
+                        result.scene_tree_block,
                     )
                     ctx.tree_nodes.append(tree_node_info)
 

@@ -58,10 +58,37 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# =============================================================================
+# ARCHITECTURE NOTE: Handler/Executor Responsibility Split
+# =============================================================================
+#
+# Annotation handlers (HighlightHandler, StrokeHandler) return different types
+# from apply_to_page() reflecting their different needs:
+#
+# - AbsolutePosition: Highlights with fully-adjusted rectangle coordinates.
+#   Ready for direct injection. No CRDT transformation needed.
+#
+# - CrdtRelativePosition: Strokes with semantic character offset.
+#   Requires CRDT transformation: crdt_offset = semantic_offset + TEXT_BASE_ITEM_ID
+#
+# Why this split exists:
+# 1. Highlights use mutable rectangle coordinates - handler can fully adjust them
+# 2. Strokes use TreeNodeBlock anchors pointing into RootTextBlock's CrdtSequence
+# 3. TEXT_BASE_ITEM_ID (below) is coupled to how we generate RootTextBlock
+# 4. If RootTextBlock generation changes, only executor code needs to update
+# 5. Keeping handlers unaware of CRDT mechanics reduces coupling
+#
+# See intents.py for the HandlerPlacement union type documentation.
+# =============================================================================
+
 # Base item ID for text CrdtSequenceItem.
 # When generating RootTextBlock, we use item_id=CrdtId(1, TEXT_BASE_ITEM_ID).
-# Anchor offsets must include this base to correctly map character positions
+# Stroke anchors must include this base to correctly map character positions
 # to CrdtIds in build_anchor_pos().
+#
+# This constant is the reason StrokeHandler returns CrdtRelativePosition
+# instead of fully-adjusted blocks: the handler shouldn't know about this
+# executor-controlled value.
 TEXT_BASE_ITEM_ID = 16
 
 

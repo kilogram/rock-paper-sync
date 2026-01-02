@@ -53,6 +53,7 @@ from rock_paper_sync.layout import DeviceGeometry
 
 if TYPE_CHECKING:
     from rock_paper_sync.annotations.document_model import PageProjection
+    from rock_paper_sync.annotations.domain.intents import CrdtRelativePosition
     from rock_paper_sync.annotations.domain.stroke_cluster import StrokeCluster
     from rock_paper_sync.annotations.services.crdt_service import CrdtService
     from rock_paper_sync.layout import LayoutContext
@@ -242,29 +243,30 @@ class StrokeHandler:
     def relocate(
         self,
         block,
-        old_text: str,
-        new_text: str,
-        old_origin: tuple[float, float],
-        new_origin: tuple[float, float],
-        layout_engine,
-        geometry,
-        crdt_base_id: int | None = None,
+        old_text: str,  # noqa: ARG002
+        new_text: str,  # noqa: ARG002
+        old_origin: tuple[float, float],  # noqa: ARG002
+        new_origin: tuple[float, float],  # noqa: ARG002
+        layout_engine,  # noqa: ARG002
+        geometry,  # noqa: ARG002
+        crdt_base_id: int | None = None,  # noqa: ARG002
     ):
         """Relocate stroke annotation block (pass-through for coordinates).
 
         Strokes use anchor-relative positioning via TreeNodeBlocks, NOT absolute
         coordinates. The SceneLineItemBlock coordinates are relative to the anchor
-        and don't need transformation. The actual relocation happens via
-        TreeNodeBlock reanchoring (see reanchor_tree_node method).
+        and don't need transformation.
 
-        This pass-through preserves the original pixel-perfect stroke coordinates
-        while the TreeNodeBlock anchor is updated separately to position the
-        stroke correctly on the new page.
+        The actual repositioning flow is:
+        1. apply_to_page() calculates target offset via _calculate_anchor_offset()
+        2. Executor calls CrdtService.reanchor_bundle() to clone with new offset
+
+        This pass-through preserves the original pixel-perfect stroke coordinates.
 
         Args:
             block: Raw rmscene SceneLineItemBlock
-            old_text: Page text before modification (unused for coordinates)
-            new_text: Page text after modification (unused for coordinates)
+            old_text: Page text before modification (unused)
+            new_text: Page text after modification (unused)
             old_origin: Origin of old text block (unused)
             new_origin: Origin of new text block (unused)
             layout_engine: Layout engine (unused)
@@ -275,48 +277,10 @@ class StrokeHandler:
             Block unchanged - stroke positioning is via TreeNodeBlock anchor
         """
         # Stroke coordinates are relative to their TreeNodeBlock anchor.
-        # The anchor is updated via reanchor_tree_node(), not here.
+        # Anchor offset is calculated via apply_to_page(), then executor
+        # calls CrdtService.reanchor_bundle() to clone with new offset.
         # Returning the block unchanged preserves pixel-perfect stroke paths.
         return block
-
-    def reanchor_tree_node(
-        self,
-        tree_node: TreeNodeBlock,
-        anchor_context: AnchorContext,
-        page_text: str,
-        geometry: DeviceGeometry | None = None,
-    ) -> tuple[TreeNodeBlock, int]:
-        """Reanchor a TreeNodeBlock to a new position in page text.
-
-        This method owns the anchor resolution logic for strokes. Given a
-        TreeNodeBlock and its anchor context, it finds the correct character
-        offset in the page text and creates a reanchored TreeNodeBlock.
-
-        Args:
-            tree_node: Original TreeNodeBlock with anchor to update
-            anchor_context: Context with text content for anchor resolution
-            page_text: Text content of the target page
-            geometry: Optional device geometry for Y-position fallback
-
-        Returns:
-            Tuple of (reanchored_tree_node, target_offset)
-        """
-        from rock_paper_sync.annotations.services.crdt_service import CrdtService
-
-        # Calculate target offset in page text using full anchor resolution
-        target_offset = self._calculate_anchor_offset(anchor_context, page_text, geometry)
-
-        # Create reanchored tree node via CRDT service
-        crdt_service = CrdtService()
-        reanchored_node = crdt_service.clone_tree_node_with_anchor(tree_node, target_offset)
-
-        anchor_text = anchor_context.text_content or ""
-        logger.debug(
-            f"Reanchored TreeNodeBlock: target_offset={target_offset}, "
-            f"anchor_text='{anchor_text[:30]}...'"
-        )
-
-        return reanchored_node, target_offset
 
     def _calculate_anchor_offset(
         self,
@@ -484,13 +448,17 @@ class StrokeHandler:
         tree_node: TreeNodeBlock | None = None,
         scene_group_item: Any | None = None,
         scene_tree_block: Any | None = None,
-    ) -> tuple[Any, tuple | None]:
+    ) -> CrdtRelativePosition | None:
         """Apply a stroke annotation to a target page.
 
         This is the unified interface for placing strokes on pages. Unlike
         highlights, stroke blocks don't need coordinate adjustment - they are
         relative to their parent anchor. The main work is calculating where
         the TreeNodeBlock anchor should point.
+
+        Returns CrdtRelativePosition because strokes need CRDT transformation:
+        the executor must add TEXT_BASE_ITEM_ID to the semantic offset to get
+        the actual CRDT anchor ID.
 
         Args:
             block: SceneLineItemBlock containing stroke points
@@ -502,25 +470,30 @@ class StrokeHandler:
             scene_tree_block: Optional SceneTreeBlock for tree node
 
         Returns:
-            Tuple of (adjusted_block, tree_node_info) where tree_node_info is
-            (tree_node, target_offset, scene_group_item, scene_tree_block) or None
+            CrdtRelativePosition with semantic offset, or None if no tree_node
         """
-        # Strokes don't need block coordinate adjustment - they're relative to anchor
-        adjusted_block = block
+        from rock_paper_sync.annotations.domain.intents import CrdtRelativePosition
 
-        tree_node_info = None
-        if tree_node:
-            # Calculate target offset in page text
-            target_offset = self._calculate_anchor_offset(anchor_context, page_text, geometry)
-            tree_node_info = (tree_node, target_offset, scene_group_item, scene_tree_block)
+        if not tree_node:
+            # No tree node means we can't place this stroke properly
+            return None
 
-            anchor_text = anchor_context.text_content or ""
-            logger.debug(
-                f"Stroke apply_to_page: target_offset={target_offset}, "
-                f"anchor_text='{anchor_text[:30]}...'"
-            )
+        # Calculate target offset in page text (semantic, not CRDT)
+        target_offset = self._calculate_anchor_offset(anchor_context, page_text, geometry)
 
-        return adjusted_block, tree_node_info
+        anchor_text = anchor_context.text_content or ""
+        logger.debug(
+            f"Stroke apply_to_page: target_offset={target_offset}, "
+            f"anchor_text='{anchor_text[:30]}...'"
+        )
+
+        return CrdtRelativePosition(
+            block=block,
+            semantic_offset=target_offset,
+            tree_node=tree_node,
+            scene_group_item=scene_group_item,
+            scene_tree_block=scene_tree_block,
+        )
 
     # =========================================================================
     # Cluster-based Interface (for migration)
