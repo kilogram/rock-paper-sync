@@ -149,7 +149,8 @@ class TestSyncCommand:
         result = runner.invoke(cli.main, ["--config", str(config_file), "sync"])
 
         assert result.exit_code == 0
-        assert "Synced 2/2" in result.output or "Synced 2 / 2" in result.output.replace(" ", "")
+        # Bidirectional sync outputs "Pushed X/Y" in push phase
+        assert "Pushed 2/2" in result.output or "Pushed 2 / 2" in result.output.replace(" ", "")
 
     def test_sync_dry_run(
         self, runner: CliRunner, config_file: Path, temp_vault: Path, mock_cloud_sync

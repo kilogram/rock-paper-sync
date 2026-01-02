@@ -177,8 +177,16 @@ See `docs/MULTI_VAULT.md` for vault configuration details and examples.
 - Automatic cleanup (7-day retention)
 - 668 tests passing
 
+### ✅ Milestone 5: Bidirectional Sync (Core)
+- Pull sync: annotations from device → markdown
+- Highlights rendered as `==text==`, strokes as footnotes
+- Unified `sync` command (pull-first by default)
+- Orphan handling via HTML comments + DB tracking
+- `push` command deprecated (alias for `sync --direction push`)
+- 1036 tests passing
+
 ### 🔮 Future Milestones (See `docs/PRODUCT_ROADMAP.md`)
-- **Milestone 5**: Bidirectional Sync (device → vault, conflict resolution)
+- **Milestone 5.5**: Orphan Layer Management (hidden .rm layer for orphans)
 - **Milestone 6**: Zero-UI Experience (daemon, auto-sync, self-healing)
 - **Milestone 7**: Layer Architecture (multi-layer support, user layer preservation)
 - **Milestone 8**: Advanced OCR (margin notes → footnotes, inline additions)

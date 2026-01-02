@@ -5,9 +5,13 @@ Handles all annotation-related operations for the sync engine including:
 - Mapping annotations to markdown paragraphs
 - Updating annotation markers in markdown files
 - OCR processing and correction detection
+- Pull sync annotation change detection (M5)
 """
 
+import hashlib
 import logging
+import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from .annotation_markers_v2 import add_annotation_markers_aligned
@@ -17,7 +21,20 @@ from .generator import RemarkableGenerator
 from .layout import LayoutContext
 from .ocr.integration import OCRProcessor
 from .rm_cloud_sync import RmCloudSync
-from .state import StateManager
+from .state import PullState, StateManager
+
+
+@dataclass
+class AnnotationChange:
+    """Detected annotation change from device for pull sync (M5)."""
+
+    vault_name: str
+    obsidian_path: str
+    remarkable_uuid: str
+    change_type: str  # 'new', 'modified', 'unchanged'
+    current_annotation_hash: str
+    previous_annotation_hash: str | None
+
 
 logger = logging.getLogger("rock_paper_sync.annotation_sync_helper")
 
@@ -425,4 +442,154 @@ class AnnotationSyncHelper:
 
         logger.info(
             f"Updated {len(annotation_map)} annotation markers in {vault_name}:{relative_path}"
+        )
+
+    # Pull sync methods (M5)
+
+    def compute_annotation_hash(self, rm_files: list[Path | None]) -> str:
+        """Compute a hash of all annotation UUIDs from .rm files.
+
+        Used for pull sync change detection. The hash changes when annotations
+        are added, removed, or modified on the device.
+
+        Args:
+            rm_files: List of .rm file paths (may contain None for missing pages)
+
+        Returns:
+            SHA-256 hash of sorted annotation UUIDs
+        """
+        from rock_paper_sync.annotations.document_model import DocumentModel
+        from rock_paper_sync.layout import DEFAULT_DEVICE
+
+        # Extract annotation UUIDs from all .rm files
+        valid_files = [f for f in rm_files if f and f.exists()]
+        if not valid_files:
+            return hashlib.sha256(b"no-annotations").hexdigest()
+
+        try:
+            document_model = DocumentModel.from_rm_files(valid_files, DEFAULT_DEVICE)
+
+            # Collect all annotation UUIDs
+            annotation_ids = []
+            for annotation in document_model.annotations:
+                annotation_ids.append(annotation.annotation_id)
+
+            # Sort for deterministic hash
+            annotation_ids.sort()
+
+            # Compute hash
+            hash_input = "\n".join(annotation_ids).encode("utf-8")
+            return hashlib.sha256(hash_input).hexdigest()
+
+        except Exception as e:
+            logger.warning(f"Failed to compute annotation hash: {e}")
+            return hashlib.sha256(b"error").hexdigest()
+
+    def detect_annotation_changes(self, vault_name: str | None = None) -> list[AnnotationChange]:
+        """Detect annotation changes from device for pull sync.
+
+        Compares current annotation hashes against stored pull state to find
+        documents with new or modified annotations.
+
+        Args:
+            vault_name: Optional vault name to filter by
+
+        Returns:
+            List of AnnotationChange records for documents with changes
+        """
+        changes = []
+
+        # Get all synced files
+        synced_files = self.state.get_all_synced_files(vault_name)
+
+        # Pre-fetch cloud state for efficiency
+        _, _, current_generation = self.cloud_sync.get_root_state()
+
+        for sync_record in synced_files:
+            # Check if cloud has changed since last pull
+            pull_state = self.state.get_pull_state(
+                sync_record.vault_name, sync_record.obsidian_path
+            )
+
+            # Get current annotation state from device
+            try:
+                page_uuids = self.cloud_sync.get_existing_page_uuids(sync_record.remarkable_uuid)
+                if not page_uuids:
+                    continue
+
+                # Download .rm files to compute hash
+                temp_dir = self.cache_dir / "pull" / sync_record.remarkable_uuid
+                rm_files = self.cloud_sync.download_page_rm_files(
+                    sync_record.remarkable_uuid, page_uuids, temp_dir
+                )
+
+                current_hash = self.compute_annotation_hash(rm_files)
+
+                # Compare to stored state
+                if pull_state is None:
+                    # First pull for this file
+                    change_type = "new"
+                    previous_hash = None
+                elif current_hash != pull_state.last_annotation_hash:
+                    # Annotations changed
+                    change_type = "modified"
+                    previous_hash = pull_state.last_annotation_hash
+                else:
+                    # No changes
+                    continue
+
+                changes.append(
+                    AnnotationChange(
+                        vault_name=sync_record.vault_name,
+                        obsidian_path=sync_record.obsidian_path,
+                        remarkable_uuid=sync_record.remarkable_uuid,
+                        change_type=change_type,
+                        current_annotation_hash=current_hash,
+                        previous_annotation_hash=previous_hash,
+                    )
+                )
+
+                logger.info(
+                    f"Detected {change_type} annotations for "
+                    f"{sync_record.vault_name}:{sync_record.obsidian_path}"
+                )
+
+            except Exception as e:
+                logger.warning(
+                    f"Failed to check annotation changes for "
+                    f"{sync_record.vault_name}:{sync_record.obsidian_path}: {e}"
+                )
+                continue
+
+        return changes
+
+    def update_pull_state(
+        self,
+        vault_name: str,
+        obsidian_path: str,
+        remarkable_uuid: str,
+        annotation_hash: str,
+        rm_files_hash: str | None = None,
+    ) -> None:
+        """Update pull state after successful annotation pull.
+
+        Args:
+            vault_name: Name of the vault
+            obsidian_path: Relative path in vault
+            remarkable_uuid: Document UUID
+            annotation_hash: Current annotation hash
+            rm_files_hash: Optional hash of cached .rm files
+        """
+        pull_state = PullState(
+            vault_name=vault_name,
+            obsidian_path=obsidian_path,
+            remarkable_uuid=remarkable_uuid,
+            last_annotation_hash=annotation_hash,
+            last_pull_time=int(time.time()),
+            last_rm_files_hash=rm_files_hash,
+        )
+        self.state.update_pull_state(pull_state)
+        logger.debug(
+            f"Updated pull state for {vault_name}:{obsidian_path} "
+            f"(hash={annotation_hash[:8]}...)"
         )

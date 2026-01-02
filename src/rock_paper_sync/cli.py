@@ -83,18 +83,32 @@ def main(ctx: click.Context, config: str, verbose: bool) -> None:
 
 
 @main.command()
-@click.option("--dry-run", is_flag=True, help="Preview changes without uploading")
+@click.option("--dry-run", is_flag=True, help="Preview changes without modifying files")
 @click.option("--vault", "-V", help="Sync specific vault only (by name)")
+@click.option(
+    "--direction",
+    type=click.Choice(["push", "pull", "both"]),
+    default="both",
+    help="Sync direction: push (to device), pull (from device), or both (default)",
+)
 @click.pass_context
-def sync(ctx: click.Context, dry_run: bool, vault: str | None) -> None:
-    """Sync all changed files once.
+def sync(ctx: click.Context, dry_run: bool, vault: str | None, direction: str) -> None:
+    """Bidirectional sync between Obsidian and reMarkable.
 
-    Scans the configured vaults for files that have changed since the last sync
-    and uploads them to reMarkable cloud via API.
+    Default behavior (--direction both):
+    1. Pull annotations from device (highlights, strokes)
+    2. Push changed content to device
 
-    Files are skipped if their content hash hasn't changed.
+    Use --direction push for one-way sync to device only (old behavior).
+    Use --direction pull to only fetch annotations from device.
 
-    Use --vault to sync only a specific vault by name.
+    \b
+    Examples:
+        rock-paper-sync sync                    # Full bidirectional sync
+        rock-paper-sync sync --direction push   # Push only (old behavior)
+        rock-paper-sync sync --direction pull   # Pull annotations only
+        rock-paper-sync sync --vault work       # Sync specific vault
+        rock-paper-sync sync --dry-run          # Preview changes
     """
     config: AppConfig = ctx.obj["config"]
 
@@ -110,24 +124,107 @@ def sync(ctx: click.Context, dry_run: bool, vault: str | None) -> None:
             state.close()
             return
 
+    # Get vault configs to sync
+    if vault:
+        vault_configs = [v for v in config.sync.vaults if v.name == vault]
+    else:
+        vault_configs = config.sync.vaults
+
     if dry_run:
-        click.echo("Dry run mode - no documents will be uploaded")
+        click.echo("Dry run mode - no files will be modified")
+        click.echo(f"Direction: {direction}")
         if vault:
             vault_config = next(v for v in config.sync.vaults if v.name == vault)
-            click.echo(f"Would scan vault '{vault}': {vault_config.path}")
+            click.echo(f"Would sync vault '{vault}': {vault_config.path}")
         else:
-            click.echo(f"Would scan {len(config.sync.vaults)} vault(s):")
+            click.echo(f"Would sync {len(config.sync.vaults)} vault(s):")
             for v in config.sync.vaults:
                 folder_note = f" -> {v.remarkable_folder}" if v.remarkable_folder else " -> root"
                 click.echo(f"  - {v.name}: {v.path}{folder_note}")
-        click.echo(f"Would upload to: {config.cloud.base_url}")
         state.close()
         return
 
+    # Phase 1: Pull (if direction is 'both' or 'pull')
+    if direction in ("both", "pull"):
+        click.echo("\n--- Pull Phase: Fetching annotations from device ---")
+        _run_pull_sync(config, state, vault_configs, dry_run)
+
+    # Phase 2: Push (if direction is 'both' or 'push')
+    if direction in ("both", "push"):
+        click.echo("\n--- Push Phase: Uploading changes to device ---")
+        _run_push_sync(engine, vault, vault_configs)
+
+    state.close()
+
+
+def _run_pull_sync(
+    config: AppConfig,
+    state: StateManager,
+    vault_configs: list,
+    dry_run: bool,
+) -> None:
+    """Run pull sync phase."""
+    try:
+        from .annotation_renderer import RenderConfig
+        from .annotation_sync_helper import AnnotationSyncHelper
+        from .annotations.core.processor import AnnotationProcessor
+        from .generator import RemarkableGenerator
+        from .pull_sync import PullSyncEngine
+        from .rm_cloud_sync import RmCloudSync
+
+        # Initialize components
+        cloud_sync = RmCloudSync(config.cloud.base_url)
+        generator = RemarkableGenerator(config.layout, config.sync.fonts_dir)
+        annotation_processor = AnnotationProcessor()
+        cache_dir = config.sync.state_database.parent / "cache"
+
+        annotation_helper = AnnotationSyncHelper(
+            cloud_sync=cloud_sync,
+            state=state,
+            generator=generator,
+            annotation_processor=annotation_processor,
+            ocr_processor=None,  # OCR handled separately
+            cache_dir=cache_dir,
+        )
+
+        pull_engine = PullSyncEngine(
+            state=state,
+            cloud_sync=cloud_sync,
+            annotation_helper=annotation_helper,
+            cache_dir=cache_dir,
+            render_config=RenderConfig(),
+        )
+
+        for vault_config in vault_configs:
+            click.echo(f"\nPulling annotations for vault '{vault_config.name}'...")
+            results, stats = pull_engine.pull_vault(vault_config, dry_run=dry_run)
+
+            if stats.files_updated > 0:
+                click.echo(
+                    f"  Updated {stats.files_updated} file(s): "
+                    f"{stats.total_highlights} highlights, "
+                    f"{stats.total_strokes} strokes"
+                )
+                if stats.total_orphans > 0:
+                    click.echo(f"  {stats.total_orphans} orphaned annotation(s)")
+            else:
+                click.echo("  No annotation changes")
+
+            if stats.files_errored > 0:
+                click.echo(f"  {stats.files_errored} file(s) with errors", err=True)
+
+    except ImportError as e:
+        click.echo(f"Warning: Pull sync not available: {e}", err=True)
+    except Exception as e:
+        click.echo(f"Error during pull sync: {e}", err=True)
+
+
+def _run_push_sync(engine: "SyncEngine", vault: str | None, vault_configs: list) -> None:
+    """Run push sync phase."""
     if vault:
-        click.echo(f"Scanning vault '{vault}'...")
+        click.echo(f"\nScanning vault '{vault}'...")
     else:
-        click.echo(f"Scanning {len(config.sync.vaults)} vault(s)...")
+        click.echo(f"\nScanning {len(vault_configs)} vault(s)...")
 
     results = engine.sync_all_changed(vault_name=vault)
 
@@ -135,9 +232,9 @@ def sync(ctx: click.Context, dry_run: bool, vault: str | None) -> None:
     skipped_count = sum(1 for r in results if r.success and r.skipped)
 
     if skipped_count > 0:
-        click.echo(f"\nSynced {uploaded_count}/{len(results)} file(s), {skipped_count} unchanged")
+        click.echo(f"\nPushed {uploaded_count}/{len(results)} file(s), {skipped_count} unchanged")
     else:
-        click.echo(f"\nSynced {uploaded_count}/{len(results)} file(s)")
+        click.echo(f"\nPushed {uploaded_count}/{len(results)} file(s)")
 
     # Show results grouped by vault
     current_vault = None
@@ -154,7 +251,29 @@ def sync(ctx: click.Context, dry_run: bool, vault: str | None) -> None:
         else:
             click.echo(f"  ✗ {result.path.name}: {result.error}", err=True)
 
-    state.close()
+
+@main.command(deprecated=True)
+@click.option("--dry-run", is_flag=True, help="Preview changes without modifying files")
+@click.option("--vault", "-V", help="Sync specific vault only (by name)")
+@click.pass_context
+def push(ctx: click.Context, dry_run: bool, vault: str | None) -> None:
+    """[DEPRECATED] Push files to reMarkable device.
+
+    This command is deprecated. Use 'sync --direction push' instead.
+
+    The new 'sync' command supports bidirectional sync by default:
+    - 'sync' = pull annotations then push content (recommended)
+    - 'sync --direction push' = push only (equivalent to old 'push')
+    - 'sync --direction pull' = pull annotations only
+    """
+    click.echo(
+        "Warning: 'push' is deprecated. Use 'sync --direction push' instead.",
+        err=True,
+    )
+    click.echo("", err=True)
+
+    # Forward to sync with direction=push
+    ctx.invoke(sync, dry_run=dry_run, vault=vault, direction="push")
 
 
 @main.command()

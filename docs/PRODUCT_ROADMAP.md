@@ -1,8 +1,8 @@
 # Rock-Paper-Sync Product Roadmap
 
 > **Document Status**: Draft for Product Manager Review
-> **Last Updated**: 2026-01-01
-> **Current State**: Milestone 4 Complete (Annotation System)
+> **Last Updated**: 2026-01-02
+> **Current State**: Milestone 5 Complete (Bidirectional Sync - Core)
 
 ## Executive Summary
 
@@ -49,12 +49,25 @@ This roadmap defines the path from the current one-way sync with annotation pres
 - Stroke and highlight preservation across edits
 - OCR integration with TrOCR backend
 
+### Milestone 5: Bidirectional Sync (Core) ✅
+- Pull sync: annotations from device → markdown (highlights as `==text==`, strokes as footnotes)
+- Annotation change detection via hash comparison
+- Reanchoring with AnchorContext.resolve() (confidence-based)
+- Orphan handling: HTML comment + database tracking
+- Unified `sync` command (pull-first by default, `--direction` flag)
+- Deprecated `push` command (alias for `sync --direction push`)
+- Database schema v7 with pull_state and orphaned_annotations tables
+
+**Deferred to M5.5:**
+- HiddenLayerManager for orphan preservation in .rm files
+- Frontmatter badges for conflict state
+
 ---
 
 ## Future Milestones
 
-### Milestone 5: Bidirectional Sync
-**Goal**: Full two-way synchronization between Obsidian and reMarkable
+### Milestone 5.5: Orphan Layer Management
+**Goal**: Preserve orphaned annotations in hidden .rm file layer
 
 #### 5.1 Change Detection (Device → Vault)
 **Objective**: Detect changes made on the reMarkable device that need to sync back.

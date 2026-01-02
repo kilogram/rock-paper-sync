@@ -42,10 +42,40 @@ class SyncRecord:
     last_doc_index_hash: str | None = None  # Document index hash (schema v6)
 
 
+@dataclass
+class PullState:
+    """Record of pull sync state for a file (schema v7).
+
+    Tracks the last pulled annotation state from device for change detection.
+    """
+
+    vault_name: str
+    obsidian_path: str
+    remarkable_uuid: str
+    last_annotation_hash: str | None  # Hash of annotation UUIDs for change detection
+    last_pull_time: int | None
+    last_rm_files_hash: str | None  # Content hash of cached .rm files
+
+
+@dataclass
+class OrphanedAnnotation:
+    """Record of an orphaned annotation (schema v7).
+
+    Tracks annotations that could not be reanchored after content changes.
+    """
+
+    vault_name: str
+    obsidian_path: str
+    annotation_id: str
+    annotation_type: str  # 'highlight' or 'stroke'
+    original_anchor_text: str | None  # What the annotation was anchored to
+    orphaned_at: int
+
+
 class StateManager:
     """Manages sync state using SQLite database."""
 
-    SCHEMA_VERSION = 6  # Schema v6: Remove file_hash_with_markers, add generation tracking
+    SCHEMA_VERSION = 7  # Schema v7: Add pull_state and orphaned_annotations for M5
 
     def __init__(self, db_path: Path) -> None:
         """Initialize state manager with database at given path.
@@ -160,10 +190,68 @@ class StateManager:
                 CREATE INDEX IF NOT EXISTS idx_ocr_results_document
                 ON ocr_results(vault_name, obsidian_path);
 
-                -- Insert schema version if not exists
-                INSERT OR IGNORE INTO schema_version (version) VALUES (5);
+                -- Pull state for annotation change detection (schema v7)
+                CREATE TABLE IF NOT EXISTS pull_state (
+                    vault_name TEXT NOT NULL,
+                    obsidian_path TEXT NOT NULL,
+                    remarkable_uuid TEXT NOT NULL,
+                    last_annotation_hash TEXT,
+                    last_pull_time INTEGER,
+                    last_rm_files_hash TEXT,
+                    PRIMARY KEY (vault_name, obsidian_path)
+                ) STRICT;
+
+                -- Orphaned annotations tracking (schema v7)
+                CREATE TABLE IF NOT EXISTS orphaned_annotations (
+                    vault_name TEXT NOT NULL,
+                    obsidian_path TEXT NOT NULL,
+                    annotation_id TEXT NOT NULL,
+                    annotation_type TEXT NOT NULL,
+                    original_anchor_text TEXT,
+                    orphaned_at INTEGER NOT NULL,
+                    PRIMARY KEY (vault_name, obsidian_path, annotation_id)
+                ) STRICT;
+
+                -- Index for finding orphaned annotations by document
+                CREATE INDEX IF NOT EXISTS idx_orphaned_annotations_document
+                ON orphaned_annotations(vault_name, obsidian_path);
                 """
             )
+            # Initialize or migrate schema version
+            self._ensure_schema_version()
+
+    def _ensure_schema_version(self) -> None:
+        """Ensure schema version is set and run migrations if needed."""
+        cursor = self.conn.execute("SELECT version FROM schema_version LIMIT 1")
+        row = cursor.fetchone()
+
+        if row is None:
+            # Fresh database - set to current version
+            with self.conn:
+                self.conn.execute(
+                    "INSERT INTO schema_version (version) VALUES (?)",
+                    (self.SCHEMA_VERSION,),
+                )
+            logger.debug(f"Initialized schema version to {self.SCHEMA_VERSION}")
+        else:
+            current_version = row[0]
+            if current_version < self.SCHEMA_VERSION:
+                self._run_migrations(current_version)
+
+    def _run_migrations(self, current_version: int) -> None:
+        """Run any pending schema migrations."""
+        if current_version < 7:
+            self._migrate_to_v7()
+
+    def _migrate_to_v7(self) -> None:
+        """Migrate from v5/v6 to v7: Add pull_state and orphaned_annotations tables."""
+        logger.info("Migrating database schema to v7...")
+        with self.conn:
+            # Tables are created via CREATE IF NOT EXISTS in _ensure_schema
+            # Just update the version
+            self.conn.execute("DELETE FROM schema_version")
+            self.conn.execute("INSERT INTO schema_version (version) VALUES (7)")
+        logger.info("Database schema migrated to v7")
 
     def get_file_state(self, vault_name: str, obsidian_path: str) -> SyncRecord | None:
         """Get sync state for a file.
@@ -777,6 +865,185 @@ class StateManager:
             self._snapshot_store = SnapshotStore(self.conn, content_store)
 
         return self._snapshot_store
+
+    # Pull state methods (schema v7)
+
+    def get_pull_state(self, vault_name: str, obsidian_path: str) -> PullState | None:
+        """Get pull sync state for a file.
+
+        Args:
+            vault_name: Name of the vault
+            obsidian_path: Relative path of file in Obsidian vault
+
+        Returns:
+            PullState if file has been pulled before, None otherwise
+        """
+        cursor = self.conn.execute(
+            "SELECT * FROM pull_state WHERE vault_name = ? AND obsidian_path = ?",
+            (vault_name, obsidian_path),
+        )
+        row = cursor.fetchone()
+        if row:
+            return PullState(**dict(row))
+        return None
+
+    def update_pull_state(self, state: PullState) -> None:
+        """Insert or update pull sync state for a file.
+
+        Args:
+            state: PullState to store
+        """
+        with self.conn:
+            self.conn.execute(
+                """
+                INSERT OR REPLACE INTO pull_state
+                (vault_name, obsidian_path, remarkable_uuid, last_annotation_hash,
+                 last_pull_time, last_rm_files_hash)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    state.vault_name,
+                    state.obsidian_path,
+                    state.remarkable_uuid,
+                    state.last_annotation_hash,
+                    state.last_pull_time,
+                    state.last_rm_files_hash,
+                ),
+            )
+        logger.debug(f"Updated pull state for {state.vault_name}:{state.obsidian_path}")
+
+    def delete_pull_state(self, vault_name: str, obsidian_path: str) -> None:
+        """Delete pull state for a file.
+
+        Args:
+            vault_name: Name of the vault
+            obsidian_path: Relative path of file in Obsidian vault
+        """
+        with self.conn:
+            self.conn.execute(
+                "DELETE FROM pull_state WHERE vault_name = ? AND obsidian_path = ?",
+                (vault_name, obsidian_path),
+            )
+        logger.debug(f"Deleted pull state for {vault_name}:{obsidian_path}")
+
+    def get_all_pull_states(self, vault_name: str | None = None) -> list[PullState]:
+        """Get all pull states.
+
+        Args:
+            vault_name: Optional vault name to filter by
+
+        Returns:
+            List of all PullState records (optionally filtered by vault)
+        """
+        if vault_name:
+            cursor = self.conn.execute(
+                "SELECT * FROM pull_state WHERE vault_name = ?", (vault_name,)
+            )
+        else:
+            cursor = self.conn.execute("SELECT * FROM pull_state")
+        return [PullState(**dict(row)) for row in cursor.fetchall()]
+
+    # Orphaned annotations methods (schema v7)
+
+    def add_orphaned_annotation(self, orphan: OrphanedAnnotation) -> None:
+        """Record an orphaned annotation.
+
+        Args:
+            orphan: OrphanedAnnotation to store
+        """
+        with self.conn:
+            self.conn.execute(
+                """
+                INSERT OR REPLACE INTO orphaned_annotations
+                (vault_name, obsidian_path, annotation_id, annotation_type,
+                 original_anchor_text, orphaned_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    orphan.vault_name,
+                    orphan.obsidian_path,
+                    orphan.annotation_id,
+                    orphan.annotation_type,
+                    orphan.original_anchor_text,
+                    orphan.orphaned_at,
+                ),
+            )
+        logger.debug(
+            f"Added orphaned annotation {orphan.annotation_id} for "
+            f"{orphan.vault_name}:{orphan.obsidian_path}"
+        )
+
+    def get_orphaned_annotations(
+        self, vault_name: str, obsidian_path: str
+    ) -> list[OrphanedAnnotation]:
+        """Get all orphaned annotations for a document.
+
+        Args:
+            vault_name: Name of the vault
+            obsidian_path: Relative path of file in Obsidian vault
+
+        Returns:
+            List of OrphanedAnnotation records
+        """
+        cursor = self.conn.execute(
+            "SELECT * FROM orphaned_annotations WHERE vault_name = ? AND obsidian_path = ?",
+            (vault_name, obsidian_path),
+        )
+        return [OrphanedAnnotation(**dict(row)) for row in cursor.fetchall()]
+
+    def delete_orphaned_annotation(
+        self, vault_name: str, obsidian_path: str, annotation_id: str
+    ) -> None:
+        """Delete a specific orphaned annotation.
+
+        Args:
+            vault_name: Name of the vault
+            obsidian_path: Relative path of file in Obsidian vault
+            annotation_id: ID of the annotation to delete
+        """
+        with self.conn:
+            self.conn.execute(
+                """
+                DELETE FROM orphaned_annotations
+                WHERE vault_name = ? AND obsidian_path = ? AND annotation_id = ?
+                """,
+                (vault_name, obsidian_path, annotation_id),
+            )
+        logger.debug(
+            f"Deleted orphaned annotation {annotation_id} for {vault_name}:{obsidian_path}"
+        )
+
+    def delete_all_orphaned_annotations(self, vault_name: str, obsidian_path: str) -> None:
+        """Delete all orphaned annotations for a document.
+
+        Args:
+            vault_name: Name of the vault
+            obsidian_path: Relative path of file in Obsidian vault
+        """
+        with self.conn:
+            self.conn.execute(
+                "DELETE FROM orphaned_annotations WHERE vault_name = ? AND obsidian_path = ?",
+                (vault_name, obsidian_path),
+            )
+        logger.debug(f"Deleted all orphaned annotations for {vault_name}:{obsidian_path}")
+
+    def get_orphan_count(self, vault_name: str | None = None) -> int:
+        """Get total count of orphaned annotations.
+
+        Args:
+            vault_name: Optional vault name to filter by
+
+        Returns:
+            Count of orphaned annotations
+        """
+        if vault_name:
+            cursor = self.conn.execute(
+                "SELECT COUNT(*) FROM orphaned_annotations WHERE vault_name = ?",
+                (vault_name,),
+            )
+        else:
+            cursor = self.conn.execute("SELECT COUNT(*) FROM orphaned_annotations")
+        return cursor.fetchone()[0]
 
     def close(self) -> None:
         """Close database connection.

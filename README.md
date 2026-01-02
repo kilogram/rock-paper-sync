@@ -14,10 +14,11 @@ Generated documents appear on your reMarkable device as native notebooks with ty
 
 ## Features
 
+- **Bidirectional sync**: Push content to device, pull annotations back to markdown
 - **Multi-vault support**: Sync multiple Obsidian vaults simultaneously
 - **Optional folder organization**: Each vault can have its own folder on reMarkable
 - **Annotation preservation**: Preserves highlights and handwritten notes across content updates
-- **One-way sync**: Obsidian → reMarkable with annotation round-trip
+- **Pull-first sync**: Fetches device annotations before pushing new content
 - **Incremental sync**: Only processes changed files
 - **Folder preservation**: Mirrors Obsidian directory structure
 - **Watch mode**: Automatically syncs on file changes
@@ -116,6 +117,28 @@ rock-paper-sync sync
 ```bash
 rock-paper-sync sync --vault personal
 ```
+
+### Sync Direction Options
+
+By default, `sync` performs bidirectional sync (pull annotations first, then push content):
+
+```bash
+# Full bidirectional sync (default)
+rock-paper-sync sync
+
+# Push only (content to device, like old behavior)
+rock-paper-sync sync --direction push
+
+# Pull only (annotations from device)
+rock-paper-sync sync --direction pull
+```
+
+**What happens during sync:**
+- **Pull phase**: Fetches annotations from device and renders them into your markdown:
+  - Highlights become `==highlighted text==`
+  - Margin notes become footnotes `[^stroke-1]`
+  - Orphaned annotations (where text was deleted) are noted as HTML comments
+- **Push phase**: Uploads changed markdown content to the device
 
 ### Watch for Changes (Continuous Sync)
 
