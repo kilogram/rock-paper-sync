@@ -14,6 +14,7 @@ from rock_paper_sync.annotations.document_model import (
     DocumentModel,
     MigrationReport,
 )
+from rock_paper_sync.annotations.model import AnnotationStore
 from rock_paper_sync.annotations.services.merger import (
     AnnotationMerger,
     MergeContext,
@@ -116,11 +117,13 @@ class TestAnnotationMerger:
         annotations: list[DocumentAnnotation] | None = None,
     ) -> DocumentModel:
         """Create a DocumentModel for testing."""
+        annos = annotations or []
         return DocumentModel(
             paragraphs=[],
             content_blocks=[],
             full_text=full_text,
-            annotations=annotations or [],
+            annotations=annos,
+            annotation_store=AnnotationStore.from_annotations(annos, full_text),
             geometry=None,  # No geometry to skip layout building
         )
 
@@ -224,11 +227,13 @@ class TestAnnotationMergerIntegration:
         annotations: list[DocumentAnnotation] | None = None,
     ) -> DocumentModel:
         """Create a DocumentModel for testing."""
+        annos = annotations or []
         return DocumentModel(
             paragraphs=[],
             content_blocks=[],
             full_text=full_text,
-            annotations=annotations or [],
+            annotations=annos,
+            annotation_store=AnnotationStore.from_annotations(annos, full_text),
             geometry=None,
         )
 

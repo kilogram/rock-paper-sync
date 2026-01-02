@@ -630,6 +630,7 @@ class TestOCRIntegration:
     ):
         """Test processing annotations with mocked OCR service."""
         from rock_paper_sync.annotations.document_model import DocumentModel
+        from rock_paper_sync.annotations.model import AnnotationStore
         from rock_paper_sync.ocr.integration import OCRProcessor
         from rock_paper_sync.ocr.markers import AnnotationInfo
 
@@ -645,6 +646,7 @@ class TestOCRIntegration:
             full_text="",
             paragraphs=[],
             annotations=[],
+            annotation_store=AnnotationStore.empty(),
         )
 
         # Test that the method runs without error with empty document
@@ -1404,6 +1406,7 @@ This is the conclusion."""
         from unittest.mock import MagicMock
 
         from rock_paper_sync.annotations.document_model import DocumentModel
+        from rock_paper_sync.annotations.model import AnnotationStore
         from rock_paper_sync.ocr.integration import OCRProcessor
         from rock_paper_sync.ocr.markers import AnnotationInfo
         from rock_paper_sync.ocr.protocol import BoundingBox
@@ -1469,6 +1472,7 @@ Third paragraph."""
             full_text="",
             paragraphs=[],
             annotations=[],
+            annotation_store=AnnotationStore.empty(),
         )
 
         with patch.object(

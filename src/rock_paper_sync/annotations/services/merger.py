@@ -162,11 +162,18 @@ class AnnotationMerger:
 
         migrated_annotations: list[DocumentAnnotation] = []
 
+        # Get annotations from annotation_store (has cluster_ids) or fall back
+        old_annotations = (
+            old_model.annotation_store.annotations
+            if old_model.annotation_store
+            else old_model.annotations
+        )
+
         # Group annotations by cluster_id
         clusters: dict[str, list[int]] = {}  # cluster_id -> annotation indices
         unclustered: list[int] = []
 
-        for i, anno in enumerate(old_model.annotations):
+        for i, anno in enumerate(old_annotations):
             if anno.cluster_id:
                 clusters.setdefault(anno.cluster_id, []).append(i)
             else:
@@ -175,11 +182,11 @@ class AnnotationMerger:
         # Migrate clustered annotations (all follow the leader)
         for cluster_id, indices in clusters.items():
             leader_resolution = self._resolve_cluster_leader(
-                old_model, indices, new_model, old_layout, new_layout
+                old_model, old_annotations, indices, new_model, old_layout, new_layout
             )
 
             for idx in indices:
-                annotation = old_model.annotations[idx]
+                annotation = old_annotations[idx]
                 if leader_resolution:
                     new_annotation = self._migrate_with_resolution(
                         annotation, leader_resolution, new_model, cluster_id
@@ -201,7 +208,7 @@ class AnnotationMerger:
 
         # Migrate unclustered annotations individually
         for idx in unclustered:
-            annotation = old_model.annotations[idx]
+            annotation = old_annotations[idx]
             resolved = annotation.anchor_context.resolve(
                 old_model.full_text,
                 new_model.full_text,
@@ -225,11 +232,19 @@ class AnnotationMerger:
                 logger.warning(f"Could not resolve {annotation.annotation_type} annotation")
 
         # Create new model with migrated annotations
+        from rock_paper_sync.annotations.model import AnnotationStore
+
+        annotation_store = AnnotationStore.from_annotations(
+            annotations=migrated_annotations,
+            full_text=new_model.full_text,
+            cluster_strokes=True,
+        )
         merged_model = DocumentModel(
             paragraphs=new_model.paragraphs,
             content_blocks=new_model.content_blocks,
             full_text=new_model.full_text,
             annotations=migrated_annotations,
+            annotation_store=annotation_store,
             geometry=new_model.geometry,
             lines_per_page=new_model.lines_per_page,
             allow_paragraph_splitting=new_model.allow_paragraph_splitting,
@@ -269,6 +284,7 @@ class AnnotationMerger:
     def _resolve_cluster_leader(
         self,
         old_model: DocumentModel,
+        old_annotations: list[DocumentAnnotation],
         indices: list[int],
         new_model: DocumentModel,
         old_layout: LayoutContext | None,
@@ -281,7 +297,8 @@ class AnnotationMerger:
 
         Args:
             old_model: Source document model
-            indices: Annotation indices in old_model.annotations
+            old_annotations: Annotations list from old_model
+            indices: Annotation indices in old_annotations
             new_model: Target document model
             old_layout: Layout context for old document
             new_layout: Layout context for new document
@@ -292,7 +309,7 @@ class AnnotationMerger:
         resolutions: list[AnchorResolution] = []
 
         for idx in indices:
-            anno = old_model.annotations[idx]
+            anno = old_annotations[idx]
             resolved = anno.anchor_context.resolve(
                 old_model.full_text,
                 new_model.full_text,

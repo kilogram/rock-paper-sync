@@ -39,24 +39,6 @@ class RmFileExtractor:
 
 ---
 
-## ✅ Extract AnnotationStore from DocumentModel (COMPLETED)
-
-**Status:** ✅ COMPLETED
-
-**Implementation:**
-- Created `annotations/model/annotation_store.py` (~230 lines)
-- DocumentModel now has `annotation_store` field (composition)
-- `get_annotation_clusters()` delegates to annotation_store
-- `_find_anchor_position()` delegates to annotation_store
-- All 922 tests passing, backwards compatible
-
-**Extracted to AnnotationStore:**
-- `_assign_stroke_clusters()` → `AnnotationStore._assign_stroke_clusters()`
-- `get_annotation_clusters()` → `AnnotationStore.get_clusters()`
-- `_find_anchor_position()` → `AnnotationStore.find_anchor_position()`
-
----
-
 ## State Manager Refactoring
 
 **File:** `state.py`

@@ -1013,24 +1013,21 @@ class DocumentModel:
 
         full_text = "\n".join(full_text_parts)
 
+        # Create AnnotationStore with clustering (assigns cluster_ids to strokes)
+        from rock_paper_sync.annotations.model import AnnotationStore
+
+        annotation_store = AnnotationStore.from_annotations(
+            annotations=all_annotations,
+            full_text=full_text,
+            cluster_strokes=True,
+        )
+
         model = cls(
             paragraphs=all_paragraphs,
             full_text=full_text,
             annotations=all_annotations,
+            annotation_store=annotation_store,
             geometry=geometry,
-        )
-
-        # Assign spatial clusters to stroke annotations
-        model._assign_stroke_clusters()
-
-        # Create AnnotationStore with clustered annotations (Phase 3 migration)
-        # Note: clustering already done above, so cluster_strokes=False
-        from rock_paper_sync.annotations.model import AnnotationStore
-
-        model.annotation_store = AnnotationStore.from_annotations(
-            annotations=model.annotations,
-            full_text=full_text,
-            cluster_strokes=False,  # Already clustered by _assign_stroke_clusters()
         )
 
         return model
@@ -1056,10 +1053,13 @@ class DocumentModel:
 
         full_text = "\n".join(text_parts)
 
+        from rock_paper_sync.annotations.model import AnnotationStore
+
         return cls(
             paragraphs=paragraphs,
             full_text=full_text,
             annotations=[],
+            annotation_store=AnnotationStore.empty(full_text),
             geometry=geometry,
         )
 
@@ -1113,65 +1113,17 @@ class DocumentModel:
 
         full_text = "\n".join(text_parts)
 
+        from rock_paper_sync.annotations.model import AnnotationStore
+
         return cls(
             paragraphs=paragraphs,
             content_blocks=blocks,
             full_text=full_text,
             annotations=[],
+            annotation_store=AnnotationStore.empty(full_text),
             geometry=geometry,
             lines_per_page=geometry.lines_per_page,
             allow_paragraph_splitting=allow_paragraph_splitting,
-        )
-
-    def _assign_stroke_clusters(self) -> None:
-        """Assign cluster IDs to spatially-related stroke annotations.
-
-        Uses KDTree-based proximity clustering with DEFAULT_CLUSTER_THRESHOLD.
-        Clusters are assigned during from_rm_files() and used by both:
-        - Annotation reanchoring (via AnnotationMerger.merge)
-        - OCR processing (get_annotation_clusters)
-        """
-        import uuid
-
-        from .common.spatial import DEFAULT_CLUSTER_THRESHOLD, KDTreeProximityStrategy
-
-        # Get stroke annotations with valid stroke_data, grouped by source page
-        # Strokes on different pages should NEVER be in the same cluster
-        strokes_by_page: dict[int | None, list[tuple[int, DocumentAnnotation]]] = {}
-        for i, anno in enumerate(self.annotations):
-            if anno.annotation_type == "stroke" and anno.stroke_data:
-                page_idx = anno.source_page_idx
-                strokes_by_page.setdefault(page_idx, []).append((i, anno))
-
-        if not strokes_by_page:
-            return
-
-        total_clusters = 0
-        total_strokes = 0
-
-        # Cluster strokes separately for each source page
-        strategy = KDTreeProximityStrategy(distance_threshold=DEFAULT_CLUSTER_THRESHOLD)
-        for page_idx, stroke_annos in strokes_by_page.items():
-            total_strokes += len(stroke_annos)
-
-            if len(stroke_annos) < 2:
-                continue  # Need at least 2 strokes to form a cluster
-
-            strokes = [anno.stroke_data for _, anno in stroke_annos]
-            clusters = strategy.cluster(strokes)
-
-            # Assign cluster IDs (only for actual clusters with >1 member)
-            for cluster_indices in clusters:
-                if len(cluster_indices) > 1:
-                    cluster_id = str(uuid.uuid4())[:8]
-                    for idx in cluster_indices:
-                        anno_idx, _ = stroke_annos[idx]
-                        self.annotations[anno_idx].cluster_id = cluster_id
-                    total_clusters += 1
-
-        logger.debug(
-            f"Assigned {total_clusters} clusters to {total_strokes} stroke annotations "
-            f"across {len(strokes_by_page)} pages"
         )
 
     def get_annotation_clusters(self) -> list[list[DocumentAnnotation]]:
@@ -1182,27 +1134,10 @@ class DocumentModel:
         Unclustered annotations are returned as single-element lists.
 
         Used by both OCR processing and annotation reanchoring.
-
-        Note: Delegates to annotation_store.get_clusters() when available.
         """
-        # Delegate to annotation_store if available (Phase 2+ migration)
-        if self.annotation_store is not None:
-            return self.annotation_store.get_clusters()
-
-        # Fallback to legacy implementation
-        clusters: dict[str, list[DocumentAnnotation]] = {}
-        unclustered: list[DocumentAnnotation] = []
-
-        for anno in self.annotations:
-            if anno.cluster_id:
-                clusters.setdefault(anno.cluster_id, []).append(anno)
-            else:
-                unclustered.append(anno)
-
-        # Return multi-annotation clusters + single-annotation "clusters"
-        result = list(clusters.values())
-        result.extend([[a] for a in unclustered])
-        return result
+        if self.annotation_store is None:
+            raise ValueError("DocumentModel requires annotation_store for clustering")
+        return self.annotation_store.get_clusters()
 
     def project_to_pages(
         self,
@@ -1304,8 +1239,12 @@ class DocumentModel:
         # We use cluster_id for grouped strokes, and parent_id as fallback
 
         # Calculate original page count from source_page_idx values
+        # Use annotation_store.annotations (has cluster_ids) if available
+        annotations_to_route = (
+            self.annotation_store.annotations if self.annotation_store else self.annotations
+        )
         original_page_count = 1
-        for anno in self.annotations:
+        for anno in annotations_to_route:
             if anno.source_page_idx is not None:
                 original_page_count = max(original_page_count, anno.source_page_idx + 1)
 
@@ -1360,12 +1299,12 @@ class DocumentModel:
             return target_page_idx
 
         # Group stroke annotations by cluster_id
-        # Clusters are assigned in _assign_stroke_clusters() using spatial proximity
+        # Clusters are assigned by AnnotationStore using spatial proximity
         stroke_clusters: dict[str, list[DocumentAnnotation]] = {}
         unclustered_strokes: list[DocumentAnnotation] = []
         non_stroke_annotations: list[DocumentAnnotation] = []
 
-        for annotation in self.annotations:
+        for annotation in annotations_to_route:
             if annotation.annotation_type == "stroke":
                 if annotation.cluster_id:
                     stroke_clusters.setdefault(annotation.cluster_id, []).append(annotation)
@@ -1444,24 +1383,7 @@ class DocumentModel:
         return pages
 
     def _find_anchor_position(self, anchor: AnchorContext) -> int | None:
-        """Find character position of an anchor in the document.
-
-        Note: Delegates to annotation_store.find_anchor_position() when available.
-        """
-        # Delegate to annotation_store if available (Phase 4 migration)
-        if self.annotation_store is not None:
-            return self.annotation_store.find_anchor_position(anchor)
-
-        # Fallback to legacy implementation
-        # Try exact match first
-        pos = self.full_text.find(anchor.text_content)
-        if pos != -1:
-            return pos
-
-        # Try diff anchor
-        if anchor.diff_anchor:
-            span = anchor.diff_anchor.resolve_in(self.full_text)
-            if span:
-                return span[0]
-
-        return None
+        """Find character position of an anchor in the document."""
+        if self.annotation_store is None:
+            raise ValueError("DocumentModel requires annotation_store for anchor resolution")
+        return self.annotation_store.find_anchor_position(anchor)
