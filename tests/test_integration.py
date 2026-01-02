@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from rock_paper_sync.change_detector import ChangeDetector
 from rock_paper_sync.config import (
     AppConfig,
     CloudConfig,
@@ -272,7 +273,7 @@ class TestConfigIntegration:
         assert state.db_path.exists()
 
     def test_exclude_patterns_integration(self, integration_env):
-        """Test that exclude patterns work with find_changed_files."""
+        """Test that exclude patterns work with ChangeDetector.find_changed_files."""
         vault = integration_env["vault"]
         state = integration_env["state"]
         config = integration_env["config"]
@@ -287,9 +288,10 @@ class TestConfigIntegration:
         (vault / "notes.md").write_text("Regular note")
         (vault / "ideas.md").write_text("Ideas note")
 
-        # Find changed files with exclusions
+        # Find changed files with exclusions using ChangeDetector
+        detector = ChangeDetector(state)
         vault_config = config.sync.vaults[0]
-        changed = state.find_changed_files(
+        changed = detector.find_changed_files(
             vault_config.name,
             vault_config.path,
             vault_config.include_patterns,

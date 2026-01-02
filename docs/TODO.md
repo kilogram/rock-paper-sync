@@ -19,31 +19,30 @@ Note: CRDT format utilities were extracted to `crdt_format.py` module
 
 ---
 
-## Extract RmFileExtractor
+## ~~Extract RmFileExtractor~~ ✅ DONE
 
-**Files:** `generator.py`, `document_model.py`, `annotation_sync_helper.py`, `layout/context.py`
+**Status:** Completed 2026-01-02
 
-Consolidate .rm file reading logic scattered across modules:
-- `generator.py:_extract_text_blocks_from_rm()`
-- `document_model.py:from_rm_files()`
-- `annotation_sync_helper.py:build_annotation_map()` setup
-- `layout/context.py:from_rm_file()`
+Created `src/rock_paper_sync/rm_file_extractor.py` consolidating .rm file reading.
+Updated callers to delegate:
+- `generator.py:_extract_text_blocks_from_rm()` → delegates to RmFileExtractor
+- `layout/context.py:from_rm_file()` → delegates to RmFileExtractor
+- `coordinates.py:AnchorResolver.from_rm_file()` → delegates to RmFileExtractor
 
-Proposed interface:
-```python
-class RmFileExtractor:
-    def extract_text_blocks(self, rm_path: Path) -> list[RmTextBlock]
-    def extract_annotations(self, rm_path: Path) -> list[DocumentAnnotation]
-    def extract_scene_blocks(self, rm_path: Path) -> list[Block]
-```
+Note: `document_model.py:from_rm_files()` was not migrated as it does additional
+annotation-specific processing beyond basic extraction.
 
 ---
 
-## State Manager Refactoring
+## ~~State Manager Refactoring~~ ✅ DONE
 
-**File:** `state.py`
+**Status:** Completed 2026-01-02
 
-- Extract business logic to `ChangeDetector` class
+Created `src/rock_paper_sync/change_detector.py` extracting change detection logic.
+Updated callers to use ChangeDetector:
+- `converter.py:sync_vault()` → uses ChangeDetector for find_changed_files/find_deleted_files
+- Removed `find_changed_files()`, `find_deleted_files()`, `_is_excluded()` from state.py
+- StateManager now focuses on persistence; ChangeDetector handles business logic
 
 ---
 
@@ -121,6 +120,18 @@ Risk: Low - additive change to parser output structure.
 ---
 
 # Testing
+
+## ~~Coordinate Round-Trip Tests~~ ✅ DONE
+
+**Status:** Completed 2026-01-02
+
+Created `tests/test_coordinate_round_trip.py` with 31 tests validating:
+- DocumentPoint ↔ PageLocalPoint round-trips (page-local storage)
+- DocumentPoint ↔ TextRelativePoint round-trips (text-relative storage)
+- Character offset ↔ Position round-trips (critical for bidirectional sync)
+- Multi-page scenarios and edge cases
+
+---
 
 ## Test Coverage Gaps
 

@@ -360,6 +360,7 @@ class LayoutContext:
         """Create layout context from .rm file.
 
         Extracts text content and origin from the RootTextBlock in the file.
+        Delegates to RmFileExtractor for consolidated .rm reading.
 
         Args:
             rm_file: Path to .rm file
@@ -369,49 +370,23 @@ class LayoutContext:
         Returns:
             LayoutContext with text content and layout from the file
         """
-        import rmscene
+        from rock_paper_sync.rm_file_extractor import RmFileExtractor
 
         effective_geometry = geometry or DEFAULT_DEVICE
-        text_content = ""
-        text_pos_x = effective_geometry.text_pos_x
-        text_pos_y = effective_geometry.text_pos_y
-        text_width = effective_geometry.text_width
 
         try:
-            with rm_file.open("rb") as f:
-                blocks = list(rmscene.read_blocks(f))
-
-            for block in blocks:
-                if "RootText" in type(block).__name__:
-                    text_data = block.value
-                    text_pos_x = text_data.pos_x
-                    text_pos_y = text_data.pos_y
-                    text_width = text_data.width
-
-                    # Extract text from CrdtSequence
-                    text_parts = []
-                    for item in text_data.items.sequence_items():
-                        if hasattr(item, "value") and isinstance(item.value, str):
-                            text_parts.append(item.value)
-                    text_content = "".join(text_parts)
-                    break
-
+            extractor = RmFileExtractor.from_path(rm_file)
+            return extractor.get_layout_context(effective_geometry, use_font_metrics)
         except (OSError, ValueError, AttributeError):
-            # OSError: file access issues (FileNotFoundError, PermissionError, etc.)
-            # ValueError: rmscene parsing errors (invalid format)
-            # AttributeError: unexpected block structure
             # Return empty context on error - caller will use defaults
-            pass
-
-        config = TextAreaConfig(
-            text_width=text_width,
-            text_pos_x=text_pos_x,
-            text_pos_y=text_pos_y,
-            line_height=effective_geometry.line_height,
-            char_width=effective_geometry.char_width,
-        )
-
-        return cls.from_text(text_content, use_font_metrics, config, effective_geometry)
+            config = TextAreaConfig(
+                text_width=effective_geometry.text_width,
+                text_pos_x=effective_geometry.text_pos_x,
+                text_pos_y=effective_geometry.text_pos_y,
+                line_height=effective_geometry.line_height,
+                char_width=effective_geometry.char_width,
+            )
+            return cls.from_text("", use_font_metrics, config, effective_geometry)
 
     def with_origin(self, origin: tuple[float, float]) -> LayoutContext:
         """Create new context with different origin.

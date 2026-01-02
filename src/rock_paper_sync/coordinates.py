@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from rmscene.tagged_block_common import CrdtId
 
     from .layout import LayoutContext
+    from .rm_file_extractor import RmFileExtractor
 
 # =============================================================================
 # Page Constants (from DeviceGeometry - single source of truth)
@@ -365,6 +366,7 @@ class AnchorResolver:
 
         Reads the file, extracts TreeNodeBlocks for anchor mappings,
         and creates a LayoutContext from the RootTextBlock.
+        Delegates file reading to RmFileExtractor.
 
         Args:
             rm_path: Path to .rm file
@@ -372,12 +374,10 @@ class AnchorResolver:
         Returns:
             AnchorResolver ready for anchor lookups
         """
-        import rmscene
+        from rock_paper_sync.rm_file_extractor import RmFileExtractor
 
-        with open(rm_path, "rb") as f:
-            blocks = list(rmscene.read_blocks(f))
-
-        return cls.from_blocks(blocks)
+        extractor = RmFileExtractor.from_path(rm_path)
+        return cls.from_extractor(extractor)
 
     @classmethod
     def from_blocks(cls, blocks: list) -> AnchorResolver:
@@ -392,44 +392,33 @@ class AnchorResolver:
         Returns:
             AnchorResolver ready for anchor lookups
         """
-        from rmscene.tagged_block_common import CrdtId
+        from rock_paper_sync.rm_file_extractor import RmFileExtractor
 
+        extractor = RmFileExtractor.from_blocks(blocks)
+        return cls.from_extractor(extractor)
+
+    @classmethod
+    def from_extractor(cls, extractor: RmFileExtractor) -> AnchorResolver:
+        """Create resolver from RmFileExtractor.
+
+        The primary factory method that uses the consolidated extractor.
+
+        Args:
+            extractor: RmFileExtractor with pre-extracted data
+
+        Returns:
+            AnchorResolver ready for anchor lookups
+        """
         from .layout import LayoutContext, TextAreaConfig
 
-        # Extract text content and origin from RootTextBlock
-        # Also build CRDT ID -> character offset mapping
-        full_text = ""
-        text_pos_x = DEFAULT_TEXT_POS_X
-        text_pos_y = DEFAULT_TEXT_POS_Y
-        crdt_to_char: dict[CrdtId, int] = {}
-
-        for block in blocks:
-            if "RootText" in type(block).__name__:
-                text_data = block.value
-                text_pos_x = text_data.pos_x
-                text_pos_y = text_data.pos_y
-
-                # Extract text from CrdtSequence and build CRDT ID mapping
-                # Each character has its own CRDT ID:
-                # CrdtId(item_id.part1, item_id.part2 + index_within_item)
-                text_parts = []
-                char_offset = 0
-                for item in text_data.items.sequence_items():
-                    if hasattr(item, "value") and isinstance(item.value, str):
-                        text = item.value
-                        item_id = item.item_id
-                        # Map each character's CRDT ID to its offset
-                        for i in range(len(text)):
-                            char_crdt_id = CrdtId(item_id.part1, item_id.part2 + i)
-                            crdt_to_char[char_crdt_id] = char_offset + i
-                        text_parts.append(text)
-                        char_offset += len(text)
-                full_text = "".join(text_parts)
-                break
+        # Get text content and origin from extractor
+        text_pos_x = extractor.text_origin.pos_x
+        text_pos_y = extractor.text_origin.pos_y
+        crdt_to_char = extractor.crdt_to_char
 
         # Create layout context for Y position resolution
         layout_ctx = LayoutContext.from_text(
-            full_text,
+            extractor.text_content,
             use_font_metrics=True,
             config=TextAreaConfig(text_pos_x=text_pos_x, text_pos_y=text_pos_y),
         )
@@ -440,7 +429,7 @@ class AnchorResolver:
         parent_to_anchor_x: dict[CrdtId, float] = {}
         parent_to_char_offset: dict[CrdtId, int] = {}
 
-        for block in blocks:
+        for block in extractor.blocks:
             if type(block).__name__ == "TreeNodeBlock":
                 if hasattr(block, "group") and block.group:
                     g = block.group

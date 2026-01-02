@@ -853,6 +853,8 @@ class RemarkableGenerator:
         origin Y coordinate for coordinate space transformations and the full
         text content for annotation content anchoring (Phase 1).
 
+        Delegates to RmFileExtractor for consolidated .rm reading.
+
         Args:
             rm_file_path: Path to existing .rm file
 
@@ -862,78 +864,14 @@ class RemarkableGenerator:
             - text_origin_y: Y-coordinate of the text origin (RootTextBlock.pos_y)
             - full_text: Full text content as a single string
         """
+        from .rm_file_extractor import RmFileExtractor
+
         try:
-            with open(rm_file_path, "rb") as f:
-                blocks = list(rmscene.read_blocks(f))
-
-            text_blocks = []
-            text_origin_y = self.geometry.text_pos_y  # Default to constant
-            full_text = ""
-
-            # Find RootTextBlock to get text content and position
-            for block in blocks:
-                if "RootText" in type(block).__name__:
-                    text_data = block.value
-                    text_origin_y = text_data.pos_y  # Capture the actual text origin
-
-                    # Extract actual text from CrdtSequence
-                    # The text is in the 'value' field of each CrdtSequenceItem
-                    text_parts = []
-                    for item in text_data.items.sequence_items():
-                        if hasattr(item, "value") and isinstance(item.value, str):
-                            text_parts.append(item.value)
-
-                    # Full text for content anchoring (join without splitting first)
-                    full_text = "".join(text_parts)
-
-                    # Split into paragraphs for TextBlock creation
-                    paragraphs = full_text.split("\n")
-
-                    # Create TextBlock for each paragraph with Y positions from layout engine
-                    # Use WordWrapLayoutEngine for consistent line break calculation
-                    from .layout import LayoutContext, TextAreaConfig
-
-                    layout_ctx = LayoutContext.from_text(
-                        full_text,
-                        use_font_metrics=True,
-                        config=TextAreaConfig(
-                            text_width=self.geometry.text_width,
-                            text_pos_x=self.geometry.text_pos_x,
-                            text_pos_y=text_data.pos_y,
-                        ),
-                    )
-
-                    # Track position in full text to map paragraphs to offsets
-                    current_offset = 0
-                    for paragraph in paragraphs:
-                        if paragraph.strip():
-                            # Find paragraph start/end in full text
-                            para_start = full_text.find(paragraph, current_offset)
-                            if para_start == -1:
-                                para_start = current_offset
-                            para_end = para_start + len(paragraph)
-                            current_offset = para_end + 1  # +1 for newline
-
-                            # Get Y positions from layout engine
-                            _, y_start = layout_ctx.offset_to_position(para_start)
-                            _, y_end = layout_ctx.offset_to_position(para_end)
-                            # Add one line height to y_end since offset_to_position
-                            # gives the TOP of the line containing that character
-                            y_end += layout_ctx.line_height
-
-                            text_blocks.append(
-                                TextBlock(
-                                    content=paragraph,
-                                    y_start=y_start,
-                                    y_end=y_end,
-                                    block_type="paragraph",
-                                    char_start=para_start,
-                                    char_end=para_end,
-                                )
-                            )
-
+            extractor = RmFileExtractor.from_path(rm_file_path)
+            text_blocks = extractor.get_text_blocks(self.geometry)
+            text_origin_y = extractor.text_origin.pos_y
+            full_text = extractor.text_content
             return text_blocks, text_origin_y, full_text
-
         except Exception as e:
             logger.warning(f"Failed to extract text blocks from {rm_file_path}: {e}")
             return [], self.geometry.text_pos_y, ""

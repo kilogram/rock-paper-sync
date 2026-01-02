@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from rock_paper_sync.change_detector import ChangeDetector
 from rock_paper_sync.state import StateError, StateManager, SyncRecord
 
 
@@ -358,11 +359,12 @@ class TestFileHashing:
 
 
 class TestFindChangedFiles:
-    """Tests for finding changed files."""
+    """Tests for finding changed files using ChangeDetector."""
 
     def test_find_changed_all_new_files(self, temp_vault: Path, temp_db: Path) -> None:
         """Test finding new files that haven't been synced."""
         manager = StateManager(temp_db)
+        detector = ChangeDetector(manager)
 
         # Create test files
         (temp_vault / "file1.md").write_text("Content 1")
@@ -370,7 +372,7 @@ class TestFindChangedFiles:
         (temp_vault / "notes").mkdir()
         (temp_vault / "notes" / "file3.md").write_text("Content 3")
 
-        changed = manager.find_changed_files("test-vault", temp_vault, ["**/*.md"], [])
+        changed = detector.find_changed_files("test-vault", temp_vault, ["**/*.md"], [])
 
         assert len(changed) == 3
         paths = {f.name for f in changed}
@@ -383,6 +385,7 @@ class TestFindChangedFiles:
         from rock_paper_sync.parser import parse_markdown_file
 
         manager = StateManager(temp_db)
+        detector = ChangeDetector(manager)
 
         # Create and sync file
         test_file = temp_vault / "test.md"
@@ -403,7 +406,7 @@ class TestFindChangedFiles:
         manager.update_file_state(record)
 
         # Find changed files
-        changed = manager.find_changed_files("test-vault", temp_vault, ["**/*.md"], [])
+        changed = detector.find_changed_files("test-vault", temp_vault, ["**/*.md"], [])
 
         assert len(changed) == 0
 
@@ -412,6 +415,7 @@ class TestFindChangedFiles:
     def test_find_changed_modified_file(self, temp_vault: Path, temp_db: Path) -> None:
         """Test that modified files are detected."""
         manager = StateManager(temp_db)
+        detector = ChangeDetector(manager)
 
         # Create and sync file
         test_file = temp_vault / "test.md"
@@ -433,7 +437,7 @@ class TestFindChangedFiles:
         test_file.write_text("Modified content")
 
         # Find changed files
-        changed = manager.find_changed_files("test-vault", temp_vault, ["**/*.md"], [])
+        changed = detector.find_changed_files("test-vault", temp_vault, ["**/*.md"], [])
 
         assert len(changed) == 1
         assert changed[0].name == "test.md"
@@ -443,6 +447,7 @@ class TestFindChangedFiles:
     def test_find_changed_respects_include_patterns(self, temp_vault: Path, temp_db: Path) -> None:
         """Test that include patterns are respected."""
         manager = StateManager(temp_db)
+        detector = ChangeDetector(manager)
 
         # Create various files
         (temp_vault / "note.md").write_text("Markdown")
@@ -450,7 +455,7 @@ class TestFindChangedFiles:
         (temp_vault / "image.png").write_bytes(b"fake image")
 
         # Only find .md files
-        changed = manager.find_changed_files("test-vault", temp_vault, ["**/*.md"], [])
+        changed = detector.find_changed_files("test-vault", temp_vault, ["**/*.md"], [])
 
         assert len(changed) == 1
         assert changed[0].name == "note.md"
@@ -460,6 +465,7 @@ class TestFindChangedFiles:
     def test_find_changed_respects_exclude_patterns(self, temp_vault: Path, temp_db: Path) -> None:
         """Test that exclude patterns are respected."""
         manager = StateManager(temp_db)
+        detector = ChangeDetector(manager)
 
         # Create files in various locations
         (temp_vault / "note.md").write_text("Include me")
@@ -469,7 +475,7 @@ class TestFindChangedFiles:
         (temp_vault / "templates" / "template.md").write_text("Exclude me too")
 
         # Find changed, excluding .obsidian and templates
-        changed = manager.find_changed_files(
+        changed = detector.find_changed_files(
             "test-vault", temp_vault, ["**/*.md"], [".obsidian/**", "templates/**"]
         )
 
@@ -481,6 +487,7 @@ class TestFindChangedFiles:
     def test_find_changed_complex_patterns(self, temp_vault: Path, temp_db: Path) -> None:
         """Test complex include/exclude pattern combinations."""
         manager = StateManager(temp_db)
+        detector = ChangeDetector(manager)
 
         # Create nested structure
         (temp_vault / "root.md").write_text("Root")
@@ -491,7 +498,7 @@ class TestFindChangedFiles:
         (temp_vault / "archive" / "old.md").write_text("Old")
 
         # Include all .md, exclude files starting with _ and archive folder
-        changed = manager.find_changed_files(
+        changed = detector.find_changed_files(
             "test-vault", temp_vault, ["**/*.md"], ["_*", "archive/**"]
         )
 
@@ -506,6 +513,7 @@ class TestFindChangedFiles:
     def test_find_changed_skips_directories(self, temp_vault: Path, temp_db: Path) -> None:
         """Test that directories are skipped even if they match patterns."""
         manager = StateManager(temp_db)
+        detector = ChangeDetector(manager)
 
         # Create directory and file with similar names
         (temp_vault / "test.md").write_text("File content")
@@ -513,7 +521,7 @@ class TestFindChangedFiles:
         (temp_vault / "folder.md" / "nested.md").write_text("Nested content")
 
         # Find files - should not include the directory itself
-        changed = manager.find_changed_files("test-vault", temp_vault, ["**/*.md"], [])
+        changed = detector.find_changed_files("test-vault", temp_vault, ["**/*.md"], [])
 
         paths = {f.name for f in changed}
         # Should find the files but not the directory "folder.md"

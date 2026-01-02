@@ -11,7 +11,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from rock_paper_sync.annotations.common.snapshots import ContentStore, SnapshotStore
-from rock_paper_sync.parser import parse_markdown_file
 
 logger = logging.getLogger("rock_paper_sync.state")
 
@@ -336,111 +335,6 @@ class StateManager:
         except Exception as e:
             logger.error(f"Failed to hash file {file_path}: {e}")
             raise StateError(f"Cannot compute hash for {file_path}: {e}")
-
-    def find_changed_files(
-        self,
-        vault_name: str,
-        vault_path: Path,
-        include_patterns: list[str],
-        exclude_patterns: list[str],
-    ) -> list[Path]:
-        """Find files that need syncing based on content hash.
-
-        Compares current file hashes with stored hashes to identify changes.
-
-        Args:
-            vault_name: Name of the vault
-            vault_path: Path to Obsidian vault root
-            include_patterns: Glob patterns for files to include
-            exclude_patterns: Glob patterns for files to exclude
-
-        Returns:
-            List of Path objects for files that have changed or are new
-        """
-        changed: list[Path] = []
-
-        for pattern in include_patterns:
-            for file_path in vault_path.glob(pattern):
-                # Skip if not a file
-                if not file_path.is_file():
-                    continue
-
-                # Check exclusions
-                if self._is_excluded(file_path, vault_path, exclude_patterns):
-                    logger.debug(f"Excluded: {file_path}")
-                    continue
-
-                relative_path = str(file_path.relative_to(vault_path))
-
-                # Parse file to get semantic hash (markers stripped by parser)
-                # This ensures consistent comparison with state.content_hash
-                try:
-                    md_doc = parse_markdown_file(file_path)
-                    current_hash = md_doc.content_hash  # Semantic hash
-                except Exception as e:
-                    logger.warning(f"Failed to parse {file_path}: {e}")
-                    continue
-
-                # Get existing state
-                state = self.get_file_state(vault_name, relative_path)
-
-                # File is new or changed if no state or hash differs
-                if state is None:
-                    logger.debug(f"New file: {vault_name}:{relative_path}")
-                    changed.append(file_path)
-                elif state.content_hash != current_hash:
-                    logger.debug(f"Changed file: {vault_name}:{relative_path}")
-                    changed.append(file_path)
-
-        logger.info(f"Found {len(changed)} changed files in vault '{vault_name}'")
-        return changed
-
-    def find_deleted_files(self, vault_name: str, vault_path: Path) -> list[tuple[str, str]]:
-        """Find files that have been deleted from vault but still exist in state.
-
-        Returns list of (relative_path, remarkable_uuid) tuples for deleted files.
-
-        Args:
-            vault_name: Name of the vault
-            vault_path: Path to Obsidian vault root
-
-        Returns:
-            List of (relative_path, uuid) tuples for files that no longer exist
-        """
-        deleted: list[tuple[str, str]] = []
-
-        cursor = self.conn.execute(
-            "SELECT obsidian_path, remarkable_uuid FROM sync_state WHERE vault_name = ?",
-            (vault_name,),
-        )
-        for row in cursor.fetchall():
-            relative_path = row[0]
-            uuid = row[1]
-            absolute_path = vault_path / relative_path
-
-            if not absolute_path.exists():
-                logger.debug(f"Deleted file: {vault_name}:{relative_path} (UUID: {uuid})")
-                deleted.append((relative_path, uuid))
-
-        logger.info(f"Found {len(deleted)} deleted files in vault '{vault_name}'")
-        return deleted
-
-    def _is_excluded(self, file_path: Path, vault_path: Path, exclude_patterns: list[str]) -> bool:
-        """Check if file matches any exclude pattern.
-
-        Args:
-            file_path: Absolute path to file
-            vault_path: Vault root path
-            exclude_patterns: List of glob patterns to exclude
-
-        Returns:
-            True if file should be excluded, False otherwise
-        """
-        relative = file_path.relative_to(vault_path)
-        for pattern in exclude_patterns:
-            if relative.match(pattern):
-                return True
-        return False
 
     def log_sync_action(self, vault_name: str, path: str, action: str, details: str = "") -> None:
         """Record sync action in history.

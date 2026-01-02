@@ -61,6 +61,7 @@ from .annotations.core.processor import AnnotationProcessor
 from .annotations.handlers.highlight_handler import HighlightHandler
 from .annotations.handlers.stroke_handler import StrokeHandler
 from .audit import get_audit_logger
+from .change_detector import ChangeDetector
 from .config import AppConfig, VaultConfig
 from .generator import RemarkableGenerator
 from .ocr.integration import OCRProcessor
@@ -232,6 +233,10 @@ class SyncEngine:
             cache_dir=self.config.cache_dir,
         )
         logger.debug("Annotation sync helper initialized")
+
+        # Initialize change detector
+        self.change_detector = ChangeDetector(self.state)
+        logger.debug("Change detector initialized")
 
         logger.debug("Sync engine initialized")
 
@@ -775,9 +780,9 @@ class SyncEngine:
 
         logger.info(f"[{correlation_id}] Syncing vault '{vault.name}' at {vault.path}")
 
-        # Discover deleted and changed files locally
-        deleted_files = self.state.find_deleted_files(vault.name, vault.path)
-        changed_files = self.state.find_changed_files(
+        # Discover deleted and changed files locally using ChangeDetector
+        deleted_files = self.change_detector.find_deleted_files(vault.name, vault.path)
+        changed_files = self.change_detector.find_changed_files(
             vault.name,
             vault.path,
             vault.include_patterns,
