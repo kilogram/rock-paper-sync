@@ -395,6 +395,42 @@ class AnchorContext:
 
         return None
 
+    def find_in(self, text: str) -> int:
+        """Find this anchor's text content in the given text.
+
+        Uses multiple strategies in priority order:
+        1. DiffAnchor resolution (most reliable for edits)
+        2. Exact hash match with context disambiguation
+        3. Simple text find (fallback)
+
+        Args:
+            text: Text to search in
+
+        Returns:
+            Character offset of anchor's text, or -1 if not found
+        """
+        # Strategy 1: DiffAnchor (most reliable for edits)
+        if self.diff_anchor:
+            span = self.diff_anchor.resolve_in(text)
+            if span:
+                return span[0]
+
+        # Strategy 2: Find by hash with disambiguation
+        matches = self._find_by_hash(text)
+        if len(matches) == 1:
+            return matches[0][0]
+        elif len(matches) > 1:
+            best = self._disambiguate_by_context(matches, text)
+            if best:
+                return best[0]
+
+        # Strategy 3: Simple find (fallback)
+        pos = text.find(self.text_content)
+        if pos != -1:
+            return pos
+
+        return -1
+
     def _find_by_hash(self, full_text: str) -> list[tuple[int, int]]:
         """Find all spans matching content hash."""
         matches = []

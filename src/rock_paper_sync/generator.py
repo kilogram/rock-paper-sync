@@ -12,14 +12,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import rmscene
-from rmscene import scene_items as si
 from rmscene.crdt_sequence import CrdtId
 
 from .annotations import (
     TextBlock,
 )
 from .annotations.document_model import (
-    AnchorContext,
     DocumentModel,
     PageProjection,
 )
@@ -34,7 +32,6 @@ from .annotations.scene_adapter import (
 )
 from .annotations.services.merger import AnnotationMerger, MergeContext
 from .config import LayoutConfig as AppLayoutConfig
-from .crdt_format import update_glyph_extra_value_data
 from .layout import DeviceGeometry, WordWrapLayoutEngine
 from .layout.device import DEFAULT_DEVICE
 from .parser import BlockType, ContentBlock, MarkdownDocument, TextFormat
@@ -422,62 +419,49 @@ class RemarkableGenerator:
                         except Exception as e:
                             logger.warning(f"Could not get old text from {source_rm_path}: {e}")
 
-                if old_text:
-                    # Use HighlightHandler.relocate for delta-based positioning
-                    adjusted_block = self._highlight_handler.relocate(
-                        block,
-                        old_text,
-                        page_text,
-                        old_origin,
-                        new_origin,
-                        self.layout_engine,
-                        self.geometry,
-                        crdt_base_id=16,  # Default CRDT base
-                    )
-                else:
-                    # Fallback to simple projection when no old text available
-                    adjusted_block = self._adjust_highlight_for_projection(
-                        block,
-                        page_text,
-                        new_origin,
-                        doc_anno.anchor_context,
-                    )
+                # Use unified apply_to_page - handles both delta-based relocation
+                # (when old_text available) and projection-based fallback
+                adjusted_block = self._highlight_handler.apply_to_page(
+                    block,
+                    page_text,
+                    new_origin,
+                    self.layout_engine,
+                    self.geometry,
+                    doc_anno.anchor_context,
+                    old_text=old_text if old_text else None,
+                    old_origin=old_origin if old_text else None,
+                    crdt_base_id=16,
+                )
 
                 if adjusted_block:
                     ctx.annotations.append(adjusted_block)
 
             elif "Line" in block_type:
-                # Stroke - keep original coordinates (relative to text anchor)
-                ctx.annotations.append(block)
+                # Stroke - use unified apply_to_page interface
+                adjusted_block, tree_node_info = self._stroke_handler.apply_to_page(
+                    block,
+                    page_text,
+                    self.geometry,
+                    doc_anno.anchor_context,
+                    tree_node=doc_anno.original_tree_node,
+                    scene_group_item=doc_anno.original_scene_group_item,
+                    scene_tree_block=doc_anno.original_scene_tree_block,
+                )
 
-                # Handle TreeNodeBlock for strokes - delegate anchor resolution to handler
-                if doc_anno.original_tree_node:
-                    # StrokeHandler owns the anchor resolution logic
-                    target_offset = self._stroke_handler._calculate_anchor_offset(
-                        doc_anno.anchor_context, page_text, self.geometry
-                    )
+                ctx.annotations.append(adjusted_block)
 
-                    # Store ORIGINAL TreeNodeBlock, SceneGroupItemBlock, and SceneTreeBlock
-                    # The roundtrip code will reanchor/inject them at write time
+                if tree_node_info:
                     node_id = (
-                        doc_anno.original_tree_node.group.node_id
-                        if hasattr(doc_anno.original_tree_node, "group")
-                        and doc_anno.original_tree_node.group
+                        tree_node_info[0].group.node_id
+                        if hasattr(tree_node_info[0], "group") and tree_node_info[0].group
                         else None
                     )
                     logger.debug(
                         f"Adding to ctx.tree_nodes for page {projection.page_index}: "
-                        f"node_id={node_id}, target_offset={target_offset}, "
+                        f"node_id={node_id}, target_offset={tree_node_info[1]}, "
                         f"cluster={doc_anno.cluster_id or 'none'}"
                     )
-                    ctx.tree_nodes.append(
-                        (
-                            doc_anno.original_tree_node,
-                            target_offset,
-                            doc_anno.original_scene_group_item,
-                            doc_anno.original_scene_tree_block,
-                        )
-                    )
+                    ctx.tree_nodes.append(tree_node_info)
 
             else:
                 # Unknown type - keep as-is
@@ -540,308 +524,6 @@ class RemarkableGenerator:
             logger.debug(
                 f"Applied {len(ctx.annotations)} annotations to page {projection.page_index}"
             )
-
-    def _adjust_highlight_for_projection(
-        self,
-        block,
-        page_text: str,
-        new_origin: tuple[float, float],
-        anchor_context: AnchorContext,
-    ):
-        """Adjust highlight rectangles for a target page.
-
-        Uses the anchor context to find where the highlighted text is in the
-        page text, then recalculates rectangle positions.
-
-        For cross-page movement (V2 architecture), we recalculate positions
-        from scratch based on the target page layout rather than using deltas.
-
-        Args:
-            block: SceneGlyphItemBlock containing highlight
-            page_text: Text content of the target page
-            new_origin: (x, y) origin of the page text
-            anchor_context: AnchorContext with highlight position info
-
-        Returns:
-            Adjusted block or None if highlight can't be placed
-        """
-        from rmscene import scene_items as si
-
-        if not hasattr(block.item, "value"):
-            return block
-
-        glyph_value = block.item.value
-        highlight_text = getattr(glyph_value, "text", "") or ""
-
-        if not highlight_text:
-            return block
-
-        # Find where this highlight is in the page text
-        # Use context disambiguation if there are multiple occurrences
-        offset = self._find_highlight_with_context(highlight_text, page_text, anchor_context)
-
-        if offset == -1:
-            logger.warning(f"Could not find highlight '{highlight_text[:30]}...' in page")
-            return None
-
-        # Get original rectangles for shape preservation
-        if not hasattr(glyph_value, "rectangles") or not glyph_value.rectangles:
-            return block
-
-        original_rects = glyph_value.rectangles
-        original_height = original_rects[0].h if original_rects else self.geometry.line_height
-
-        # Calculate new highlight rectangles using layout engine
-        end_offset = offset + len(highlight_text)
-
-        new_rects = self.layout_engine.calculate_highlight_rectangles(
-            offset, end_offset, page_text, new_origin, self.geometry.text_width
-        )
-
-        if not new_rects:
-            logger.warning(
-                f"Failed to calculate rectangles for highlight '{highlight_text[:30]}...'"
-            )
-            return block
-
-        # IMPORTANT: Our layout engine may produce different X positions than the device
-        # because text wrapping can differ between font renderers.
-        # Strategy: Use calculated Y (to handle paragraph insertion), but preserve
-        # original X offset from origin when the text width is similar.
-        orig_rect = original_rects[0]
-        orig_x_offset = orig_rect.x - new_origin[0]  # X offset from origin
-
-        # Check if original was near line start (within ~10px of origin)
-        orig_at_line_start = abs(orig_x_offset) < 15
-
-        # Replace rectangles with calculated Y but potentially preserved X
-        glyph_value.rectangles.clear()
-        for i, (calc_x, calc_y, calc_w, calc_h) in enumerate(new_rects):
-            if i < len(original_rects):
-                orig_r = original_rects[i]
-                # Preserve original X if it was meaningful (not a full recalculation)
-                # Use original X when original was at line start and calculated is similar,
-                # or when original X offset was near zero (highlight at line start)
-                if orig_at_line_start:
-                    # Original was at line start - preserve that relationship
-                    # Find where this line starts and position there
-                    final_x = new_origin[0]  # At origin = line start
-                else:
-                    # Original had meaningful X offset - preserve it
-                    # This handles cases where our wrapping differs from device
-                    final_x = orig_r.x
-                final_y = calc_y  # Always use calculated Y for pagination
-                glyph_value.rectangles.append(
-                    si.Rectangle(final_x, final_y, calc_w, original_height)
-                )
-            else:
-                # Extra rectangles (multiline highlight expanded) - use calculated
-                glyph_value.rectangles.append(si.Rectangle(calc_x, calc_y, calc_w, original_height))
-
-        # Update offset fields
-        glyph_value.start = offset
-        glyph_value.length = len(highlight_text)
-
-        if hasattr(block, "extra_value_data") and block.extra_value_data:
-            # Update CRDT anchor if needed
-            crdt_base_id = 16  # Default
-            block.extra_value_data = update_glyph_extra_value_data(
-                block.extra_value_data, offset, len(highlight_text), crdt_base_id
-            )
-
-        logger.debug(
-            f"Placed highlight '{highlight_text[:20]}...' at offset={offset}, "
-            f"{len(new_rects)} rect(s)"
-        )
-
-        return block
-
-    def _find_highlight_with_context(
-        self,
-        highlight_text: str,
-        page_text: str,
-        anchor_context: AnchorContext,
-    ) -> int:
-        """Find highlight text in page using edit-resilient anchoring.
-
-        Uses multiple strategies in order of preference:
-        1. DiffAnchor - finds stable text before/after the highlight
-        2. Context similarity - fuzzy match on context_before/context_after
-        3. Simple find - first occurrence (fallback)
-
-        Args:
-            highlight_text: The highlighted text to find
-            page_text: Full page text content
-            anchor_context: AnchorContext with diff_anchor and context windows
-
-        Returns:
-            Character offset of highlight, or -1 if not found
-        """
-        import difflib
-
-        # Strategy 1: Use DiffAnchor if available (most reliable for edits)
-        if anchor_context.diff_anchor:
-            span = anchor_context.diff_anchor.resolve_in(page_text)
-            if span:
-                logger.debug(
-                    f"Found highlight '{highlight_text[:20]}...' via diff_anchor at {span[0]}"
-                )
-                return span[0]
-
-        # Strategy 2: Find all occurrences and disambiguate
-        candidates: list[int] = []
-        start = 0
-        while True:
-            pos = page_text.find(highlight_text, start)
-            if pos == -1:
-                break
-            candidates.append(pos)
-            start = pos + 1
-
-        if not candidates:
-            # Try anchor context text as fallback
-            start = 0
-            while True:
-                pos = page_text.find(anchor_context.text_content, start)
-                if pos == -1:
-                    break
-                candidates.append(pos)
-                start = pos + 1
-
-        if not candidates:
-            return -1
-
-        if len(candidates) == 1:
-            return candidates[0]
-
-        # Multiple occurrences - disambiguate using context similarity
-        best_score = 0.0
-        best_offset = candidates[0]
-
-        for offset in candidates:
-            # Get context around this occurrence
-            ctx_len = 50
-            before = page_text[max(0, offset - ctx_len) : offset]
-            after = page_text[offset + len(highlight_text) : offset + len(highlight_text) + ctx_len]
-
-            # Compare with anchor context using fuzzy matching
-            before_ratio = difflib.SequenceMatcher(
-                None, before, anchor_context.context_before
-            ).ratio()
-            after_ratio = difflib.SequenceMatcher(None, after, anchor_context.context_after).ratio()
-            score = (before_ratio + after_ratio) / 2
-
-            if score > best_score:
-                best_score = score
-                best_offset = offset
-
-        logger.debug(
-            f"Disambiguated highlight '{highlight_text[:20]}...' "
-            f"from {len(candidates)} candidates, score={best_score:.2f}"
-        )
-
-        return best_offset
-
-    def _adjust_glyph_for_page(
-        self,
-        glyph_block,
-        page_text: str,
-        page_origin: tuple[float, float],
-        anchor_context: AnchorContext,
-    ):
-        """Adjust highlight rectangles for a target page.
-
-        Recalculates highlight positions from scratch for the target page.
-        This is necessary when highlights move cross-page, as the coordinate
-        system changes.
-
-        Args:
-            glyph_block: SceneGlyphItemBlock containing highlight rectangles
-            page_text: Text content of the target page
-            page_origin: (x, y) origin of text on target page
-            anchor_context: AnchorContext with resolved position info
-
-        Returns:
-            Modified glyph_block with rectangles positioned for target page
-        """
-        # Get highlight text and rectangles
-        if not hasattr(glyph_block.item, "value"):
-            return glyph_block
-
-        glyph_value = glyph_block.item.value
-        highlight_text = getattr(glyph_value, "text", "") or ""
-
-        if not highlight_text or not hasattr(glyph_value, "rectangles"):
-            return glyph_block
-
-        # Find the highlighted text in the page
-        # Try exact match first, then fuzzy match
-        text_offset = page_text.find(highlight_text)
-
-        if text_offset == -1:
-            # Try anchor context text content
-            text_offset = page_text.find(anchor_context.text_content)
-
-        if text_offset == -1:
-            # Fuzzy match - find closest match
-            import difflib
-
-            matcher = difflib.SequenceMatcher(None, highlight_text, page_text)
-            match = matcher.find_longest_match(0, len(highlight_text), 0, len(page_text))
-            if match.size >= len(highlight_text) * 0.6:
-                text_offset = match.b
-            else:
-                logger.warning(
-                    f"Could not find '{highlight_text[:30]}...' in page (page has {len(page_text)} chars), "
-                    f"anchor_context.text_content='{anchor_context.text_content[:50]}...'"
-                )
-                logger.debug(f"Page text snippet: '{page_text[:200]}...'")
-                return glyph_block
-
-        # Calculate new rectangles using layout engine
-        end_offset = text_offset + len(highlight_text)
-        new_rects = self.layout_engine.calculate_highlight_rectangles(
-            text_offset,
-            end_offset,
-            page_text,
-            page_origin,
-            self.geometry.text_width,
-        )
-
-        if not new_rects:
-            logger.warning(f"Failed to calculate rectangles for '{highlight_text[:30]}...'")
-            return glyph_block
-
-        # Preserve original rectangle properties where possible
-        original_height = (
-            glyph_value.rectangles[0].h if glyph_value.rectangles else self.geometry.line_height
-        )
-
-        # Update rectangles
-        glyph_value.rectangles.clear()
-        for x, y, w, _ in new_rects:
-            glyph_value.rectangles.append(si.Rectangle(x, y, w, original_height))
-
-        # Update start field for older firmware
-        glyph_value.start = text_offset
-
-        # Update text field if needed
-        new_text = page_text[text_offset:end_offset]
-        if new_text:
-            glyph_value.text = new_text
-            glyph_value.length = len(new_text)
-
-        # Update extra_value_data for CRDT anchoring (firmware 3.6+)
-        if hasattr(glyph_block, "extra_value_data") and glyph_block.extra_value_data:
-            glyph_block.extra_value_data = update_glyph_extra_value_data(
-                glyph_block.extra_value_data, text_offset, len(highlight_text), crdt_base_id=16
-            )
-
-        logger.debug(
-            f"Adjusted highlight '{highlight_text[:30]}...' to offset {text_offset} on page"
-        )
-
-        return glyph_block
 
     def _extract_text_blocks_from_rm(
         self, rm_file_path: Path

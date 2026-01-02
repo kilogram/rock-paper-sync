@@ -561,7 +561,7 @@ class HighlightHandler:
             Modified block with adjusted rectangles and CRDT anchor
         """
         # Lazy import to avoid circular dependency
-        from rock_paper_sync.generator import update_glyph_extra_value_data
+        from rock_paper_sync.crdt_format import update_glyph_extra_value_data
 
         # Step 1: Extract highlight information from block
         highlight_info = extract_glyph_highlight_info(block)
@@ -700,3 +700,54 @@ class HighlightHandler:
         )
 
         return extracted
+
+    def apply_to_page(
+        self,
+        block: "Any",
+        page_text: str,
+        new_origin: tuple[float, float],
+        layout_engine: "WordWrapLayoutEngine",
+        geometry: "DeviceGeometry",
+        anchor_context: AnchorContext,
+        old_text: str | None = None,
+        old_origin: tuple[float, float] | None = None,
+        crdt_base_id: int = 16,
+    ) -> "Any | None":
+        """Apply a highlight annotation to a target page.
+
+        This is the unified interface for placing highlights on pages.
+        Uses delta-based relocation when old_text is available (preserves
+        pixel-perfect positions), otherwise falls back to projection-based
+        positioning.
+
+        Args:
+            block: SceneGlyphItemBlock containing highlight
+            page_text: Text content of the target page
+            new_origin: (x, y) origin of the page text
+            layout_engine: WordWrapLayoutEngine for position calculations
+            geometry: DeviceGeometry for layout parameters
+            anchor_context: AnchorContext with highlight position info
+            old_text: Page text before modification (enables delta relocation)
+            old_origin: (x, y) origin of old text block
+            crdt_base_id: Base ID from RootTextBlock for CRDT offset calculation
+
+        Returns:
+            Adjusted block or None if highlight can't be placed
+        """
+        if old_text and old_origin:
+            # Use delta-based relocation (preserves pixel-perfect positions)
+            return self.relocate(
+                block,
+                old_text,
+                page_text,
+                old_origin,
+                new_origin,
+                layout_engine,
+                geometry,
+                crdt_base_id,
+            )
+
+        # No old_text available - return block unchanged
+        # This is an edge case (source .rm file missing/corrupt)
+        logger.warning("No old_text available for highlight relocation, keeping original position")
+        return block

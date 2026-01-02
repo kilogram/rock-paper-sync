@@ -32,7 +32,9 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+from rmscene import TreeNodeBlock
 
 from rock_paper_sync.annotations import Annotation, AnnotationType, read_annotations
 from rock_paper_sync.annotations.common.spatial import find_nearest_paragraph_by_y
@@ -47,19 +49,13 @@ from rock_paper_sync.coordinates import (
     AnchorResolver,
     is_root_layer,
 )
+from rock_paper_sync.layout import DeviceGeometry
 
 if TYPE_CHECKING:
-    from typing import Any
-
-    from rmscene import TreeNodeBlock
-
-    from rock_paper_sync.annotations.document_model import (
-        AnchorContext,
-        PageProjection,
-    )
+    from rock_paper_sync.annotations.document_model import PageProjection
     from rock_paper_sync.annotations.domain.stroke_cluster import StrokeCluster
     from rock_paper_sync.annotations.services.crdt_service import CrdtService
-    from rock_paper_sync.layout import DeviceGeometry, LayoutContext
+    from rock_paper_sync.layout import LayoutContext
     from rock_paper_sync.ocr.integration import OCRProcessor
 
 logger = logging.getLogger(__name__)
@@ -478,6 +474,53 @@ class StrokeHandler:
         )
 
         return extracted
+
+    def apply_to_page(
+        self,
+        block: Any,
+        page_text: str,
+        geometry: DeviceGeometry,
+        anchor_context: AnchorContext,
+        tree_node: TreeNodeBlock | None = None,
+        scene_group_item: Any | None = None,
+        scene_tree_block: Any | None = None,
+    ) -> tuple[Any, tuple | None]:
+        """Apply a stroke annotation to a target page.
+
+        This is the unified interface for placing strokes on pages. Unlike
+        highlights, stroke blocks don't need coordinate adjustment - they are
+        relative to their parent anchor. The main work is calculating where
+        the TreeNodeBlock anchor should point.
+
+        Args:
+            block: SceneLineItemBlock containing stroke points
+            page_text: Text content of the target page
+            geometry: DeviceGeometry for layout calculations
+            anchor_context: AnchorContext with stroke position info
+            tree_node: Optional TreeNodeBlock to reanchor
+            scene_group_item: Optional SceneGroupItemBlock for tree node
+            scene_tree_block: Optional SceneTreeBlock for tree node
+
+        Returns:
+            Tuple of (adjusted_block, tree_node_info) where tree_node_info is
+            (tree_node, target_offset, scene_group_item, scene_tree_block) or None
+        """
+        # Strokes don't need block coordinate adjustment - they're relative to anchor
+        adjusted_block = block
+
+        tree_node_info = None
+        if tree_node:
+            # Calculate target offset in page text
+            target_offset = self._calculate_anchor_offset(anchor_context, page_text, geometry)
+            tree_node_info = (tree_node, target_offset, scene_group_item, scene_tree_block)
+
+            anchor_text = anchor_context.text_content or ""
+            logger.debug(
+                f"Stroke apply_to_page: target_offset={target_offset}, "
+                f"anchor_text='{anchor_text[:30]}...'"
+            )
+
+        return adjusted_block, tree_node_info
 
     # =========================================================================
     # Cluster-based Interface (for migration)
