@@ -332,7 +332,7 @@ class KDTreeProximityStrategy:
         """
         if not strokes:
             return []
-        bboxes = [s.bbox for s in strokes]
+        bboxes = [s.bounding_box for s in strokes]
         return cluster_bboxes_kdtree(bboxes, self.distance_threshold)
 
 

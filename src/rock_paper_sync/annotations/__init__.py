@@ -18,20 +18,17 @@ from .core.processor import AnnotationProcessor
 from .core.protocol import AnnotationHandler
 from .core.types import (
     Annotation,
-    AnnotationMapping,
     AnnotationType,
     Highlight,
     Point,
     Rectangle,
     Stroke,
     TextBlock,
-    associate_annotations_with_content,
-    calculate_position_mapping,
     read_annotations,
 )
 from .handlers.highlight_handler import HighlightHandler
 from .handlers.stroke_handler import StrokeHandler
-from .scene_graph import (
+from .scene_adapter import (
     KNOWN_SYSTEM_NODES,
     SYSTEM_LAYER_1,
     SYSTEM_LAYER_1_GROUP,
@@ -56,11 +53,8 @@ __all__ = [
     "Highlight",
     "Annotation",
     "TextBlock",
-    "AnnotationMapping",
     # Core utilities
     "read_annotations",
-    "associate_annotations_with_content",
-    "calculate_position_mapping",
     # Text layout engine
     "WordWrapLayoutEngine",
     # Handler architecture

@@ -27,7 +27,7 @@ from rmscene import (
 )
 
 from rock_paper_sync.annotations.document_model import DocumentModel
-from rock_paper_sync.annotations.scene_graph import (
+from rock_paper_sync.annotations.scene_adapter import (
     SceneGraphIndex,
     StrokeBundle,
     validate_scene_graph,

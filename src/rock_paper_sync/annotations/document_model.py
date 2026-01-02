@@ -41,7 +41,7 @@ import rmscene
 from rock_paper_sync.coordinates import END_OF_DOC_MARKER as END_OF_DOC_ANCHOR_MARKER
 
 from .core.types import Point, StrokeData
-from .scene_graph import SceneGraphIndex, StrokeBundle
+from .scene_adapter import SceneGraphIndex, StrokeBundle
 
 if TYPE_CHECKING:
     from rock_paper_sync.annotations.model import AnnotationStore
@@ -566,10 +566,6 @@ class AnchorResolution(NamedTuple):
     target_paragraph_index: int | None = None
 
 
-# Backwards compatibility alias (deprecated - use AnchorResolution)
-ResolvedAnchorContext = AnchorResolution
-
-
 # =============================================================================
 # Document Model Types
 # =============================================================================
@@ -676,7 +672,7 @@ class DocumentAnnotation:
 class MigrationReport:
     """Report of annotation migration results."""
 
-    migrations: list[tuple[DocumentAnnotation, DocumentAnnotation, ResolvedAnchorContext]] = field(
+    migrations: list[tuple[DocumentAnnotation, DocumentAnnotation, AnchorResolution]] = field(
         default_factory=list
     )
     orphans: list[DocumentAnnotation] = field(default_factory=list)
@@ -685,7 +681,7 @@ class MigrationReport:
         self,
         old_annotation: DocumentAnnotation,
         new_annotation: DocumentAnnotation,
-        resolution: ResolvedAnchorContext,
+        resolution: AnchorResolution,
     ) -> None:
         self.migrations.append((old_annotation, new_annotation, resolution))
 

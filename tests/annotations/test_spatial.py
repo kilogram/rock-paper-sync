@@ -288,7 +288,6 @@ class TestStrokeData:
     def test_basic_creation(self):
         """StrokeData can be created with just bounding_box."""
         stroke = StrokeData(bounding_box=(10, 20, 30, 40))
-        assert stroke.bbox == (10, 20, 30, 40)
         assert stroke.bounding_box == (10, 20, 30, 40)
         assert stroke.points == []
         assert stroke.timestamps is None

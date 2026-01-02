@@ -307,27 +307,3 @@ class TestPageTransformExecutor:
         # Must have root (0:1) and layer 1 (0:11)
         assert CrdtId(0, 1) in node_ids, "Missing root TreeNodeBlock (0:1)"
         assert CrdtId(0, 11) in node_ids, "Missing Layer 1 TreeNodeBlock (0:11)"
-
-
-class TestBackwardCompatibility:
-    """Tests that old imports still work."""
-
-    def test_scene_graph_imports(self):
-        """Old scene_graph imports still work."""
-        from rock_paper_sync.annotations.scene_graph import (
-            SceneGraphIndex,
-            StrokeBundle,
-        )
-
-        # Just verify imports work
-        assert StrokeBundle is not None
-        assert SceneGraphIndex is not None
-
-    def test_scene_adapter_exports_same_types(self):
-        """scene_adapter exports the same types as old scene_graph."""
-        from rock_paper_sync.annotations import scene_adapter, scene_graph
-
-        # Core types should be the same
-        assert scene_graph.StrokeBundle is scene_adapter.StrokeBundle
-        assert scene_graph.SceneGraphIndex is scene_adapter.SceneGraphIndex
-        assert scene_graph.validate_scene_graph is scene_adapter.validate_scene_graph

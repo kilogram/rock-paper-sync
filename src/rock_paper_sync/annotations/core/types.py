@@ -1,20 +1,12 @@
 """
-Annotation extraction and preservation for reMarkable documents.
+Annotation extraction for reMarkable documents.
 
-This module handles reading annotations (strokes and highlights) from reMarkable .rm files
-and associating them with markdown content for preservation during sync operations.
-
-Architecture:
-    [.rm file] → [read_annotations()] → [Annotation objects] → [associate_with_content()]
-         ↓                                      ↓                         ↓
-    rmscene blocks                    position + data              content blocks
+This module handles reading annotations (strokes and highlights) from reMarkable .rm files.
 
 Key Concepts:
     - **Strokes**: Hand-drawn annotations (lines, sketches) with point coordinates
     - **Highlights**: Text selections with bounding rectangles
     - **Position mapping**: Annotations are mapped to Y-coordinates on the page
-    - **Content association**: Annotations are linked to nearby text blocks
-    - **Preservation**: When regenerating, annotations are repositioned relative to content
 
 Position Coordinate System:
     reMarkable uses a coordinate system where:
@@ -24,14 +16,10 @@ Position Coordinate System:
     - Page height ~1872 points (A4 at 226 DPI)
 
 Example:
-    # Extract annotations from existing .rm file
-    annotations = read_annotations("document.rm")
-
-    # Associate with markdown content
-    mapping = associate_annotations_with_content(annotations, content_blocks)
-
-    # Preserve when regenerating
-    preserved_strokes = preserve_strokes(mapping, old_blocks, new_blocks)
+    >>> annotations = read_annotations("document.rm")
+    >>> for ann in annotations:
+    ...     if ann.type == AnnotationType.STROKE:
+    ...         print(f"Stroke at y={ann.stroke.center_y()}")
 """
 
 from dataclasses import dataclass, field
@@ -148,11 +136,6 @@ class StrokeData:
         """Get bounding box center (x, y) for clustering."""
         x, y, w, h = self.bounding_box
         return (x + w / 2, y + h / 2)
-
-    @property
-    def bbox(self) -> tuple[float, float, float, float]:
-        """Alias for bounding_box (backwards compatibility with spatial.py)."""
-        return self.bounding_box
 
     @classmethod
     def from_stroke(cls, stroke: Stroke) -> "StrokeData":
@@ -297,21 +280,6 @@ class TextBlock:
         return self.y_start <= y <= self.y_end
 
 
-@dataclass
-class AnnotationMapping:
-    """Maps annotations to their associated text blocks.
-
-    Attributes:
-        annotations: All annotations in the document
-        text_blocks: All text blocks in the document
-        associations: Dict mapping annotation index to text block index
-    """
-
-    annotations: list[Annotation]
-    text_blocks: list[TextBlock]
-    associations: dict[int, int] = field(default_factory=dict)
-
-
 def read_annotations(file_path: Path | str | BinaryIO) -> list[Annotation]:
     """Read all annotations from a reMarkable .rm file.
 
@@ -407,127 +375,6 @@ def read_annotations(file_path: Path | str | BinaryIO) -> list[Annotation]:
             )
 
     return annotations
-
-
-def associate_annotations_with_content(
-    annotations: list[Annotation], text_blocks: list[TextBlock], max_distance: float = 100.0
-) -> AnnotationMapping:
-    """Associate annotations with nearby text blocks based on position.
-
-    Uses a simple proximity heuristic: annotations are associated with the nearest
-    text block within max_distance. This works well for common use cases like:
-    - Underlining text with a stroke
-    - Highlighting a passage
-    - Adding margin notes near paragraphs
-
-    Args:
-        annotations: List of annotations to associate
-        text_blocks: List of text blocks to associate with
-        max_distance: Maximum vertical distance for association (default: 100 points)
-
-    Returns:
-        AnnotationMapping with associations dict populated
-
-    Example:
-        >>> mapping = associate_annotations_with_content(annotations, blocks)
-        >>> for ann_idx, block_idx in mapping.associations.items():
-        ...     ann = mapping.annotations[ann_idx]
-        ...     block = mapping.text_blocks[block_idx]
-        ...     print(f"Annotation at y={ann.center_y()} → '{block.content[:30]}'")
-    """
-    mapping = AnnotationMapping(annotations=annotations, text_blocks=text_blocks)
-
-    # For each annotation, find the nearest text block
-    for ann_idx, annotation in enumerate(annotations):
-        ann_y = annotation.center_y()
-
-        # Find closest text block
-        min_distance = float("inf")
-        closest_block_idx = None
-
-        for block_idx, block in enumerate(text_blocks):
-            # Calculate distance (considering block range)
-            if block.contains_y(ann_y):
-                distance = 0.0  # Inside the block
-            else:
-                # Distance to nearest edge
-                distance = min(abs(ann_y - block.y_start), abs(ann_y - block.y_end))
-
-            if distance < min_distance:
-                min_distance = distance
-                closest_block_idx = block_idx
-
-        # Associate if within max_distance
-        if closest_block_idx is not None and min_distance <= max_distance:
-            mapping.associations[ann_idx] = closest_block_idx
-
-    return mapping
-
-
-def calculate_position_mapping(
-    old_blocks: list[TextBlock], new_blocks: list[TextBlock]
-) -> dict[int, int]:
-    """Map old text blocks to new text blocks based on content similarity.
-
-    When regenerating a document, text blocks may have moved due to edits.
-    This function tries to match old blocks to new blocks so we can reposition
-    annotations appropriately.
-
-    Uses a simple heuristic:
-    1. Exact content match (best case)
-    2. Fuzzy content match based on shared words
-    3. Position-based fallback
-
-    Args:
-        old_blocks: Text blocks from the previous version
-        new_blocks: Text blocks from the new version
-
-    Returns:
-        Dict mapping old block index → new block index
-
-    Example:
-        >>> old = [TextBlock("Hello world", 100, 150, "paragraph")]
-        >>> new = [TextBlock("Hello world!", 120, 170, "paragraph")]
-        >>> mapping = calculate_position_mapping(old, new)
-        >>> # mapping[0] = 0 (matched by content)
-    """
-    mapping = {}
-
-    # First pass: exact content matches
-    for old_idx, old_block in enumerate(old_blocks):
-        for new_idx, new_block in enumerate(new_blocks):
-            if old_block.content.strip() == new_block.content.strip():
-                mapping[old_idx] = new_idx
-                break
-
-    # Second pass: fuzzy matches for unmapped blocks
-    for old_idx, old_block in enumerate(old_blocks):
-        if old_idx in mapping:
-            continue
-
-        # Find best match by word overlap
-        old_words = set(old_block.content.lower().split())
-        best_score = 0
-        best_idx = None
-
-        for new_idx, new_block in enumerate(new_blocks):
-            new_words = set(new_block.content.lower().split())
-            if not old_words or not new_words:
-                continue
-
-            # Jaccard similarity
-            intersection = len(old_words & new_words)
-            union = len(old_words | new_words)
-            score = intersection / union if union > 0 else 0
-
-            if score > best_score and score > 0.5:  # Threshold for fuzzy match
-                best_score = score
-                best_idx = new_idx
-
-        if best_idx is not None:
-            mapping[old_idx] = best_idx
-
-    return mapping
 
 
 # Re-export WordWrapLayoutEngine from the layout module for backwards compatibility

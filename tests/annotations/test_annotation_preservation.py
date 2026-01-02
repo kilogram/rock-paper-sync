@@ -244,35 +244,6 @@ class TestAnnotationPreservation:
             assert "TreeNodeBlock" in block_types, f"Missing TreeNodeBlock in {rm_file.name}"
 
 
-class TestPositionMapping:
-    """Tests for annotation position mapping."""
-
-    def test_position_mapping_calculation(self, stage2_rm_files, markdown_file):
-        """Test that position mapping can be calculated."""
-        from rock_paper_sync.annotations import calculate_position_mapping
-
-        layout = make_layout_config()
-        generator = RemarkableGenerator(layout)
-
-        for rm_file in stage2_rm_files:
-            old_blocks, _, _ = generator._extract_text_blocks_from_rm(rm_file)
-
-            if not old_blocks:
-                continue
-
-            # Simulate new blocks (same content for test)
-            new_blocks = old_blocks.copy()
-
-            # Calculate position mapping
-            position_map = calculate_position_mapping(old_blocks, new_blocks)
-
-            # Should map each old block to same index (content unchanged)
-            for i in range(len(old_blocks)):
-                assert i in position_map, f"Missing mapping for block {i}"
-                # With identical content, should map to same index
-                assert position_map[i] == i, f"Expected {i} -> {i}, got {i} -> {position_map[i]}"
-
-
 class TestCoordinateSpace:
     """Tests for coordinate space handling in annotated files."""
 

@@ -41,18 +41,10 @@ from rmscene import (
     TreeNodeBlock,
 )
 
+from .scene_index import format_crdt_id, is_user_node
+
 if TYPE_CHECKING:
     from .scene_index import SceneGraphIndex, ValidationError
-
-
-def format_crdt_id(node_id: CrdtId) -> str:
-    """Format CrdtId for display."""
-    return f"{node_id.part1}:{node_id.part2}"
-
-
-def is_user_node(node_id: CrdtId) -> bool:
-    """Check if this is a user-created node (part1 == 2)."""
-    return node_id.part1 == 2
 
 
 @dataclass
