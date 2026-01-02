@@ -22,10 +22,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 import rmscene
 
 from rock_paper_sync.annotations.common.spatial import cluster_bboxes_kdtree
-from rock_paper_sync.coordinate_transformer import (
-    ParentAnchorResolver,
-    is_text_relative,
+from rock_paper_sync.coordinates import (
+    AnchorResolver as ParentAnchorResolver,
+    is_root_layer,
 )
+
+# is_text_relative is inverse of is_root_layer
+def is_text_relative(parent_id):
+    return not is_root_layer(parent_id)
 
 
 def extract_strokes(rm_path: Path) -> tuple[list[dict], float]:

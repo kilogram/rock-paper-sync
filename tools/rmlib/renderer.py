@@ -29,9 +29,9 @@ import rmscene
 from PIL import Image, ImageDraw, ImageFont
 from rmscene import CrdtId, RootTextBlock, SceneGlyphItemBlock, SceneLineItemBlock, si
 
-from src.rock_paper_sync.coordinate_transformer import (
-    END_OF_DOC_ANCHOR_MARKER,
-    ParentAnchorResolver,
+from src.rock_paper_sync.coordinates import (
+    END_OF_DOC_MARKER as END_OF_DOC_ANCHOR_MARKER,
+    AnchorResolver as ParentAnchorResolver,
 )
 
 from .colors import BACKGROUND_COLOR, get_highlight_rgba, get_pen_color
@@ -338,8 +338,8 @@ class RmRenderer:
             # Get anchor data from resolver (reuses CRDT ID -> char offset mapping)
             anchor = resolver.get_anchor(parent_id)
 
-            # Compute page X: add PAGE_CENTER_X to text-relative anchor_x
-            page_x = PAGE_CENTER_X + anchor.anchor_x
+            # Compute page X: add PAGE_CENTER_X to text-relative anchor.x
+            page_x = PAGE_CENTER_X + anchor.x
 
             # Compute visual Y using the pre-calculated char_to_y map
             if anchor.char_offset is None:

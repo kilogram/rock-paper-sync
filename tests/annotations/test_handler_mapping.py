@@ -148,17 +148,13 @@ class TestStrokeHandlerMap:
 
         with (
             patch(
-                "rock_paper_sync.annotations.handlers.stroke_handler.extract_text_origin"
-            ) as mock_origin,
-            patch(
-                "rock_paper_sync.annotations.handlers.stroke_handler.build_parent_anchor_map"
-            ) as mock_anchor,
+                "rock_paper_sync.annotations.handlers.stroke_handler.AnchorResolver.from_rm_file"
+            ) as mock_resolver,
             patch(
                 "rock_paper_sync.annotations.handlers.stroke_handler.extract_text_blocks_from_rm"
             ) as mock_extract,
         ):
-            mock_origin.return_value = MagicMock(x=-375, y=94)
-            mock_anchor.return_value = {}
+            mock_resolver.return_value = MagicMock()
             mock_extract.return_value = ([], 94.0)
 
             result = handler.map([], blocks, mock_rm_file)
@@ -176,17 +172,13 @@ class TestStrokeHandlerMap:
 
         with (
             patch(
-                "rock_paper_sync.annotations.handlers.stroke_handler.extract_text_origin"
-            ) as mock_origin,
-            patch(
-                "rock_paper_sync.annotations.handlers.stroke_handler.build_parent_anchor_map"
-            ) as mock_anchor,
+                "rock_paper_sync.annotations.handlers.stroke_handler.AnchorResolver.from_rm_file"
+            ) as mock_resolver,
             patch(
                 "rock_paper_sync.annotations.handlers.stroke_handler.extract_text_blocks_from_rm"
             ) as mock_extract,
         ):
-            mock_origin.return_value = MagicMock(x=-375, y=94)
-            mock_anchor.return_value = {}
+            mock_resolver.return_value = MagicMock()
             mock_extract.return_value = ([], 94.0)
 
             result = handler.map([annotation], blocks, mock_rm_file)
@@ -200,17 +192,14 @@ class TestStrokeHandlerMap:
         annotation.annotation_id = "stroke-id"
         annotation.stroke = MagicMock()
         annotation.stroke.bounding_box = Rectangle(x=100, y=150, w=50, h=30)
-        annotation.parent_id = None  # Absolute coordinates
+        annotation.parent_id = None  # No parent - treated as absolute coordinates
 
         blocks = [ContentBlock(text="Test", type=BlockType.PARAGRAPH, level=0)]
 
         with (
             patch(
-                "rock_paper_sync.annotations.handlers.stroke_handler.extract_text_origin"
-            ) as mock_origin,
-            patch(
-                "rock_paper_sync.annotations.handlers.stroke_handler.build_parent_anchor_map"
-            ) as mock_anchor,
+                "rock_paper_sync.annotations.handlers.stroke_handler.AnchorResolver.from_rm_file"
+            ) as mock_resolver,
             patch(
                 "rock_paper_sync.annotations.handlers.stroke_handler.extract_text_blocks_from_rm"
             ) as mock_extract,
@@ -218,8 +207,7 @@ class TestStrokeHandlerMap:
                 "rock_paper_sync.annotations.handlers.stroke_handler.find_nearest_paragraph_by_y"
             ) as mock_find,
         ):
-            mock_origin.return_value = MagicMock(x=-375, y=94)
-            mock_anchor.return_value = {}
+            mock_resolver.return_value = MagicMock()
             mock_extract.return_value = ([], 94.0)
             mock_find.return_value = 0
 

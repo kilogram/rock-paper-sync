@@ -38,7 +38,7 @@ from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
 import rmscene
 
-from rock_paper_sync.coordinate_transformer import END_OF_DOC_ANCHOR_MARKER
+from rock_paper_sync.coordinates import END_OF_DOC_MARKER as END_OF_DOC_ANCHOR_MARKER
 
 from .core.types import Point, StrokeData
 from .scene_graph import SceneGraphIndex, StrokeBundle

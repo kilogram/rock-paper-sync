@@ -68,18 +68,6 @@ class RmFileExtractor:
 
 ---
 
-## Coordinate Transformation
-
-**Files:** `coordinate_transformer.py`, `generator.py`
-
-- Unify coordinate transformation strategies
-- Currently 3 different approaches in codebase:
-  1. Per-parent anchor resolution (`coordinate_transformer.py`)
-  2. Simple projection fallback (`generator.py`)
-  3. Delta-based with font metrics (`generator.py`)
-
----
-
 # Feature Additions
 
 ## Heading Style Support
@@ -142,6 +130,5 @@ Priority modules needing improved coverage:
 |--------|----------|----------|
 | `cli.py` | 52.69% | OCR commands untested |
 | `generator.py` | 53.35% | Annotation injection |
-| `coordinate_transformer.py` | 50.20% | Resolver methods |
 | `highlight_handler.py` | 63.35% | relocate() edge cases |
 | `scene_adapter/translator.py` | 55.06% | Extract/inject methods |

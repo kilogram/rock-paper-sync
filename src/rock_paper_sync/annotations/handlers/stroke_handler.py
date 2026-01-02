@@ -42,11 +42,10 @@ from rock_paper_sync.annotations.core.data_types import (
     RenderConfig,
 )
 from rock_paper_sync.annotations.document_model import AnchorContext
-from rock_paper_sync.coordinate_transformer import (
-    CoordinateTransformer,
-    build_parent_anchor_map,
-    extract_text_origin,
-    is_text_relative,
+from rock_paper_sync.coordinates import (
+    AnchorRelativePoint,
+    AnchorResolver,
+    is_root_layer,
 )
 
 if TYPE_CHECKING:
@@ -130,13 +129,8 @@ class StrokeHandler:
         """
         mappings: dict[int, list[Annotation]] = {}
 
-        # Extract coordinate transformation components
-        text_origin = extract_text_origin(rm_file_path)
-        parent_anchor_map = build_parent_anchor_map(rm_file_path)
-        transformer = CoordinateTransformer(
-            text_origin_x=text_origin.x,
-            text_origin_y=text_origin.y,
-        )
+        # Create anchor resolver for coordinate transformation
+        resolver = AnchorResolver.from_rm_file(rm_file_path)
 
         # Extract text blocks for position references
         rm_text_blocks, _ = extract_text_blocks_from_rm(rm_file_path)
@@ -149,30 +143,26 @@ class StrokeHandler:
                 continue
 
             bbox = annotation.stroke.bounding_box
-            native_y = bbox.y
-
-            # Transform to absolute coordinates using proper dual-anchor system
-            anchor_x = text_origin.x
-            if annotation.parent_id and annotation.parent_id in parent_anchor_map:
-                anchor_x = parent_anchor_map[annotation.parent_id].x
-
-            # Calculate stroke center Y to determine coordinate space
-            stroke_center_y = bbox.y + bbox.h / 2
 
             # Apply coordinate transformation
-            if is_text_relative(annotation.parent_id):
-                # Text-relative: use dual-anchor transform
-                absolute_x, absolute_y = transformer.to_absolute(
-                    native_x=bbox.x,
-                    native_y=native_y,
-                    parent_id=annotation.parent_id,
-                    anchor_x=anchor_x,
-                    stroke_center_y=stroke_center_y,
-                )
-            else:
-                # Already absolute
+            if is_root_layer(annotation.parent_id):
+                # Root layer uses absolute coordinates - no transformation
                 absolute_x = bbox.x
-                absolute_y = native_y
+                absolute_y = bbox.y
+            else:
+                # Get anchor for parent and transform to document space
+                anchor = resolver.get_anchor(annotation.parent_id)
+                if anchor is None:
+                    logger.warning(
+                        f"Stroke {annotation.annotation_id[:8]}... has unknown parent, skipping"
+                    )
+                    continue
+
+                # Use stroke center Y to determine dual-anchor behavior
+                stroke_center_y = bbox.y + bbox.h / 2
+                doc_point = AnchorRelativePoint(bbox.x, stroke_center_y).to_document(anchor)
+                absolute_x = doc_point.x
+                absolute_y = doc_point.y
 
             paragraph_index = None
 

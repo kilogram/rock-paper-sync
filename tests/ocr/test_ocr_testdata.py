@@ -264,11 +264,12 @@ class TestCoordinateTransformation:
     """Tests for coordinate space transformations."""
 
     def test_text_origin_extraction(self, rm_files):
-        """Verify text origin can be extracted from .rm files."""
-        from rock_paper_sync.coordinate_transformer import extract_text_origin
+        """Verify text origin can be extracted from .rm files via AnchorResolver."""
+        from rock_paper_sync.coordinates import AnchorResolver
 
         for rm_file in rm_files:
-            origin = extract_text_origin(rm_file)
+            resolver = AnchorResolver.from_rm_file(rm_file)
+            origin = resolver._default_text_origin
 
             # Should have valid coordinates
             assert origin.x is not None
@@ -281,17 +282,19 @@ class TestCoordinateTransformation:
             assert 500 < origin.width < 1000, f"Unusual width: {origin.width}"
 
     def test_parent_anchor_map_extraction(self, rm_files):
-        """Verify parent anchor map can be built from .rm files."""
-        from rock_paper_sync.coordinate_transformer import build_parent_anchor_map
+        """Verify parent anchor map can be built from .rm files via AnchorResolver."""
+        from rock_paper_sync.coordinates import AnchorResolver
 
         for rm_file in rm_files:
-            anchor_map = build_parent_anchor_map(rm_file)
+            resolver = AnchorResolver.from_rm_file(rm_file)
+            anchor_x_map = resolver._parent_to_anchor_x
 
             # Map may be empty if no text-relative annotations
-            # But if populated, should have valid data
-            for parent_id, origin in anchor_map.items():
-                assert hasattr(origin, "x")
-                assert hasattr(origin, "y")
+            # But if populated, should have valid X anchors
+            for parent_id, anchor_x in anchor_x_map.items():
+                assert isinstance(
+                    anchor_x, float
+                ), f"anchor_x should be float, got {type(anchor_x)}"
 
     def test_annotations_load_with_coordinates(self, rm_files):
         """Verify annotations load with valid coordinates via DocumentModel."""
