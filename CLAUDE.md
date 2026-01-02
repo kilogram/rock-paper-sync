@@ -177,11 +177,13 @@ See `docs/MULTI_VAULT.md` for vault configuration details and examples.
 - Automatic cleanup (7-day retention)
 - 668 tests passing
 
-### 🔮 Future Considerations
-- Full bidirectional sync
-- Image embedding
-- Custom templates
-- Batch operations
+### 🔮 Future Milestones (See `docs/PRODUCT_ROADMAP.md`)
+- **Milestone 5**: Bidirectional Sync (device → vault, conflict resolution)
+- **Milestone 6**: Zero-UI Experience (daemon, auto-sync, self-healing)
+- **Milestone 7**: Layer Architecture (multi-layer support, user layer preservation)
+- **Milestone 8**: Advanced OCR (margin notes → footnotes, inline additions)
+- **Milestone 9**: Advanced Content (tables, images, LaTeX)
+- **Milestone 10**: Ecosystem Integration (Obsidian plugin, multi-device)
 
 ## Troubleshooting
 
@@ -219,6 +221,9 @@ level = "debug"
 - `docs/OCR_SYSTEM.md` - OCR integration architecture
 - `docs/RECORD_REPLAY_FRAMEWORK.md` - Device testing framework
 - `docs/TODO.md` - Technical debt and deferred items
+
+### Product Planning
+- `docs/PRODUCT_ROADMAP.md` - Product roadmap with future milestones
 
 ### Annotation System
 - `src/rock_paper_sync/annotations/README.md` - Annotation system overview
