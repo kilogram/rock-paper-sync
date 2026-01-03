@@ -1,0 +1,12 @@
+{
+  "test_id": "annotation_after_modification",
+  "format": "trips",
+  "created_at": "2026-01-02T20:31:40.932166",
+  "description": "Annotations after modification",
+  "doc_uuid": "1bb8fb1c-40e8-474f-8a32-c11757ec8f31",
+  "trips_recorded": [
+    1,
+    2
+  ],
+  "has_golden": true
+}

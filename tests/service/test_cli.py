@@ -212,27 +212,47 @@ class TestStatusCommand:
 class TestResetCommand:
     """Test reset command."""
 
-    @pytest.mark.skip(
-        reason="Flaky test - state.db cleanup issue unrelated to anchor consolidation"
-    )
     def test_reset_with_confirmation(
         self, runner: CliRunner, config_file: Path, temp_vault: Path, tmp_path: Path
     ) -> None:
         """Test reset clears state when confirmed."""
-        # Create and sync a file
-        (temp_vault / "test.md").write_text("# Test")
-        runner.invoke(cli.main, ["--config", str(config_file), "sync"])
+        import time
 
-        # State database should exist
+        from rock_paper_sync.state import StateManager, SyncRecord
+
+        # Create state database with some records directly
         state_db = tmp_path / "state.db"
-        assert state_db.exists()
+        state = StateManager(state_db)
+        record = SyncRecord(
+            vault_name="test-vault",
+            obsidian_path="test.md",
+            remarkable_uuid="uuid-123",
+            content_hash="abc123",
+            last_sync_time=int(time.time()),
+            page_count=1,
+            status="synced",
+        )
+        state.update_file_state(record)
+        state.close()
+
+        # Verify there's data before reset
+        state = StateManager(state_db)
+        pre_count = len(state.get_all_synced_files("test-vault"))
+        state.close()
+        assert pre_count > 0, "Should have sync state records before reset"
 
         # Reset with confirmation
         result = runner.invoke(cli.main, ["--config", str(config_file), "reset"], input="y\n")
 
         assert result.exit_code == 0
         assert "Sync state cleared" in result.output
-        assert not state_db.exists()
+
+        # Database file still exists but records are cleared
+        assert state_db.exists()
+        state = StateManager(state_db)
+        post_count = len(state.get_all_synced_files("test-vault"))
+        state.close()
+        assert post_count == 0, "Sync state records should be cleared after reset"
 
     def test_reset_without_confirmation(
         self, runner: CliRunner, config_file: Path, temp_vault: Path, tmp_path: Path

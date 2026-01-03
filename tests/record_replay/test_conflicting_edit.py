@@ -95,7 +95,41 @@ def test_conflicting_edit_on_highlighted_text(device, workspace, fixtures_dir):
         annos = read_annotations(io.BytesIO(rm_data))
         trip2_highlights.extend([a for a in annos if a.type == AnnotationType.HIGHLIGHT])
 
+    # === VALIDATION: Check highlight rectangles are within page bounds ===
+    # reMarkable uses CENTERED coordinates where 0 = page center
+    # Page dimensions: ~1404 x 1872 pixels
+    # So valid X range is approximately [-702, +702] (centered)
+    # Y uses absolute coords: [0, 1872]
+    PAGE_WIDTH = 1404
+    PAGE_HEIGHT = 1872
+    PAGE_CENTER_X = PAGE_WIDTH / 2  # 702
+    BOUNDS_TOLERANCE = 100  # Allow some margin for edge cases
+
+    print(f"\nTrip 2: {len(trip2_highlights)} highlights after modification")
+    bounds_errors = []
+    for i, h in enumerate(trip2_highlights):
+        if h.highlight and h.highlight.rectangles:
+            for j, rect in enumerate(h.highlight.rectangles):
+                text_preview = h.highlight.text[:30] if h.highlight.text else "?"
+                print(
+                    f"  Highlight '{text_preview}' rect[{j}]: x={rect.x:.1f}, y={rect.y:.1f}, w={rect.w:.1f}, h={rect.h:.1f}"
+                )
+
+                # Check X bounds (centered coordinate system)
+                if rect.x < -(PAGE_CENTER_X + BOUNDS_TOLERANCE) or rect.x > (
+                    PAGE_CENTER_X + BOUNDS_TOLERANCE
+                ):
+                    bounds_errors.append(
+                        f"Highlight {i} rect {j}: x={rect.x:.1f} outside centered page width [-{PAGE_CENTER_X}, +{PAGE_CENTER_X}]"
+                    )
+                # Check Y bounds (absolute, 0 = top of page)
+                if rect.y < -BOUNDS_TOLERANCE or rect.y > PAGE_HEIGHT + BOUNDS_TOLERANCE:
+                    bounds_errors.append(
+                        f"Highlight {i} rect {j}: y={rect.y:.1f} outside page height [0, {PAGE_HEIGHT}]"
+                    )
+
     # === GOLDEN COMPARISON ===
+    golden_highlights = []
     try:
         golden_state = device.upload_golden_document(
             workspace.test_doc,
@@ -107,7 +141,6 @@ def test_conflicting_edit_on_highlighted_text(device, workspace, fixtures_dir):
             ),
         )
 
-        golden_highlights = []
         for rm_data in golden_state.rm_files.values():
             annos = read_annotations(io.BytesIO(rm_data))
             golden_highlights.extend([a for a in annos if a.type == AnnotationType.HIGHLIGHT])
@@ -118,14 +151,18 @@ def test_conflicting_edit_on_highlighted_text(device, workspace, fixtures_dir):
         print("\nNo golden data - skipping comparison")
         print("   Run with --online -s to record golden ground truth")
 
-    # Report the result (don't assert exact match since behavior is experimental)
-    if len(trip2_highlights) == len(trip1_highlights):
-        print(f"All {len(trip2_highlights)} highlights preserved despite text changes")
-    elif len(trip2_highlights) > 0:
-        print(
-            f"Partial preservation: {len(trip1_highlights)} -> {len(trip2_highlights)} highlights"
-        )
-    else:
-        print("All highlights lost after conflicting edit")
+    # === ASSERTIONS ===
+    # 1. All highlights should be preserved
+    assert len(trip2_highlights) == len(trip1_highlights), (
+        f"Highlights lost during modification: {len(trip1_highlights)} -> {len(trip2_highlights)}\n"
+        f"Expected all {len(trip1_highlights)} highlights to be preserved."
+    )
+    print(f"✓ All {len(trip2_highlights)} highlights preserved")
+
+    # 2. Highlight rectangles should be within page bounds
+    assert not bounds_errors, "Highlight rectangles outside page bounds:\n" + "\n".join(
+        f"  - {e}" for e in bounds_errors
+    )
+    print("✓ All highlight rectangles within page bounds")
 
     device.end_test(test_id)

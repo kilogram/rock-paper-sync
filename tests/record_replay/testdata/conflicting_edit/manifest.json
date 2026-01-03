@@ -1,0 +1,11 @@
+{
+  "test_id": "conflicting_edit",
+  "format": "trips",
+  "created_at": "2026-01-02T20:33:13.631090",
+  "description": "Conflicting edit on highlighted text",
+  "doc_uuid": "48559e65-97a9-4869-8465-85719f57add2",
+  "trips_recorded": [
+    1
+  ],
+  "has_golden": true
+}

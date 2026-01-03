@@ -1,0 +1,11 @@
+{
+  "test_id": "three_way_merge",
+  "format": "trips",
+  "created_at": "2026-01-02T20:39:25.383780",
+  "description": "Three-way merge: edits + annotations",
+  "doc_uuid": "e2b753cc-71d1-402e-a29a-50ed8a04aa00",
+  "trips_recorded": [
+    1
+  ],
+  "has_golden": true
+}

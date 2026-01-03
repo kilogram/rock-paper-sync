@@ -108,6 +108,40 @@ def test_highlight_anchoring_across_modifications(device, workspace, fixtures_di
     ]
     reanchored_strokes = [a for a in reanchored_annotations if a.type == AnnotationType.STROKE]
 
+    # === VALIDATION: Check highlight rectangles are within page bounds ===
+    # reMarkable uses CENTERED coordinates where 0 = page center
+    # Page dimensions: ~1404 x 1872 pixels
+    # So valid X range is approximately [-702, +702] (centered)
+    # Y uses absolute coords: [0, 1872]
+    PAGE_WIDTH = 1404
+    PAGE_HEIGHT = 1872
+    PAGE_CENTER_X = PAGE_WIDTH / 2  # 702
+    BOUNDS_TOLERANCE = 100  # Allow some margin for edge cases
+
+    print("\nRe-anchored highlight positions:")
+    bounds_errors = []
+    for i, h in enumerate(reanchored_highlights):
+        if h.highlight and h.highlight.rectangles:
+            for j, rect in enumerate(h.highlight.rectangles):
+                text_preview = h.highlight.text[:30] if h.highlight.text else "?"
+                print(
+                    f"  '{text_preview}' rect[{j}]: "
+                    f"x={rect.x:.1f}, y={rect.y:.1f}, w={rect.w:.1f}, h={rect.h:.1f}"
+                )
+
+                # Check X bounds (centered coordinate system)
+                if rect.x < -(PAGE_CENTER_X + BOUNDS_TOLERANCE) or rect.x > (
+                    PAGE_CENTER_X + BOUNDS_TOLERANCE
+                ):
+                    bounds_errors.append(
+                        f"Highlight '{text_preview}' rect {j}: x={rect.x:.1f} outside centered page width [-{PAGE_CENTER_X}, +{PAGE_CENTER_X}]"
+                    )
+                # Check Y bounds (absolute, 0 = top of page)
+                if rect.y < -BOUNDS_TOLERANCE or rect.y > PAGE_HEIGHT + BOUNDS_TOLERANCE:
+                    bounds_errors.append(
+                        f"Highlight '{text_preview}' rect {j}: y={rect.y:.1f} outside page height [0, {PAGE_HEIGHT}]"
+                    )
+
     # === GOLDEN COMPARISON: Device-native ground truth ===
     golden_errors = []
     try:
@@ -167,7 +201,14 @@ def test_highlight_anchoring_across_modifications(device, workspace, fixtures_di
 
     print(f"Trip 2: All {len(reanchored_highlights)} highlights preserved after modification")
 
-    # Fail if golden comparison found issues
+    # === ASSERTIONS ===
+    # 1. Highlight rectangles should be within page bounds
+    assert not bounds_errors, "Highlight rectangles outside page bounds:\n" + "\n".join(
+        f"  - {e}" for e in bounds_errors
+    )
+    print("✓ All highlight rectangles within page bounds")
+
+    # 2. Fail if golden comparison found issues
     if golden_errors:
         pytest.fail(
             f"Golden comparison failed with {len(golden_errors)} error(s):\n"
@@ -206,18 +247,24 @@ def _compare_highlight_positions(
         golden_rect = golden_h.highlight.rectangles[0]
         reanchored_rect = reanchored_h.highlight.rectangles[0]
 
+        x_diff = abs(reanchored_rect.x - golden_rect.x)
         y_diff = abs(reanchored_rect.y - golden_rect.y)
-        status = "ok" if y_diff <= tolerance else "FAIL"
+        x_ok = x_diff <= tolerance
+        y_ok = y_diff <= tolerance
+        status = "ok" if x_ok and y_ok else "FAIL"
 
         print(
             f"   {status} '{text}': "
-            f"reanchored y={reanchored_rect.y:.1f}, "
-            f"golden y={golden_rect.y:.1f}, "
-            f"diff={y_diff:.1f}px"
+            f"reanchored ({reanchored_rect.x:.1f}, {reanchored_rect.y:.1f}), "
+            f"golden ({golden_rect.x:.1f}, {golden_rect.y:.1f}), "
+            f"diff=({x_diff:.1f}, {y_diff:.1f})px"
         )
 
-        if y_diff > tolerance:
-            msg = f"Highlight '{text}' position mismatch: diff={y_diff:.1f}px"
+        if not x_ok:
+            msg = f"Highlight '{text}' X position mismatch: diff={x_diff:.1f}px"
+            errors.append(msg)
+        if not y_ok:
+            msg = f"Highlight '{text}' Y position mismatch: diff={y_diff:.1f}px"
             errors.append(msg)
 
     return errors
