@@ -32,7 +32,7 @@ from __future__ import annotations
 import difflib
 import hashlib
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
@@ -49,6 +49,36 @@ if TYPE_CHECKING:
     from rock_paper_sync.parser import ContentBlock
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Constants for Anchor Resolution
+# =============================================================================
+
+# Context window: characters of surrounding text to capture for disambiguation
+CONTEXT_WINDOW_SIZE = 50
+
+# diff-match-patch configuration
+DMP_MATCH_THRESHOLD = 0.5  # Similarity threshold (0.0 = exact, 1.0 = very loose)
+DMP_MATCH_DISTANCE = 1000  # Max distance from expected position to search
+
+# Fuzzy matching thresholds
+DEFAULT_FUZZY_THRESHOLD = 0.8  # Minimum similarity for fuzzy match acceptance
+DISAMBIGUATION_THRESHOLD = 0.5  # Minimum score to accept disambiguated match
+
+# Similarity score weights (must sum to 1.0)
+WEIGHT_TEXT_CONTENT = 0.5  # Primary: text hash/similarity
+WEIGHT_CONTEXT = 0.3  # Context windows (before + after)
+WEIGHT_STRUCTURE = 0.15  # Paragraph index proximity
+WEIGHT_SPATIAL = 0.05  # Y-position proximity
+
+# Suffix/prefix lengths for fallback matching (in descending order of reliability)
+SUFFIX_MATCH_LENGTHS = [30, 20, 15, 10, 8, 6, 5]
+PREFIX_MATCH_LENGTHS = [30, 20, 15, 10]
+
+# Minimum pattern length for fuzzy matching
+MIN_DMP_PATTERN_LENGTH = 5
+MIN_FUZZY_FALLBACK_LENGTH = 10
 
 
 # =============================================================================
@@ -108,7 +138,7 @@ class DiffAnchor:
         full_text: str,
         start: int,
         end: int,
-        context_size: int = 50,
+        context_size: int = CONTEXT_WINDOW_SIZE,
     ) -> DiffAnchor:
         """Create DiffAnchor from a text span.
 
@@ -164,6 +194,44 @@ class DiffAnchor:
             return (start, end)
         return None
 
+    def _find_all_occurrences(
+        self,
+        pattern: str,
+        text: str,
+        search_start: int = 0,
+    ) -> list[int]:
+        """Find all occurrences of pattern in text starting from search_start.
+
+        Args:
+            pattern: Text to find
+            text: Text to search in
+            search_start: Position to start searching from
+
+        Returns:
+            List of match positions (may be empty)
+        """
+        matches = []
+        pos = search_start
+        while True:
+            match_pos = text.find(pattern, pos)
+            if match_pos == -1:
+                break
+            matches.append(match_pos)
+            pos = match_pos + 1
+        return matches
+
+    def _pick_closest_match(self, matches: list[int], expected_pos: int) -> int:
+        """Pick the match closest to expected position.
+
+        Args:
+            matches: List of match positions (must not be empty)
+            expected_pos: Expected position for disambiguation
+
+        Returns:
+            Best matching position
+        """
+        return min(matches, key=lambda p: abs(p - expected_pos))
+
     def _find_before_anchor(self, new_text: str) -> tuple[int, int]:
         """Find stable_before in new_text with fallback strategies.
 
@@ -171,49 +239,23 @@ class DiffAnchor:
         Returns (position, matched_length) or (-1, 0) if not found.
         """
         # Strategy 1: Exact match of full context
-        pos = new_text.find(self.stable_before)
-        if pos != -1:
-            # Check for multiple matches - use position hint to disambiguate
-            all_matches = []
-            search_start = 0
-            while True:
-                match_pos = new_text.find(self.stable_before, search_start)
-                if match_pos == -1:
-                    break
-                all_matches.append(match_pos)
-                search_start = match_pos + 1
-
-            if len(all_matches) == 1:
-                return (all_matches[0], len(self.stable_before))
-            else:
-                # Multiple matches - pick closest to expected position
-                expected = self.original_position - len(self.stable_before)
-                best = min(all_matches, key=lambda p: abs(p - expected))
-                return (best, len(self.stable_before))
+        matches = self._find_all_occurrences(self.stable_before, new_text)
+        if matches:
+            expected = self.original_position - len(self.stable_before)
+            best = self._pick_closest_match(matches, expected)
+            return (best, len(self.stable_before))
 
         # Strategy 2: Try shorter suffixes with position disambiguation
         # This is more reliable than dmp when context is polluted (e.g., target text
         # appears in context and was modified), because suffixes that don't contain
         # the target text are more likely to be stable.
-        for suffix_len in [30, 20, 15, 10, 8, 6, 5]:
+        for suffix_len in SUFFIX_MATCH_LENGTHS:
             if len(self.stable_before) >= suffix_len:
                 suffix = self.stable_before[-suffix_len:]
-                # Find all occurrences
-                all_matches = []
-                search_start = 0
-                while True:
-                    match_pos = new_text.find(suffix, search_start)
-                    if match_pos == -1:
-                        break
-                    all_matches.append(match_pos)
-                    search_start = match_pos + 1
-
-                if len(all_matches) == 1:
-                    return (all_matches[0], suffix_len)
-                elif len(all_matches) > 1:
-                    # Multiple matches - pick closest to expected position
+                matches = self._find_all_occurrences(suffix, new_text)
+                if matches:
                     expected = self.original_position - suffix_len
-                    best = min(all_matches, key=lambda p: abs(p - expected))
+                    best = self._pick_closest_match(matches, expected)
                     return (best, suffix_len)
 
         # Strategy 3: Fuzzy match using diff-match-patch (last resort)
@@ -252,24 +294,12 @@ class DiffAnchor:
             return fuzzy_pos
 
         # Strategy 3: Try shorter prefixes with position disambiguation
-        for prefix_len in [30, 20, 15, 10]:
+        for prefix_len in PREFIX_MATCH_LENGTHS:
             if len(self.stable_after) >= prefix_len:
                 prefix = self.stable_after[:prefix_len]
-                # Find all occurrences after search_start
-                all_matches = []
-                search_pos = search_start
-                while True:
-                    match_pos = new_text.find(prefix, search_pos)
-                    if match_pos == -1:
-                        break
-                    all_matches.append(match_pos)
-                    search_pos = match_pos + 1
-
-                if len(all_matches) == 1:
-                    return all_matches[0]
-                elif len(all_matches) > 1:
-                    # Multiple matches - pick closest to expected position
-                    best = min(all_matches, key=lambda p: abs(p - expected_after))
+                matches = self._find_all_occurrences(prefix, new_text, search_start)
+                if matches:
+                    best = self._pick_closest_match(matches, expected_after)
                     return best
 
         return -1
@@ -293,19 +323,15 @@ class DiffAnchor:
         Returns:
             Match position or -1 if no good match found
         """
-        if len(pattern) < 5:
+        if len(pattern) < MIN_DMP_PATTERN_LENGTH:
             return -1
 
         try:
             from diff_match_patch import diff_match_patch
 
             dmp = diff_match_patch()
-            # Match_Threshold: 0.5 = fairly strict, 1.0 = very loose
-            # Lower = require closer match
-            dmp.Match_Threshold = 0.5
-            # Match_Distance: How far to search from expected_loc
-            # Higher = search wider area
-            dmp.Match_Distance = 1000
+            dmp.Match_Threshold = DMP_MATCH_THRESHOLD
+            dmp.Match_Distance = DMP_MATCH_DISTANCE
 
             result = dmp.match_main(text, pattern, expected_loc)
             return result  # Returns -1 if no match
@@ -315,7 +341,7 @@ class DiffAnchor:
 
     def _fuzzy_find_fallback(self, needle: str, haystack: str, expected_loc: int = 0) -> int:
         """Fallback fuzzy find using difflib (if diff-match-patch unavailable)."""
-        if len(needle) < 10:
+        if len(needle) < MIN_FUZZY_FALLBACK_LENGTH:
             return -1
 
         # Use SequenceMatcher to find best match
@@ -382,8 +408,8 @@ class AnchorContext:
             y_position: Optional Y coordinate hint
         """
         text_content = full_text[start:end]
-        context_before = full_text[max(0, start - 50) : start]
-        context_after = full_text[end : end + 50]
+        context_before = full_text[max(0, start - CONTEXT_WINDOW_SIZE) : start]
+        context_after = full_text[end : end + CONTEXT_WINDOW_SIZE]
 
         return cls(
             content_hash=_content_hash(text_content),
@@ -419,8 +445,8 @@ class AnchorContext:
         para_end = para_end if para_end != -1 else len(full_text)
 
         text_content = full_text[para_start:para_end]
-        context_before = full_text[max(0, para_start - 50) : para_start]
-        context_after = full_text[para_end : para_end + 50]
+        context_before = full_text[max(0, para_start - CONTEXT_WINDOW_SIZE) : para_start]
+        context_after = full_text[para_end : para_end + CONTEXT_WINDOW_SIZE]
 
         return cls(
             content_hash=_content_hash(text_content),
@@ -435,40 +461,40 @@ class AnchorContext:
     def similarity_to(self, other: AnchorContext) -> float:
         """Calculate similarity score between contexts.
 
-        Weights: text_content (0.5) + context (0.3) + structure (0.15) + spatial (0.05)
+        Weights: text_content + context + structure + spatial (see module constants)
         """
         score = 0.0
 
-        # Text content similarity (0.5)
+        # Text content similarity
         if self.content_hash == other.content_hash:
-            score += 0.5
+            score += WEIGHT_TEXT_CONTENT
         else:
             text_ratio = difflib.SequenceMatcher(
                 None, self.text_content, other.text_content
             ).ratio()
-            score += 0.5 * text_ratio
+            score += WEIGHT_TEXT_CONTENT * text_ratio
 
-        # Context similarity (0.3)
+        # Context similarity
         before_ratio = difflib.SequenceMatcher(
             None, self.context_before, other.context_before
         ).ratio()
         after_ratio = difflib.SequenceMatcher(None, self.context_after, other.context_after).ratio()
-        score += 0.3 * (before_ratio + after_ratio) / 2
+        score += WEIGHT_CONTEXT * (before_ratio + after_ratio) / 2
 
-        # Structural similarity (0.15)
+        # Structural similarity
         if self.paragraph_index is not None and other.paragraph_index is not None:
             if self.paragraph_index == other.paragraph_index:
-                score += 0.15
+                score += WEIGHT_STRUCTURE
             else:
                 # Diminishing score for nearby paragraphs
                 distance = abs(self.paragraph_index - other.paragraph_index)
-                score += 0.15 * max(0, 1 - distance / 10)
+                score += WEIGHT_STRUCTURE * max(0, 1 - distance / 10)
 
-        # Spatial similarity (0.05)
+        # Spatial similarity
         if self.y_position_hint is not None and other.y_position_hint is not None:
             y_distance = abs(self.y_position_hint - other.y_position_hint)
-            # ~57px per line, normalize
-            score += 0.05 * max(0, 1 - y_distance / 500)
+            # ~57px per line, normalize over ~9 lines
+            score += WEIGHT_SPATIAL * max(0, 1 - y_distance / 500)
 
         return score
 
@@ -478,7 +504,7 @@ class AnchorContext:
         new_text: str,
         old_layout: LayoutContext | None = None,
         new_layout: LayoutContext | None = None,
-        fuzzy_threshold: float = 0.8,
+        fuzzy_threshold: float = DEFAULT_FUZZY_THRESHOLD,
     ) -> AnchorResolution | None:
         """Resolve this anchor in new document.
 
@@ -622,7 +648,7 @@ class AnchorContext:
                 best_score = score
                 best_candidate = (start, end)
 
-        return best_candidate if best_score > 0.5 else None
+        return best_candidate if best_score > DISAMBIGUATION_THRESHOLD else None
 
     def _fuzzy_match(self, new_text: str, fuzzy_threshold: float) -> AnchorResolution | None:
         """Fuzzy match using text content and context windows."""
@@ -652,11 +678,11 @@ class AnchorContext:
 
             for candidate_offset in all_offsets:
                 # Context score
-                before = new_text[max(0, candidate_offset - 50) : candidate_offset]
+                before = new_text[max(0, candidate_offset - CONTEXT_WINDOW_SIZE) : candidate_offset]
                 after = new_text[
                     candidate_offset + len(self.text_content) : candidate_offset
                     + len(self.text_content)
-                    + 50
+                    + CONTEXT_WINDOW_SIZE
                 ]
 
                 before_score = difflib.SequenceMatcher(None, self.context_before, before).ratio()
@@ -1046,29 +1072,14 @@ class DocumentModel:
                             min(anchor_char_offset + 50, len(page_text)),
                         )
                         # Preserve Y hint for page routing
-                        anchor = AnchorContext(
-                            content_hash=anchor.content_hash,
-                            text_content=anchor.text_content,
-                            paragraph_index=anchor.paragraph_index,
-                            context_before=anchor.context_before,
-                            context_after=anchor.context_after,
-                            y_position_hint=abs_y,
-                            diff_anchor=anchor.diff_anchor,
-                        )
+                        anchor = replace(anchor, y_position_hint=abs_y)
                     else:
                         # Fallback to Y-position based anchor
                         anchor = AnchorContext.from_y_position(
                             abs_y, page_text, layout_ctx, paragraph_index=None
                         )
-                        anchor = AnchorContext(
-                            content_hash=anchor.content_hash,
-                            text_content=anchor.text_content,
-                            paragraph_index=anchor.paragraph_index,
-                            context_before=anchor.context_before,
-                            context_after=anchor.context_after,
-                            y_position_hint=abs_y,
-                            diff_anchor=anchor.diff_anchor,
-                        )
+                        # Ensure Y hint is set for page routing
+                        anchor = replace(anchor, y_position_hint=abs_y)
 
                     # Get SceneGroupItemBlock and SceneTreeBlock using scene graph index
                     scene_group_item = None
@@ -1170,26 +1181,10 @@ class DocumentModel:
                         # (page_text offset + current document offset)
                         if anchor.diff_anchor:
                             doc_level_offset = current_char_offset + text_offset
-                            anchor = AnchorContext(
-                                content_hash=anchor.content_hash,
-                                text_content=anchor.text_content,
-                                paragraph_index=anchor.paragraph_index,
-                                section_path=anchor.section_path,
-                                context_before=anchor.context_before,
-                                context_after=anchor.context_after,
-                                line_range=anchor.line_range,
-                                y_position_hint=anchor.y_position_hint,
-                                page_hint=anchor.page_hint,
-                                diff_anchor=DiffAnchor(
-                                    stable_before=anchor.diff_anchor.stable_before,
-                                    stable_before_hash=anchor.diff_anchor.stable_before_hash,
-                                    stable_after=anchor.diff_anchor.stable_after,
-                                    stable_after_hash=anchor.diff_anchor.stable_after_hash,
-                                    offset_from_before=anchor.diff_anchor.offset_from_before,
-                                    offset_from_after=anchor.diff_anchor.offset_from_after,
-                                    original_position=doc_level_offset,
-                                ),
+                            new_diff_anchor = replace(
+                                anchor.diff_anchor, original_position=doc_level_offset
                             )
+                            anchor = replace(anchor, diff_anchor=new_diff_anchor)
                     else:
                         # Fallback to Y position
                         if rects:

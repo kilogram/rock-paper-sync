@@ -479,7 +479,7 @@ class HighlightHandler:
         highlight_text: str,
         page_text: str,
         anchor_context: AnchorContext,
-    ) -> tuple[int, str] | int:
+    ) -> tuple[int, str] | None:
         """Find the best offset for highlighted text in page text.
 
         When highlight text appears multiple times in the page, uses context
@@ -496,7 +496,7 @@ class HighlightHandler:
 
         Returns:
             Tuple of (offset, actual_text) where actual_text may differ from
-            highlight_text if the text was modified. Returns -1 if not found.
+            highlight_text if the text was modified. Returns None if not found.
         """
         import difflib
 
@@ -521,7 +521,7 @@ class HighlightHandler:
                 pos = page_text.find(anchor_context.text_content)
                 if pos != -1:
                     return (pos, anchor_context.text_content)
-            return -1
+            return None
 
         if len(occurrences) == 1:
             return (occurrences[0], highlight_text)
@@ -854,16 +854,11 @@ class HighlightHandler:
         # Returns (offset, actual_text) where actual_text may differ from highlight_text
         # if the highlighted text was modified (e.g., case change, word addition)
         find_result = self._find_best_text_offset(highlight_text, page_text, anchor_context)
-        if find_result == -1:
+        if find_result is None:
             logger.warning(f"Could not find '{highlight_text[:30]}...' in page text")
             return None
 
-        # Handle both old return type (int) and new return type (tuple)
-        if isinstance(find_result, tuple):
-            new_offset, actual_text = find_result
-        else:
-            new_offset = find_result
-            actual_text = highlight_text
+        new_offset, actual_text = find_result
 
         logger.debug(f"Highlight '{actual_text[:30]}...': new_offset={new_offset}")
 
