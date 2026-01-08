@@ -56,16 +56,26 @@ class TestAnchorContext:
         assert resolution is not None
         assert resolution.confidence >= 0.7
 
-    def test_resolve_anchor_text_not_found(self):
-        """Test resolving anchor when text was deleted."""
+    def test_resolve_anchor_text_modified(self):
+        """Test resolving anchor when text was replaced with different content.
+
+        When the exact text is deleted but stable context remains, DiffAnchor
+        finds where the text WOULD be based on surrounding context. This enables
+        handling "conflicting edits" where the highlighted text was modified.
+        """
         old_doc = "The quick brown fox jumps."
         new_doc = "The quick dog runs."
 
         anchor = AnchorContext.from_text_span(old_doc, 10, 19, paragraph_index=0)
         resolution = anchor.resolve(old_doc, new_doc, fuzzy_threshold=0.8)
 
-        # "brown fox" doesn't exist in new document
-        assert resolution is None
+        # DiffAnchor finds position based on stable context "The quick " before
+        # and " jumps" after (though "jumps" is also gone, suffix matching helps)
+        assert resolution is not None
+        assert resolution.match_type == "diff_anchor"
+        assert resolution.confidence < 0.8  # Lower confidence for modified text
+        # The resolved span points to where the text WOULD be (after "The quick ")
+        assert resolution.start_offset == 10
 
     def test_resolve_anchor_with_context_disambiguation(self):
         """Test that context helps disambiguate multiple matches."""
@@ -388,6 +398,260 @@ class TestIntegration:
 
         # Should not find it
         assert resolution is None
+
+
+# =============================================================================
+# DiffAnchor Tests
+# =============================================================================
+
+
+class TestDiffAnchorBasicInvariants:
+    """Test DiffAnchor basic behavior that should always work."""
+
+    def test_resolves_unchanged_document(self):
+        """DiffAnchor should resolve in same document."""
+        from rock_paper_sync.annotations.document_model import DiffAnchor
+
+        document = "The quick brown fox jumps over the lazy dog."
+        start, end = 10, 19  # "brown fox"
+
+        anchor = DiffAnchor.from_text_span(document, start, end)
+        result = anchor.resolve_in(document)
+
+        assert result is not None
+        assert result == (start, end)
+        assert document[result[0] : result[1]] == "brown fox"
+
+    def test_resolves_text_inserted_before(self):
+        """DiffAnchor should resolve when text inserted before target."""
+        from rock_paper_sync.annotations.document_model import DiffAnchor
+
+        old_doc = "The quick brown fox jumps."
+        new_doc = "INSERTED. The quick brown fox jumps."
+
+        start = old_doc.find("brown fox")
+        end = start + len("brown fox")
+
+        anchor = DiffAnchor.from_text_span(old_doc, start, end)
+        result = anchor.resolve_in(new_doc)
+
+        assert result is not None
+        assert new_doc[result[0] : result[1]] == "brown fox"
+
+    def test_resolves_text_inserted_after(self):
+        """DiffAnchor should resolve when text inserted after target."""
+        from rock_paper_sync.annotations.document_model import DiffAnchor
+
+        old_doc = "The quick brown fox jumps."
+        new_doc = "The quick brown fox jumps. MORE TEXT HERE."
+
+        start = old_doc.find("brown fox")
+        end = start + len("brown fox")
+
+        anchor = DiffAnchor.from_text_span(old_doc, start, end)
+        result = anchor.resolve_in(new_doc)
+
+        assert result is not None
+        assert result == (start, end)  # Same position
+        assert new_doc[result[0] : result[1]] == "brown fox"
+
+    def test_resolves_text_deleted_before(self):
+        """DiffAnchor should resolve when text deleted far before target.
+
+        The deleted text must be OUTSIDE the 50-char stable_before window
+        so the context remains intact.
+        """
+        from rock_paper_sync.annotations.document_model import DiffAnchor
+
+        # Deleted text is far from target, outside the 50-char context window
+        # Context window starts ~50 chars before "brown fox"
+        old_doc = "DELETED PREFIX HERE. " + ("x" * 60) + " The quick brown fox jumps."
+        new_doc = ("x" * 60) + " The quick brown fox jumps."
+
+        start = old_doc.find("brown fox")
+        end = start + len("brown fox")
+
+        anchor = DiffAnchor.from_text_span(old_doc, start, end)
+        result = anchor.resolve_in(new_doc)
+
+        assert result is not None
+        assert new_doc[result[0] : result[1]] == "brown fox"
+
+
+class TestDiffAnchorTargetModification:
+    """Test DiffAnchor when target text is modified."""
+
+    def test_resolves_target_uppercased(self):
+        """DiffAnchor should find span when target is uppercased."""
+        from rock_paper_sync.annotations.document_model import DiffAnchor
+
+        old_doc = "The quick brown fox jumps."
+        new_doc = "The quick BROWN FOX jumps."
+
+        start = old_doc.find("brown fox")
+        end = start + len("brown fox")
+
+        anchor = DiffAnchor.from_text_span(old_doc, start, end)
+        result = anchor.resolve_in(new_doc)
+
+        assert result is not None
+        assert new_doc[result[0] : result[1]] == "BROWN FOX"
+
+    def test_resolves_target_extended(self):
+        """DiffAnchor should find span when target text is extended."""
+        from rock_paper_sync.annotations.document_model import DiffAnchor
+
+        old_doc = "The quick fox jumps."
+        new_doc = "The quick brown fox jumps."
+
+        start = old_doc.find("fox")
+        end = start + len("fox")
+
+        anchor = DiffAnchor.from_text_span(old_doc, start, end)
+        result = anchor.resolve_in(new_doc)
+
+        # Should find "brown fox" - the span between stable anchors
+        assert result is not None
+        assert "fox" in new_doc[result[0] : result[1]]
+
+    def test_resolves_target_shortened(self):
+        """DiffAnchor should find span when target text is shortened."""
+        from rock_paper_sync.annotations.document_model import DiffAnchor
+
+        old_doc = "The quick brown fox jumps."
+        new_doc = "The quick fox jumps."
+
+        start = old_doc.find("brown fox")
+        end = start + len("brown fox")
+
+        anchor = DiffAnchor.from_text_span(old_doc, start, end)
+        result = anchor.resolve_in(new_doc)
+
+        assert result is not None
+        # The span between stable_before and stable_after is now just "fox"
+        assert "fox" in new_doc[result[0] : result[1]]
+
+
+class TestDiffAnchorContextPollution:
+    """Test DiffAnchor when context contains target text - THE BUG."""
+
+    def test_stable_before_contains_target(self):
+        """DiffAnchor should handle when stable_before contains target."""
+        from rock_paper_sync.annotations.document_model import DiffAnchor
+
+        # Target text "will shift down" appears twice:
+        # 1. In instructions: Highlight "will shift down"
+        # 2. In content: This content will shift down
+        old_doc = """Highlight "will shift down" below.
+This content will shift down when modified."""
+
+        # Find second occurrence (the actual target)
+        first = old_doc.find("will shift down")
+        second = old_doc.find("will shift down", first + 1)
+
+        anchor = DiffAnchor.from_text_span(old_doc, second, second + len("will shift down"))
+
+        # Modify ALL occurrences (like str.replace does)
+        new_doc = old_doc.replace("will shift down", "WILL DEFINITELY SHIFT DOWN")
+
+        result = anchor.resolve_in(new_doc)
+
+        # Should resolve to second occurrence
+        assert result is not None
+        assert new_doc[result[0] : result[1]] == "WILL DEFINITELY SHIFT DOWN"
+
+    def test_stable_after_contains_target(self):
+        """DiffAnchor should handle when stable_after contains target."""
+        from rock_paper_sync.annotations.document_model import DiffAnchor
+
+        old_doc = """First target here.
+Another line with target in it."""
+
+        # Anchor first "target"
+        start = old_doc.find("target")
+        end = start + len("target")
+
+        anchor = DiffAnchor.from_text_span(old_doc, start, end)
+
+        # Modify ALL occurrences
+        new_doc = old_doc.replace("target", "TARGET")
+
+        result = anchor.resolve_in(new_doc)
+
+        assert result is not None
+        assert new_doc[result[0] : result[1]] == "TARGET"
+
+    def test_both_contexts_contain_target(self):
+        """DiffAnchor should handle target appearing in both contexts."""
+        from rock_paper_sync.annotations.document_model import DiffAnchor
+
+        old_doc = "foo AAA foo BBB foo CCC foo"
+        # Anchor the middle "foo" (after BBB, before CCC)
+
+        # Find third occurrence
+        pos = 0
+        for _ in range(3):
+            pos = old_doc.find("foo", pos + 1)
+
+        anchor = DiffAnchor.from_text_span(old_doc, pos, pos + 3)
+
+        # Modify all occurrences
+        new_doc = old_doc.replace("foo", "FOO")
+
+        result = anchor.resolve_in(new_doc)
+
+        assert result is not None
+        # Should find the third occurrence
+        third_in_new = 0
+        for _ in range(3):
+            third_in_new = new_doc.find("FOO", third_in_new + 1)
+        assert result[0] == third_in_new
+
+
+class TestDiffAnchorMultipleOccurrences:
+    """Test DiffAnchor distinguishes between multiple occurrences."""
+
+    def test_three_occurrences_first(self):
+        """DiffAnchor for first occurrence resolves correctly."""
+        from rock_paper_sync.annotations.document_model import DiffAnchor
+
+        doc = "AAA target BBB target CCC target DDD"
+        pos1 = doc.find("target")
+
+        anchor = DiffAnchor.from_text_span(doc, pos1, pos1 + 6)
+        result = anchor.resolve_in(doc)
+
+        assert result is not None
+        assert result == (pos1, pos1 + 6)
+
+    def test_three_occurrences_middle(self):
+        """DiffAnchor for middle occurrence resolves correctly."""
+        from rock_paper_sync.annotations.document_model import DiffAnchor
+
+        doc = "AAA target BBB target CCC target DDD"
+        pos1 = doc.find("target")
+        pos2 = doc.find("target", pos1 + 1)
+
+        anchor = DiffAnchor.from_text_span(doc, pos2, pos2 + 6)
+        result = anchor.resolve_in(doc)
+
+        assert result is not None
+        assert result == (pos2, pos2 + 6)
+
+    def test_three_occurrences_last(self):
+        """DiffAnchor for last occurrence resolves correctly."""
+        from rock_paper_sync.annotations.document_model import DiffAnchor
+
+        doc = "AAA target BBB target CCC target DDD"
+        pos1 = doc.find("target")
+        pos2 = doc.find("target", pos1 + 1)
+        pos3 = doc.find("target", pos2 + 1)
+
+        anchor = DiffAnchor.from_text_span(doc, pos3, pos3 + 6)
+        result = anchor.resolve_in(doc)
+
+        assert result is not None
+        assert result == (pos3, pos3 + 6)
 
 
 if __name__ == "__main__":

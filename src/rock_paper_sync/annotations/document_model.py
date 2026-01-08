@@ -69,10 +69,14 @@ def _content_hash(text: str) -> str:
 
 @dataclass(frozen=True)
 class DiffAnchor:
-    """Anchor relative to stable (unchanged) content.
+    """Anchor relative to stable (unchanged) content using diff-match-patch.
 
     When text is edited, DiffAnchor tracks position relative to
     the nearest unchanged text, which is more stable than absolute offsets.
+
+    Uses Google's diff-match-patch library for fuzzy matching, which considers
+    both string similarity AND expected position - crucial when the same text
+    appears multiple times in a document.
 
     Example:
         Old: "The quick brown fox jumps over the lazy dog."
@@ -87,6 +91,7 @@ class DiffAnchor:
         - offset_from_before = 0 (immediately after)
         - stable_after = " over the lazy dog."
         - offset_from_after = 8 (8 chars before stable_after)
+        - original_position = 10 (position hint for disambiguation)
     """
 
     stable_before: str  # Unchanged text before target
@@ -95,6 +100,7 @@ class DiffAnchor:
     stable_after_hash: str  # Hash for fast matching
     offset_from_before: int  # Characters after stable_before ends
     offset_from_after: int  # Characters before stable_after starts
+    original_position: int = 0  # Expected position hint for diff-match-patch
 
     @classmethod
     def from_text_span(
@@ -127,30 +133,30 @@ class DiffAnchor:
             stable_after_hash=_content_hash(stable_after),
             offset_from_before=0,  # Immediately after stable_before
             offset_from_after=0,  # Immediately before stable_after
+            original_position=start,  # Remember where the target was
         )
 
     def resolve_in(self, new_text: str) -> tuple[int, int] | None:
         """Find target span in new text using stable anchors.
 
+        Uses multi-strategy approach with diff-match-patch for fuzzy matching:
+        1. Exact match of full context
+        2. Fuzzy match using diff-match-patch (position-aware)
+        3. Suffix/prefix matching with position disambiguation
+
         Returns (start, end) or None if stable anchors not found.
         """
         # Find stable_before in new_text
-        before_pos = new_text.find(self.stable_before)
+        before_pos, before_len = self._find_before_anchor(new_text)
         if before_pos == -1:
-            # Try fuzzy match
-            before_pos = self._fuzzy_find(self.stable_before, new_text)
-            if before_pos == -1:
-                return None
+            return None
 
-        start = before_pos + len(self.stable_before) + self.offset_from_before
+        start = before_pos + before_len + self.offset_from_before
 
         # Find stable_after in new_text (search after start)
-        after_pos = new_text.find(self.stable_after, start)
+        after_pos = self._find_after_anchor(new_text, start)
         if after_pos == -1:
-            # Try fuzzy match
-            after_pos = self._fuzzy_find(self.stable_after, new_text, start)
-            if after_pos == -1:
-                return None
+            return None
 
         end = after_pos - self.offset_from_after
 
@@ -158,17 +164,166 @@ class DiffAnchor:
             return (start, end)
         return None
 
-    def _fuzzy_find(self, needle: str, haystack: str, start: int = 0) -> int:
-        """Fuzzy find needle in haystack starting at position."""
+    def _find_before_anchor(self, new_text: str) -> tuple[int, int]:
+        """Find stable_before in new_text with fallback strategies.
+
+        Uses suffix matching for polluted contexts, dmp as last resort.
+        Returns (position, matched_length) or (-1, 0) if not found.
+        """
+        # Strategy 1: Exact match of full context
+        pos = new_text.find(self.stable_before)
+        if pos != -1:
+            # Check for multiple matches - use position hint to disambiguate
+            all_matches = []
+            search_start = 0
+            while True:
+                match_pos = new_text.find(self.stable_before, search_start)
+                if match_pos == -1:
+                    break
+                all_matches.append(match_pos)
+                search_start = match_pos + 1
+
+            if len(all_matches) == 1:
+                return (all_matches[0], len(self.stable_before))
+            else:
+                # Multiple matches - pick closest to expected position
+                expected = self.original_position - len(self.stable_before)
+                best = min(all_matches, key=lambda p: abs(p - expected))
+                return (best, len(self.stable_before))
+
+        # Strategy 2: Try shorter suffixes with position disambiguation
+        # This is more reliable than dmp when context is polluted (e.g., target text
+        # appears in context and was modified), because suffixes that don't contain
+        # the target text are more likely to be stable.
+        for suffix_len in [30, 20, 15, 10, 8, 6, 5]:
+            if len(self.stable_before) >= suffix_len:
+                suffix = self.stable_before[-suffix_len:]
+                # Find all occurrences
+                all_matches = []
+                search_start = 0
+                while True:
+                    match_pos = new_text.find(suffix, search_start)
+                    if match_pos == -1:
+                        break
+                    all_matches.append(match_pos)
+                    search_start = match_pos + 1
+
+                if len(all_matches) == 1:
+                    return (all_matches[0], suffix_len)
+                elif len(all_matches) > 1:
+                    # Multiple matches - pick closest to expected position
+                    expected = self.original_position - suffix_len
+                    best = min(all_matches, key=lambda p: abs(p - expected))
+                    return (best, suffix_len)
+
+        # Strategy 3: Fuzzy match using diff-match-patch (last resort)
+        # Only use if suffix matching failed completely
+        fuzzy_pos = self._dmp_match(self.stable_before, new_text, self.original_position)
+        if fuzzy_pos != -1:
+            # Validate that the match is reasonable (within 50% of document)
+            if (
+                abs(fuzzy_pos - (self.original_position - len(self.stable_before)))
+                < len(new_text) // 2
+            ):
+                return (fuzzy_pos, len(self.stable_before))
+
+        return (-1, 0)
+
+    def _find_after_anchor(self, new_text: str, search_start: int) -> int:
+        """Find stable_after in new_text with fallback strategies.
+
+        Uses diff-match-patch for fuzzy matching with position hints.
+        Returns position or -1 if not found.
+        """
+        # Edge case: empty stable_after means target was at end of document
+        if not self.stable_after:
+            return len(new_text)
+
+        # Strategy 1: Exact match after search_start
+        pos = new_text.find(self.stable_after, search_start)
+        if pos != -1:
+            return pos
+
+        # Strategy 2: Fuzzy match using diff-match-patch
+        # Expected position is right after the target span
+        expected_after = self.original_position + len(self.stable_before)
+        fuzzy_pos = self._dmp_match(self.stable_after, new_text, expected_after)
+        if fuzzy_pos != -1 and fuzzy_pos >= search_start:
+            return fuzzy_pos
+
+        # Strategy 3: Try shorter prefixes with position disambiguation
+        for prefix_len in [30, 20, 15, 10]:
+            if len(self.stable_after) >= prefix_len:
+                prefix = self.stable_after[:prefix_len]
+                # Find all occurrences after search_start
+                all_matches = []
+                search_pos = search_start
+                while True:
+                    match_pos = new_text.find(prefix, search_pos)
+                    if match_pos == -1:
+                        break
+                    all_matches.append(match_pos)
+                    search_pos = match_pos + 1
+
+                if len(all_matches) == 1:
+                    return all_matches[0]
+                elif len(all_matches) > 1:
+                    # Multiple matches - pick closest to expected position
+                    best = min(all_matches, key=lambda p: abs(p - expected_after))
+                    return best
+
+        return -1
+
+    def _dmp_match(self, pattern: str, text: str, expected_loc: int) -> int:
+        """Find pattern in text using diff-match-patch's match_main.
+
+        diff-match-patch uses a weighted algorithm that considers both:
+        - String similarity (fuzzy matching)
+        - Distance from expected_loc (position hint)
+
+        This solves the "context pollution" problem where the same text
+        appears multiple times - it picks the match closest to where
+        we expect it to be.
+
+        Args:
+            pattern: Text to find
+            text: Text to search in
+            expected_loc: Expected position (hint for disambiguation)
+
+        Returns:
+            Match position or -1 if no good match found
+        """
+        if len(pattern) < 5:
+            return -1
+
+        try:
+            from diff_match_patch import diff_match_patch
+
+            dmp = diff_match_patch()
+            # Match_Threshold: 0.5 = fairly strict, 1.0 = very loose
+            # Lower = require closer match
+            dmp.Match_Threshold = 0.5
+            # Match_Distance: How far to search from expected_loc
+            # Higher = search wider area
+            dmp.Match_Distance = 1000
+
+            result = dmp.match_main(text, pattern, expected_loc)
+            return result  # Returns -1 if no match
+        except ImportError:
+            # Fallback to difflib if diff-match-patch not available
+            return self._fuzzy_find_fallback(pattern, text, expected_loc)
+
+    def _fuzzy_find_fallback(self, needle: str, haystack: str, expected_loc: int = 0) -> int:
+        """Fallback fuzzy find using difflib (if diff-match-patch unavailable)."""
         if len(needle) < 10:
             return -1
 
         # Use SequenceMatcher to find best match
-        matcher = difflib.SequenceMatcher(None, needle, haystack[start:])
-        match = matcher.find_longest_match(0, len(needle), 0, len(haystack) - start)
+        matcher = difflib.SequenceMatcher(None, needle, haystack)
+        match = matcher.find_longest_match(0, len(needle), 0, len(haystack))
 
         if match.size >= len(needle) * 0.7:
-            return start + match.b
+            return match.b
         return -1
 
 
@@ -1011,6 +1166,30 @@ class DocumentModel:
                             text_offset,
                             text_offset + len(highlight_text),
                         )
+                        # Adjust DiffAnchor's original_position to document-level offset
+                        # (page_text offset + current document offset)
+                        if anchor.diff_anchor:
+                            doc_level_offset = current_char_offset + text_offset
+                            anchor = AnchorContext(
+                                content_hash=anchor.content_hash,
+                                text_content=anchor.text_content,
+                                paragraph_index=anchor.paragraph_index,
+                                section_path=anchor.section_path,
+                                context_before=anchor.context_before,
+                                context_after=anchor.context_after,
+                                line_range=anchor.line_range,
+                                y_position_hint=anchor.y_position_hint,
+                                page_hint=anchor.page_hint,
+                                diff_anchor=DiffAnchor(
+                                    stable_before=anchor.diff_anchor.stable_before,
+                                    stable_before_hash=anchor.diff_anchor.stable_before_hash,
+                                    stable_after=anchor.diff_anchor.stable_after,
+                                    stable_after_hash=anchor.diff_anchor.stable_after_hash,
+                                    offset_from_before=anchor.diff_anchor.offset_from_before,
+                                    offset_from_after=anchor.diff_anchor.offset_from_after,
+                                    original_position=doc_level_offset,
+                                ),
+                            )
                     else:
                         # Fallback to Y position
                         if rects:

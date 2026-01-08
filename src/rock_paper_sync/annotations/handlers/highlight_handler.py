@@ -474,6 +474,100 @@ class HighlightHandler:
         )
         return idx
 
+    def _find_best_text_offset(
+        self,
+        highlight_text: str,
+        page_text: str,
+        anchor_context: AnchorContext,
+    ) -> tuple[int, str] | int:
+        """Find the best offset for highlighted text in page text.
+
+        When highlight text appears multiple times in the page, uses context
+        disambiguation from anchor_context to find the correct occurrence.
+
+        When the original highlight_text was modified (e.g., case change or word
+        addition), falls back to anchor_context.text_content which contains the
+        text at the resolved position in the new document.
+
+        Args:
+            highlight_text: The text to find (may be outdated if text was edited)
+            page_text: Text content of the page
+            anchor_context: Anchor context with disambiguation info and resolved text
+
+        Returns:
+            Tuple of (offset, actual_text) where actual_text may differ from
+            highlight_text if the text was modified. Returns -1 if not found.
+        """
+        import difflib
+
+        # Find all occurrences
+        occurrences = []
+        start = 0
+        while True:
+            pos = page_text.find(highlight_text, start)
+            if pos == -1:
+                break
+            occurrences.append(pos)
+            start = pos + 1
+
+        if not occurrences:
+            # Original text not found - the highlighted text was likely modified.
+            # Try using anchor_context.text_content which has the resolved text.
+            if anchor_context.text_content and anchor_context.text_content != highlight_text:
+                logger.debug(
+                    f"Original text '{highlight_text[:20]}...' not found, "
+                    f"trying resolved text '{anchor_context.text_content[:20]}...'"
+                )
+                pos = page_text.find(anchor_context.text_content)
+                if pos != -1:
+                    return (pos, anchor_context.text_content)
+            return -1
+
+        if len(occurrences) == 1:
+            return (occurrences[0], highlight_text)
+
+        # Multiple occurrences - use context to disambiguate
+        logger.debug(
+            f"  Multiple occurrences ({len(occurrences)}) of '{highlight_text[:20]}...', "
+            f"using context to disambiguate"
+        )
+
+        best_offset = occurrences[0]
+        best_score = -1.0
+
+        for offset in occurrences:
+            # Get context around this occurrence
+            before_start = max(0, offset - len(anchor_context.context_before))
+            after_end = min(
+                len(page_text), offset + len(highlight_text) + len(anchor_context.context_after)
+            )
+
+            candidate_before = page_text[before_start:offset]
+            candidate_after = page_text[offset + len(highlight_text) : after_end]
+
+            # Score context match
+            before_score = (
+                difflib.SequenceMatcher(
+                    None, anchor_context.context_before, candidate_before
+                ).ratio()
+                if anchor_context.context_before
+                else 0.5
+            )
+            after_score = (
+                difflib.SequenceMatcher(None, anchor_context.context_after, candidate_after).ratio()
+                if anchor_context.context_after
+                else 0.5
+            )
+
+            score = (before_score + after_score) / 2
+
+            if score > best_score:
+                best_score = score
+                best_offset = offset
+
+        logger.debug(f"  Best match at offset {best_offset} with score {best_score:.2f}")
+        return (best_offset, highlight_text)
+
     def create_anchor(
         self,
         annotation: Annotation,
@@ -717,8 +811,14 @@ class HighlightHandler:
         """Apply a highlight annotation to a target page.
 
         This is the unified interface for placing highlights on pages.
-        Uses delta-based relocation when old_text is available (preserves
-        pixel-perfect positions).
+        Uses the pre-resolved anchor_context from the merger to find the
+        target position, then applies delta-based relocation to preserve
+        pixel-perfect rectangle positions.
+
+        The key insight is that anchor_context was resolved at DOCUMENT level
+        (full_text -> full_text) by the merger, with proper context disambiguation.
+        We use anchor_context.find_in() to locate the text in the PAGE, leveraging
+        that disambiguation context.
 
         Returns AbsolutePosition because highlights have fully-adjusted
         rectangle coordinates - no further CRDT transformation needed.
@@ -729,7 +829,7 @@ class HighlightHandler:
             new_origin: (x, y) origin of the page text
             layout_engine: WordWrapLayoutEngine for position calculations
             geometry: DeviceGeometry for layout parameters
-            anchor_context: AnchorContext with highlight position info
+            anchor_context: AnchorContext with highlight position info (pre-resolved)
             old_text: Page text before modification (enables delta relocation)
             old_origin: (x, y) origin of old text block
             crdt_base_id: Base ID from RootTextBlock for CRDT offset calculation
@@ -738,24 +838,80 @@ class HighlightHandler:
             AbsolutePosition with adjusted block, or None if can't be placed
         """
         from rock_paper_sync.annotations.domain.intents import AbsolutePosition
+        from rock_paper_sync.crdt_format import update_glyph_extra_value_data
 
-        if old_text and old_origin:
-            # Use delta-based relocation (preserves pixel-perfect positions)
-            adjusted = self.relocate(
-                block,
-                old_text,
-                page_text,
-                old_origin,
-                new_origin,
-                layout_engine,
-                geometry,
-                crdt_base_id,
-            )
-            if adjusted:
-                return AbsolutePosition(block=adjusted)
+        # Step 1: Extract highlight information from block
+        highlight_info = extract_glyph_highlight_info(block)
+        if highlight_info is None:
+            logger.warning("Could not extract highlight info, keeping original position")
+            return AbsolutePosition(block=block)
+
+        highlight_text, rectangles, _old_position = highlight_info
+        glyph_value = block.item.value
+
+        # Step 2: Find new position in page text
+        # Use anchor_context for disambiguation when there are multiple occurrences
+        # Returns (offset, actual_text) where actual_text may differ from highlight_text
+        # if the highlighted text was modified (e.g., case change, word addition)
+        find_result = self._find_best_text_offset(highlight_text, page_text, anchor_context)
+        if find_result == -1:
+            logger.warning(f"Could not find '{highlight_text[:30]}...' in page text")
             return None
 
-        # No old_text available - return block unchanged
-        # This is an edge case (source .rm file missing/corrupt)
-        logger.warning("No old_text available for highlight relocation, keeping original position")
+        # Handle both old return type (int) and new return type (tuple)
+        if isinstance(find_result, tuple):
+            new_offset, actual_text = find_result
+        else:
+            new_offset = find_result
+            actual_text = highlight_text
+
+        logger.debug(f"Highlight '{actual_text[:30]}...': new_offset={new_offset}")
+
+        # Step 4: Calculate new rectangles using layout engine
+        # We use layout-based positioning rather than delta-based because:
+        # 1. Page content may have shifted significantly (cross-page content movement)
+        # 2. old_text and page_text may represent different page content after edits
+        # 3. Delta-based approach only works when texts are comparable (same page content)
+        # The layout engine calculates accurate positions for the NEW content layout.
+        new_end_offset = new_offset + len(actual_text)
+        new_rects = layout_engine.calculate_highlight_rectangles(
+            new_offset, new_end_offset, page_text, new_origin, geometry.text_width
+        )
+
+        if not new_rects:
+            logger.warning(f"Layout engine returned no rectangles for '{highlight_text[:30]}...'")
+            return AbsolutePosition(block=block)
+
+        # Step 5: Build rectangles from layout engine
+        # Layout handles X, Y, W (text may reflow, words may be added/removed)
+        # Only preserve device height for consistent appearance
+        original_height = rectangles[0].h if rectangles else geometry.line_height
+        new_rectangles = [si.Rectangle(x, y, w, original_height) for x, y, w, h in new_rects]
+
+        glyph_value.rectangles.clear()
+        glyph_value.rectangles.extend(new_rectangles)
+
+        # Step 6: Update glyph metadata
+        glyph_value.start = new_offset
+
+        new_highlighted_text = page_text[new_offset : new_offset + len(actual_text)]
+        if new_highlighted_text:
+            glyph_value.text = new_highlighted_text
+            glyph_value.length = len(new_highlighted_text)
+
+        # Step 7: Update CRDT anchor for firmware 3.6+
+        if (
+            crdt_base_id is not None
+            and hasattr(block, "extra_value_data")
+            and block.extra_value_data
+        ):
+            block.extra_value_data = update_glyph_extra_value_data(
+                block.extra_value_data, new_offset, len(actual_text), crdt_base_id
+            )
+
+        logger.debug(
+            f"Placed highlight '{actual_text[:30]}...' at offset={new_offset} "
+            f"with {len(new_rectangles)} rect(s)"
+        )
+
         return AbsolutePosition(block=block)
