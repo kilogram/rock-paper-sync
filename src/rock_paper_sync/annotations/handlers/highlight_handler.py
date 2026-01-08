@@ -116,11 +116,45 @@ def find_and_resolve_anchor(
     Returns:
         Tuple of (old_offset, new_offset, confidence) or None if resolution fails
     """
-    # Find highlight text in old document
-    old_offset = old_text.find(highlight_text)
-    if old_offset == -1:
+    # Find all occurrences of highlight text in old document
+    # We need to find the CORRECT occurrence using Y position for disambiguation
+    candidates = []
+    search_start = 0
+    while True:
+        pos = old_text.find(highlight_text, search_start)
+        if pos == -1:
+            break
+        candidates.append(pos)
+        search_start = pos + 1
+
+    if not candidates:
         logger.warning(f"Could not find '{highlight_text[:30]}...' in old document")
         return None
+
+    # Pick best candidate using Y position hint
+    if len(candidates) == 1:
+        old_offset = candidates[0]
+    else:
+        # Multiple occurrences - use Y position to disambiguate
+        # Count newlines to estimate line number for each candidate
+        best_offset = candidates[0]
+        best_y_diff = float("inf")
+
+        for candidate in candidates:
+            # Rough estimate: count newlines before this position
+            lines_before = old_text[:candidate].count("\n")
+            estimated_y = lines_before * 57.0  # Approximate line height
+            y_diff = abs(estimated_y - old_position[1])
+
+            if y_diff < best_y_diff:
+                best_y_diff = y_diff
+                best_offset = candidate
+
+        old_offset = best_offset
+        logger.debug(
+            f"Disambiguated '{highlight_text[:20]}...' from {len(candidates)} occurrences "
+            f"using Y position (selected offset {old_offset})"
+        )
 
     logger.debug(
         f"Highlight '{highlight_text[:30]}...': old_pos=({old_position[0]:.1f}, {old_position[1]:.1f}), "
@@ -602,8 +636,53 @@ class HighlightHandler:
             center_y = None
 
         # Find highlight text in paragraph to get offsets
+        # Handle multiple occurrences by using X position for disambiguation
         if highlight_text and highlight_text in paragraph_text:
-            offset = paragraph_text.find(highlight_text)
+            # Find all occurrences
+            candidates = []
+            search_start = 0
+            while True:
+                pos = paragraph_text.find(highlight_text, search_start)
+                if pos == -1:
+                    break
+                candidates.append(pos)
+                search_start = pos + 1
+
+            if len(candidates) == 1:
+                offset = candidates[0]
+            elif len(candidates) > 1 and highlight.rectangles:
+                # Multiple occurrences - use X position to disambiguate
+                # The rectangle X position indicates where in the line the highlight starts
+                first_rect = highlight.rectangles[0]
+                rect_x = first_rect.x
+
+                # Estimate X position for each candidate based on character offset within line
+                # This is a rough approximation using average character width
+                avg_char_width = 15.0  # Approximate for Noto Sans
+
+                best_offset = candidates[0]
+                best_x_diff = float("inf")
+
+                for candidate in candidates:
+                    # Find position within line (chars from last newline or start)
+                    line_start = paragraph_text.rfind("\n", 0, candidate) + 1
+                    chars_in_line = candidate - line_start
+                    estimated_x = chars_in_line * avg_char_width
+
+                    x_diff = abs(estimated_x - rect_x)
+                    if x_diff < best_x_diff:
+                        best_x_diff = x_diff
+                        best_offset = candidate
+
+                offset = best_offset
+                logger.debug(
+                    f"Disambiguated '{highlight_text[:20]}...' from {len(candidates)} "
+                    f"occurrences in paragraph using X position"
+                )
+            else:
+                # Multiple occurrences but no rectangles to disambiguate - use first
+                offset = candidates[0]
+
             return AnchorContext.from_text_span(
                 full_text=paragraph_text,
                 start=offset,
@@ -862,12 +941,20 @@ class HighlightHandler:
 
         logger.debug(f"Highlight '{actual_text[:30]}...': new_offset={new_offset}")
 
-        # Step 4: Calculate new rectangles using layout engine
-        # We use layout-based positioning rather than delta-based because:
-        # 1. Page content may have shifted significantly (cross-page content movement)
-        # 2. old_text and page_text may represent different page content after edits
-        # 3. Delta-based approach only works when texts are comparable (same page content)
-        # The layout engine calculates accurate positions for the NEW content layout.
+        # Step 4: Choose positioning strategy
+        # Delta-based: Preserves device's pixel-perfect positions, just applies shift
+        # Layout-based: Recalculates from scratch using our font metrics
+        #
+        # Use delta-based when:
+        # - old_text is available (same page scenario)
+        # - highlight text can be found in old_text
+        # - rect count doesn't change (no reflow)
+        #
+        # Fall back to layout-based when:
+        # - Cross-page movement (no old_text)
+        # - Text reflows to different number of lines
+        # - Can't find highlight in old_text
+
         new_end_offset = new_offset + len(actual_text)
         new_rects = layout_engine.calculate_highlight_rectangles(
             new_offset, new_end_offset, page_text, new_origin, geometry.text_width
@@ -877,14 +964,69 @@ class HighlightHandler:
             logger.warning(f"Layout engine returned no rectangles for '{highlight_text[:30]}...'")
             return AbsolutePosition(block=block)
 
-        # Step 5: Build rectangles from layout engine
-        # Layout handles X, Y, W (text may reflow, words may be added/removed)
-        # Only preserve device height for consistent appearance
-        original_height = rectangles[0].h if rectangles else geometry.line_height
-        new_rectangles = [si.Rectangle(x, y, w, original_height) for x, y, w, h in new_rects]
+        use_delta_positioning = False
+        old_offset = None
 
-        glyph_value.rectangles.clear()
-        glyph_value.rectangles.extend(new_rectangles)
+        # Check if delta-based positioning is applicable
+        if old_text and old_origin and rectangles:
+            # Try to find highlight text in old_text using anchor_context for disambiguation
+            # This ensures we find the SAME occurrence that was highlighted, not just
+            # the first occurrence (which could be a different "target" in a sentence like
+            # 'Highlight the word "target" here: The target word')
+            old_find_result = self._find_best_text_offset(highlight_text, old_text, anchor_context)
+            old_offset = old_find_result[0] if old_find_result else -1
+            if old_offset != -1:
+                # Check if rect count changed (reflow)
+                old_rect_count = len(rectangles)
+                new_rect_count = len(new_rects)
+
+                if old_rect_count == new_rect_count:
+                    use_delta_positioning = True
+                    logger.debug(
+                        f"  Using delta-based positioning (old_offset={old_offset}, "
+                        f"new_offset={new_offset}, rects={old_rect_count})"
+                    )
+                else:
+                    logger.debug(
+                        f"  Reflow detected ({old_rect_count} -> {new_rect_count} rects), "
+                        f"using layout-based positioning"
+                    )
+            else:
+                logger.debug(
+                    f"  Could not find '{highlight_text[:20]}...' in old_text, "
+                    f"using layout-based positioning"
+                )
+
+        if use_delta_positioning and old_offset is not None:
+            # Delta-based: Calculate delta and apply to original device rectangles
+            delta = calculate_position_delta(
+                old_offset=old_offset,
+                new_offset=new_offset,
+                old_text=old_text,
+                new_text=page_text,
+                old_origin=old_origin,
+                new_origin=new_origin,
+                layout_engine=layout_engine,
+                text_width=geometry.text_width,
+            )
+
+            if delta:
+                # Apply delta to original rectangles (preserves device precision)
+                apply_delta_to_rmscene_rectangles(rectangles, delta)
+                logger.debug(f"  Applied delta: dx={delta.dx:.1f}, dy={delta.dy:.1f}")
+            else:
+                # Fall back to layout-based if delta calculation fails
+                logger.warning("Delta calculation failed, falling back to layout-based")
+                use_delta_positioning = False
+
+        if not use_delta_positioning:
+            # Layout-based: Rebuild rectangles from scratch using our layout engine
+            # This is less accurate but handles cross-page and reflow cases
+            original_height = rectangles[0].h if rectangles else geometry.line_height
+            new_rectangles = [si.Rectangle(x, y, w, original_height) for x, y, w, h in new_rects]
+
+            glyph_value.rectangles.clear()
+            glyph_value.rectangles.extend(new_rectangles)
 
         # Step 6: Update glyph metadata
         glyph_value.start = new_offset
@@ -906,7 +1048,7 @@ class HighlightHandler:
 
         logger.debug(
             f"Placed highlight '{actual_text[:30]}...' at offset={new_offset} "
-            f"with {len(new_rectangles)} rect(s)"
+            f"with {len(glyph_value.rectangles)} rect(s)"
         )
 
         return AbsolutePosition(block=block)
