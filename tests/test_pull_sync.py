@@ -905,3 +905,299 @@ class TestOrphanRecovery:
         files = {r[0] for r in recovered}
         assert "file1.md" in files
         assert "file2.md" in files
+
+
+class TestCascadingConflicts:
+    """Tests for cascading conflict scenarios (P1 #4 from TEST_TODO.md).
+
+    A cascading conflict occurs when:
+    1. Text is highlighted on device
+    2. Original text is deleted from markdown (orphan created)
+    3. Same text appears elsewhere (e.g., new section)
+    4. Orphan should recover to the new location
+
+    This is handled by attempt_orphan_recovery() which checks if
+    original_anchor_text exists ANYWHERE in the document.
+    """
+
+    @pytest.fixture
+    def cascading_setup(self, tmp_path: Path):
+        """Set up environment for cascading conflict testing."""
+        state = StateManager(tmp_path / "state.db")
+        cloud_sync = MagicMock()
+        annotation_helper = MagicMock()
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+
+        engine = PullSyncEngine(
+            state=state,
+            cloud_sync=cloud_sync,
+            annotation_helper=annotation_helper,
+            cache_dir=cache_dir,
+        )
+
+        vault_path = tmp_path / "vault"
+        vault_path.mkdir()
+
+        vault_config = VaultConfig(
+            name="test-vault",
+            path=vault_path,
+            remarkable_folder=None,
+            include_patterns=["**/*.md"],
+            exclude_patterns=[],
+        )
+
+        yield engine, state, cloud_sync, vault_path, vault_config
+
+        state.close()
+
+    def test_text_moved_to_different_section(self, cascading_setup) -> None:
+        """Test recovery when text moves to a different section.
+
+        Scenario:
+        1. "important content" was in Section A
+        2. Section A deleted (orphan created)
+        3. "important content" now in Section B
+        Expected: Orphan detected as recoverable
+        """
+        engine, state, cloud_sync, vault_path, vault_config = cascading_setup
+        from rock_paper_sync.state import OrphanedAnnotation, SyncRecord
+
+        # Original: Section A with "important content"
+        # Now: Section B has the same text
+        content = """# Document
+
+## Section B (new section)
+
+This has the important content that was moved here.
+
+## Section C
+
+Other stuff.
+"""
+        file_path = vault_path / "test.md"
+        file_path.write_text(content)
+
+        # Add synced file record
+        sync_record = SyncRecord(
+            vault_name="test-vault",
+            obsidian_path="test.md",
+            remarkable_uuid="uuid-123",
+            content_hash="hash123",
+            last_sync_time=1000,
+            page_count=1,
+            status="synced",
+        )
+        state.update_file_state(sync_record)
+
+        # Add orphan - text was originally in deleted Section A
+        orphan = OrphanedAnnotation(
+            vault_name="test-vault",
+            obsidian_path="test.md",
+            annotation_id="orphan-1",
+            annotation_type="highlight",
+            original_anchor_text="important content",  # Now in Section B
+            orphaned_at=1000,
+        )
+        state.add_orphaned_annotation(orphan)
+
+        # Dry run should detect recovery possibility
+        recovered = engine.attempt_orphan_recovery(vault_config, dry_run=True)
+
+        # Should find the text in Section B
+        assert len(recovered) == 1
+        assert recovered[0][0] == "test.md"
+        assert recovered[0][1] == "orphan-1"
+
+    def test_text_duplicated_in_multiple_places(self, cascading_setup) -> None:
+        """Test recovery when same text now appears multiple times.
+
+        Scenario:
+        1. "important" was highlighted once
+        2. Original deleted (orphan created)
+        3. "important" now appears 3 times in document
+        Expected: Recovery attempted (device annotation will disambiguate)
+        """
+        engine, state, cloud_sync, vault_path, vault_config = cascading_setup
+        from rock_paper_sync.state import OrphanedAnnotation, SyncRecord
+
+        # Text now appears multiple times
+        content = """# Document
+
+This is important for the introduction.
+
+Also important in the middle section.
+
+And important at the end too.
+"""
+        file_path = vault_path / "test.md"
+        file_path.write_text(content)
+
+        sync_record = SyncRecord(
+            vault_name="test-vault",
+            obsidian_path="test.md",
+            remarkable_uuid="uuid-123",
+            content_hash="hash123",
+            last_sync_time=1000,
+            page_count=1,
+            status="synced",
+        )
+        state.update_file_state(sync_record)
+
+        orphan = OrphanedAnnotation(
+            vault_name="test-vault",
+            obsidian_path="test.md",
+            annotation_id="orphan-1",
+            annotation_type="highlight",
+            original_anchor_text="important",
+            orphaned_at=1000,
+        )
+        state.add_orphaned_annotation(orphan)
+
+        recovered = engine.attempt_orphan_recovery(vault_config, dry_run=True)
+
+        # Should detect - actual disambiguation happens during reanchoring
+        assert len(recovered) == 1
+
+    def test_text_in_different_file(self, cascading_setup) -> None:
+        """Test that orphan only checks its own file.
+
+        Scenario:
+        1. "important" orphaned in file1.md
+        2. "important" exists in file2.md
+        Expected: NOT recoverable (wrong file)
+        """
+        engine, state, cloud_sync, vault_path, vault_config = cascading_setup
+        from rock_paper_sync.state import OrphanedAnnotation, SyncRecord
+
+        # file1.md does NOT have the text
+        (vault_path / "file1.md").write_text("# File 1\n\nCompletely different content.")
+        # file2.md HAS the text (but orphan is for file1)
+        (vault_path / "file2.md").write_text("# File 2\n\nThis has important text.")
+
+        # Add synced records for both
+        for i, path in enumerate(["file1.md", "file2.md"], 1):
+            sync_record = SyncRecord(
+                vault_name="test-vault",
+                obsidian_path=path,
+                remarkable_uuid=f"uuid-{i}",
+                content_hash=f"hash{i}",
+                last_sync_time=1000,
+                page_count=1,
+                status="synced",
+            )
+            state.update_file_state(sync_record)
+
+        # Orphan is for file1.md
+        orphan = OrphanedAnnotation(
+            vault_name="test-vault",
+            obsidian_path="file1.md",  # This file doesn't have the text
+            annotation_id="orphan-1",
+            annotation_type="highlight",
+            original_anchor_text="important",
+            orphaned_at=1000,
+        )
+        state.add_orphaned_annotation(orphan)
+
+        recovered = engine.attempt_orphan_recovery(vault_config, dry_run=True)
+
+        # Should NOT recover - text is in wrong file
+        assert len(recovered) == 0
+
+    def test_partial_text_match_not_recovered(self, cascading_setup) -> None:
+        """Test that partial matches don't trigger false recovery.
+
+        Scenario:
+        1. Orphan for "important documentation"
+        2. File only has "important" (not full text)
+        Expected: NOT recoverable
+        """
+        engine, state, cloud_sync, vault_path, vault_config = cascading_setup
+        from rock_paper_sync.state import OrphanedAnnotation, SyncRecord
+
+        # File has "important" but not "important documentation"
+        content = "# Test\n\nThis is important but has different context."
+        (vault_path / "test.md").write_text(content)
+
+        sync_record = SyncRecord(
+            vault_name="test-vault",
+            obsidian_path="test.md",
+            remarkable_uuid="uuid-123",
+            content_hash="hash123",
+            last_sync_time=1000,
+            page_count=1,
+            status="synced",
+        )
+        state.update_file_state(sync_record)
+
+        orphan = OrphanedAnnotation(
+            vault_name="test-vault",
+            obsidian_path="test.md",
+            annotation_id="orphan-1",
+            annotation_type="highlight",
+            original_anchor_text="important documentation",  # Full phrase not in file
+            orphaned_at=1000,
+        )
+        state.add_orphaned_annotation(orphan)
+
+        recovered = engine.attempt_orphan_recovery(vault_config, dry_run=True)
+
+        # Should NOT recover - only partial match
+        assert len(recovered) == 0
+
+    def test_cascading_with_multiple_orphans(self, cascading_setup) -> None:
+        """Test cascading recovery with multiple orphans in same file.
+
+        Scenario:
+        1. Two orphans: "first point" and "second point"
+        2. Content now has "second point" but not "first point"
+        Expected: Only "second point" recoverable
+        """
+        engine, state, cloud_sync, vault_path, vault_config = cascading_setup
+        from rock_paper_sync.state import OrphanedAnnotation, SyncRecord
+
+        content = """# Restructured Document
+
+The second point is now here after restructuring.
+
+Some other content.
+"""
+        (vault_path / "test.md").write_text(content)
+
+        sync_record = SyncRecord(
+            vault_name="test-vault",
+            obsidian_path="test.md",
+            remarkable_uuid="uuid-123",
+            content_hash="hash123",
+            last_sync_time=1000,
+            page_count=1,
+            status="synced",
+        )
+        state.update_file_state(sync_record)
+
+        # Two orphans
+        orphan1 = OrphanedAnnotation(
+            vault_name="test-vault",
+            obsidian_path="test.md",
+            annotation_id="orphan-1",
+            annotation_type="highlight",
+            original_anchor_text="first point",  # NOT in content
+            orphaned_at=1000,
+        )
+        state.add_orphaned_annotation(orphan1)
+
+        orphan2 = OrphanedAnnotation(
+            vault_name="test-vault",
+            obsidian_path="test.md",
+            annotation_id="orphan-2",
+            annotation_type="highlight",
+            original_anchor_text="second point",  # IS in content
+            orphaned_at=1000,
+        )
+        state.add_orphaned_annotation(orphan2)
+
+        recovered = engine.attempt_orphan_recovery(vault_config, dry_run=True)
+
+        # Only orphan-2 should be recoverable
+        assert len(recovered) == 1
+        assert recovered[0][1] == "orphan-2"

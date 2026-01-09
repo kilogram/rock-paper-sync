@@ -123,21 +123,27 @@ M5 bidirectional sync has solid unit test coverage for core algorithms, but roun
 
 ## 🟡 P1 - High Priority
 
-### 4. Cascading Conflicts - NOT TESTED
+### 4. Cascading Conflicts - RESOLVED (2026-01-09)
+
+**File**: `tests/test_pull_sync.py`
+**Status**: ✅ Already handled by P0 #2 orphan recovery
 
 **Problem**: Multi-round modifications where orphans should recover but don't.
 
-**Example**:
-```
-1. Highlight on "Section A content"
-2. Delete Section A → orphan created
-3. Add Section B with text "Section A content" (same text!)
-4. Orphan never re-evaluated against Section B
-```
+**Resolution**: The `attempt_orphan_recovery()` implemented in P0 #2 already handles this:
+- Checks if `original_anchor_text` exists **anywhere** in the document
+- Works regardless of where the text moved (different section, paragraph, etc.)
+- Triggers re-pull from device when text is found
+- Device annotation's AnchorContext disambiguates the correct location
 
-**Action Items**:
-- [ ] Add test for orphan re-evaluation on new content
-- [ ] Integrate with orphan recovery mechanism (P0 #2)
+**Tests Added** (`TestCascadingConflicts`):
+- `test_text_moved_to_different_section` - Text moves from Section A to Section B
+- `test_text_duplicated_in_multiple_places` - Same text now appears 3 times
+- `test_text_in_different_file` - Text exists but in wrong file (no recovery)
+- `test_partial_text_match_not_recovered` - Partial matches don't trigger false recovery
+- `test_cascading_with_multiple_orphans` - Multiple orphans, only matching ones recover
+
+**Key insight**: Cascading conflicts are a subset of orphan recovery - if the text exists anywhere in the file, recovery is attempted.
 
 ---
 
@@ -282,4 +288,5 @@ Paragraph with 5 strokes + 2 highlights
 | 2026-01-08 | Related: create_anchor | ✓ | Added X-position disambiguation |
 | 2026-01-08 | P0 #2: Orphan recovery workflow | ✓ | Implemented attempt_orphan_recovery(), 8 unit tests |
 | 2026-01-09 | P0 #3: Double conflict behavior | ✓ | Documented behavior, added 11 tests |
+| 2026-01-09 | P1 #4: Cascading conflicts | ✓ | Already handled by P0 #2, added 5 tests |
 | | | | |
