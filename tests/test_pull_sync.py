@@ -499,3 +499,409 @@ class TestDetectChanges:
         assert changes == expected_changes
 
         state.close()
+
+
+class TestOrphanRecovery:
+    """Tests for orphan recovery workflow (P0 #2 from TEST_TODO.md)."""
+
+    @pytest.fixture
+    def recovery_setup(self, tmp_path: Path):
+        """Set up environment for orphan recovery testing."""
+
+        state = StateManager(tmp_path / "state.db")
+        cloud_sync = MagicMock()
+        annotation_helper = MagicMock()
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+
+        engine = PullSyncEngine(
+            state=state,
+            cloud_sync=cloud_sync,
+            annotation_helper=annotation_helper,
+            cache_dir=cache_dir,
+        )
+
+        vault_path = tmp_path / "vault"
+        vault_path.mkdir()
+
+        vault_config = VaultConfig(
+            name="test-vault",
+            path=vault_path,
+            remarkable_folder=None,
+            include_patterns=["**/*.md"],
+            exclude_patterns=[],
+        )
+
+        yield engine, state, cloud_sync, vault_path, vault_config
+
+        state.close()
+
+    def test_recovery_no_orphans(self, recovery_setup) -> None:
+        """Test recovery when there are no orphans."""
+        engine, state, cloud_sync, vault_path, vault_config = recovery_setup
+
+        recovered = engine.attempt_orphan_recovery(vault_config)
+
+        assert len(recovered) == 0
+
+    def test_recovery_no_synced_files(self, recovery_setup) -> None:
+        """Test recovery when vault has no synced files."""
+        engine, state, cloud_sync, vault_path, vault_config = recovery_setup
+
+        # Create orphan but no synced file record
+        from rock_paper_sync.state import OrphanedAnnotation
+
+        orphan = OrphanedAnnotation(
+            vault_name="test-vault",
+            obsidian_path="test.md",
+            annotation_id="orphan-1",
+            annotation_type="highlight",
+            original_anchor_text="important text",
+            orphaned_at=1000,
+        )
+        state.add_orphaned_annotation(orphan)
+
+        recovered = engine.attempt_orphan_recovery(vault_config)
+
+        # No synced files = nothing to recover
+        assert len(recovered) == 0
+
+    def test_recovery_file_not_found(self, recovery_setup) -> None:
+        """Test recovery when file has been deleted."""
+        engine, state, cloud_sync, vault_path, vault_config = recovery_setup
+        from rock_paper_sync.state import OrphanedAnnotation, SyncRecord
+
+        # Add synced file record but don't create the actual file
+        sync_record = SyncRecord(
+            vault_name="test-vault",
+            obsidian_path="deleted.md",
+            remarkable_uuid="uuid-123",
+            content_hash="hash123",
+            last_sync_time=1000,
+            page_count=1,
+            status="synced",
+        )
+        state.update_file_state(sync_record)
+
+        # Add orphan
+        orphan = OrphanedAnnotation(
+            vault_name="test-vault",
+            obsidian_path="deleted.md",
+            annotation_id="orphan-1",
+            annotation_type="highlight",
+            original_anchor_text="important text",
+            orphaned_at=1000,
+        )
+        state.add_orphaned_annotation(orphan)
+
+        recovered = engine.attempt_orphan_recovery(vault_config)
+
+        # File doesn't exist, can't recover
+        assert len(recovered) == 0
+
+    def test_recovery_text_not_in_content(self, recovery_setup) -> None:
+        """Test recovery when orphan text is still not in content."""
+        engine, state, cloud_sync, vault_path, vault_config = recovery_setup
+        from rock_paper_sync.state import OrphanedAnnotation, SyncRecord
+
+        # Create file without the orphan's text
+        file_path = vault_path / "test.md"
+        file_path.write_text("# Test\n\nSome completely different content.")
+
+        # Add synced file record
+        sync_record = SyncRecord(
+            vault_name="test-vault",
+            obsidian_path="test.md",
+            remarkable_uuid="uuid-123",
+            content_hash="hash123",
+            last_sync_time=1000,
+            page_count=1,
+            status="synced",
+        )
+        state.update_file_state(sync_record)
+
+        # Add orphan with text not in the file
+        orphan = OrphanedAnnotation(
+            vault_name="test-vault",
+            obsidian_path="test.md",
+            annotation_id="orphan-1",
+            annotation_type="highlight",
+            original_anchor_text="important text that was deleted",
+            orphaned_at=1000,
+        )
+        state.add_orphaned_annotation(orphan)
+
+        recovered = engine.attempt_orphan_recovery(vault_config)
+
+        # Text not found, no recovery attempt
+        assert len(recovered) == 0
+
+    def test_recovery_dry_run(self, recovery_setup) -> None:
+        """Test dry run mode reports but doesn't modify."""
+        engine, state, cloud_sync, vault_path, vault_config = recovery_setup
+        from rock_paper_sync.state import OrphanedAnnotation, SyncRecord
+
+        # Create file WITH the orphan's text (user restored it)
+        file_path = vault_path / "test.md"
+        file_path.write_text("# Test\n\nThis is the important text here.")
+
+        # Add synced file record
+        sync_record = SyncRecord(
+            vault_name="test-vault",
+            obsidian_path="test.md",
+            remarkable_uuid="uuid-123",
+            content_hash="hash123",
+            last_sync_time=1000,
+            page_count=1,
+            status="synced",
+        )
+        state.update_file_state(sync_record)
+
+        # Add orphan with text that IS in the file
+        orphan = OrphanedAnnotation(
+            vault_name="test-vault",
+            obsidian_path="test.md",
+            annotation_id="orphan-1",
+            annotation_type="highlight",
+            original_anchor_text="important text",
+            orphaned_at=1000,
+        )
+        state.add_orphaned_annotation(orphan)
+
+        # Dry run should detect but not attempt recovery
+        recovered = engine.attempt_orphan_recovery(vault_config, dry_run=True)
+
+        # Reports found recoverable orphan
+        assert len(recovered) == 1
+        assert recovered[0][0] == "test.md"
+        assert recovered[0][1] == "orphan-1"
+
+        # Orphan should still be in DB (not actually recovered)
+        orphans = state.get_orphaned_annotations("test-vault", "test.md")
+        assert len(orphans) == 1
+
+    def test_recovery_successful(self, recovery_setup) -> None:
+        """Test successful orphan recovery when text is restored."""
+        engine, state, cloud_sync, vault_path, vault_config = recovery_setup
+        from rock_paper_sync.annotations.document_model import (
+            AnchorContext,
+            DocumentAnnotation,
+            DocumentModel,
+        )
+        from rock_paper_sync.state import OrphanedAnnotation, SyncRecord
+
+        # Create file WITH the orphan's text (user restored it)
+        content = "# Test\n\nThis is the important text here."
+        file_path = vault_path / "test.md"
+        file_path.write_text(content)
+
+        # Add synced file record
+        sync_record = SyncRecord(
+            vault_name="test-vault",
+            obsidian_path="test.md",
+            remarkable_uuid="uuid-123",
+            content_hash="hash123",
+            last_sync_time=1000,
+            page_count=1,
+            status="synced",
+        )
+        state.update_file_state(sync_record)
+
+        # Add orphan with text that IS in the file
+        orphan = OrphanedAnnotation(
+            vault_name="test-vault",
+            obsidian_path="test.md",
+            annotation_id="orphan-1",
+            annotation_type="highlight",
+            original_anchor_text="important text",
+            orphaned_at=1000,
+        )
+        state.add_orphaned_annotation(orphan)
+
+        # Mock cloud_sync to return page UUIDs and rm files
+        cloud_sync.get_existing_page_uuids.return_value = ["page-1"]
+
+        # Create a mock rm file path
+        rm_file_path = vault_path / "mock.rm"
+        rm_file_path.write_bytes(b"mock")
+        cloud_sync.download_page_rm_files.return_value = [rm_file_path]
+
+        # Mock DocumentModel.from_rm_files to return a model with the annotation
+        # that can be reanchored (text exists in new content)
+        anchor = AnchorContext.from_text_span(content, 22, 36)  # "important text"
+        annotation = DocumentAnnotation(
+            annotation_id="orphan-1",
+            annotation_type="highlight",
+            source_page_idx=0,
+            anchor_context=anchor,
+        )
+        mock_model = DocumentModel(
+            paragraphs=[],
+            annotations=[annotation],
+            full_text=content,
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "rock_paper_sync.pull_sync.DocumentModel.from_rm_files",
+                lambda *args, **kwargs: mock_model,
+            )
+
+            recovered = engine.attempt_orphan_recovery(vault_config)
+
+        # Should have recovered the orphan
+        assert len(recovered) == 1
+        assert recovered[0][0] == "test.md"
+        assert recovered[0][1] == "orphan-1"
+
+        # Orphan should be cleared from DB (annotation was reanchored)
+        orphans = state.get_orphaned_annotations("test-vault", "test.md")
+        assert len(orphans) == 0
+
+    def test_recovery_partial_success(self, recovery_setup) -> None:
+        """Test recovery when some orphans recover but others don't."""
+        engine, state, cloud_sync, vault_path, vault_config = recovery_setup
+        from rock_paper_sync.annotations.document_model import (
+            AnchorContext,
+            DocumentAnnotation,
+            DocumentModel,
+        )
+        from rock_paper_sync.state import OrphanedAnnotation, SyncRecord
+
+        # Create file with only ONE orphan's text restored
+        content = "# Test\n\nThis is the important text here.\n\nNothing about the other thing."
+        file_path = vault_path / "test.md"
+        file_path.write_text(content)
+
+        # Add synced file record
+        sync_record = SyncRecord(
+            vault_name="test-vault",
+            obsidian_path="test.md",
+            remarkable_uuid="uuid-123",
+            content_hash="hash123",
+            last_sync_time=1000,
+            page_count=1,
+            status="synced",
+        )
+        state.update_file_state(sync_record)
+
+        # Add two orphans - one recoverable, one not
+        orphan1 = OrphanedAnnotation(
+            vault_name="test-vault",
+            obsidian_path="test.md",
+            annotation_id="orphan-1",
+            annotation_type="highlight",
+            original_anchor_text="important text",  # This IS in content
+            orphaned_at=1000,
+        )
+        state.add_orphaned_annotation(orphan1)
+
+        orphan2 = OrphanedAnnotation(
+            vault_name="test-vault",
+            obsidian_path="test.md",
+            annotation_id="orphan-2",
+            annotation_type="highlight",
+            original_anchor_text="deleted forever",  # This is NOT in content
+            orphaned_at=1000,
+        )
+        state.add_orphaned_annotation(orphan2)
+
+        # Mock cloud_sync
+        cloud_sync.get_existing_page_uuids.return_value = ["page-1"]
+        rm_file_path = vault_path / "mock.rm"
+        rm_file_path.write_bytes(b"mock")
+        cloud_sync.download_page_rm_files.return_value = [rm_file_path]
+
+        # Mock DocumentModel - orphan-1 can reanchor, orphan-2 cannot
+        # Only include orphan-1's annotation (with matching anchor)
+        # orphan-2's text is NOT in content, so it should stay orphaned
+        anchor1 = AnchorContext.from_text_span(content, 22, 36)  # "important text"
+        annotation1 = DocumentAnnotation(
+            annotation_id="orphan-1",
+            annotation_type="highlight",
+            source_page_idx=0,
+            anchor_context=anchor1,
+        )
+        # orphan-2 has an anchor for text that doesn't exist in current content
+        # Create it with None anchor_context to simulate failed reanchoring
+        annotation2 = DocumentAnnotation(
+            annotation_id="orphan-2",
+            annotation_type="highlight",
+            source_page_idx=0,
+            anchor_context=None,  # No valid anchor = becomes orphan
+        )
+
+        mock_model = DocumentModel(
+            paragraphs=[],
+            annotations=[annotation1, annotation2],
+            full_text=content,
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "rock_paper_sync.pull_sync.DocumentModel.from_rm_files",
+                lambda *args, **kwargs: mock_model,
+            )
+
+            recovered = engine.attempt_orphan_recovery(vault_config)
+
+        # orphan-1 should be recovered, orphan-2 should still be orphaned
+        assert len(recovered) == 1
+        assert recovered[0][1] == "orphan-1"
+
+        # Check DB state
+        orphans = state.get_orphaned_annotations("test-vault", "test.md")
+        assert len(orphans) == 1
+        assert orphans[0].annotation_id == "orphan-2"
+
+    def test_recovery_multiple_files(self, recovery_setup) -> None:
+        """Test recovery across multiple files in vault."""
+        engine, state, cloud_sync, vault_path, vault_config = recovery_setup
+        from rock_paper_sync.state import OrphanedAnnotation, SyncRecord
+
+        # Create two files
+        (vault_path / "file1.md").write_text("# File 1\n\nimportant text here")
+        (vault_path / "file2.md").write_text("# File 2\n\nsecond important thing")
+
+        # Add synced file records
+        for i, path in enumerate(["file1.md", "file2.md"], 1):
+            sync_record = SyncRecord(
+                vault_name="test-vault",
+                obsidian_path=path,
+                remarkable_uuid=f"uuid-{i}",
+                content_hash=f"hash{i}",
+                last_sync_time=1000,
+                page_count=1,
+                status="synced",
+            )
+            state.update_file_state(sync_record)
+
+        # Add orphans for both files (recoverable)
+        orphan1 = OrphanedAnnotation(
+            vault_name="test-vault",
+            obsidian_path="file1.md",
+            annotation_id="orphan-1",
+            annotation_type="highlight",
+            original_anchor_text="important text",
+            orphaned_at=1000,
+        )
+        state.add_orphaned_annotation(orphan1)
+
+        orphan2 = OrphanedAnnotation(
+            vault_name="test-vault",
+            obsidian_path="file2.md",
+            annotation_id="orphan-2",
+            annotation_type="highlight",
+            original_anchor_text="second important",
+            orphaned_at=1000,
+        )
+        state.add_orphaned_annotation(orphan2)
+
+        # Dry run to check detection
+        recovered = engine.attempt_orphan_recovery(vault_config, dry_run=True)
+
+        # Should detect both as potentially recoverable
+        assert len(recovered) == 2
+        files = {r[0] for r in recovered}
+        assert "file1.md" in files
+        assert "file2.md" in files

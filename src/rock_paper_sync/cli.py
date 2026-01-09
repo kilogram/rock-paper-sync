@@ -197,6 +197,15 @@ def _run_pull_sync(
 
         for vault_config in vault_configs:
             click.echo(f"\nPulling annotations for vault '{vault_config.name}'...")
+
+            # First, attempt to recover any orphaned annotations
+            # This checks if previously-orphaned annotations can now be re-anchored
+            # (e.g., user restored deleted text)
+            recovered = pull_engine.attempt_orphan_recovery(vault_config, dry_run=dry_run)
+            if recovered:
+                click.echo(f"  Recovered {len(recovered)} orphaned annotation(s)")
+
+            # Then run normal pull sync for new annotation changes
             results, stats = pull_engine.pull_vault(vault_config, dry_run=dry_run)
 
             if stats.files_updated > 0:

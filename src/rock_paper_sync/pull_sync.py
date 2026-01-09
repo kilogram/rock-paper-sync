@@ -348,3 +348,123 @@ class PullSyncEngine:
                 orphaned_at=int(time.time()),
             )
             self.state.add_orphaned_annotation(orphan_record)
+
+    def attempt_orphan_recovery(
+        self,
+        vault: VaultConfig,
+        dry_run: bool = False,
+    ) -> list[tuple[str, str, int]]:
+        """Attempt to recover orphaned annotations by re-pulling from device.
+
+        When text is restored in markdown after being deleted (e.g., user undo),
+        orphaned annotations can potentially be re-anchored. This method:
+
+        1. Finds files with orphaned annotations in the database
+        2. Checks if the orphan's anchor text now exists in the markdown
+        3. Forces a re-pull from device to attempt reanchoring
+        4. Returns list of recovered annotations
+
+        This should be called:
+        - During bidirectional sync, before push phase
+        - After markdown content changes are detected
+        - Periodically as part of maintenance
+
+        Args:
+            vault: Vault configuration to check for recoverable orphans
+            dry_run: If True, only check for recoverable orphans without modifying
+
+        Returns:
+            List of tuples (obsidian_path, annotation_id, recovered_count) for recovered annotations
+        """
+        recovered_files: list[tuple[str, str, int]] = []
+
+        # Get all synced files for this vault
+        synced_files = self.state.get_all_synced_files(vault.name)
+
+        for record in synced_files:
+            # Get orphans for this file
+            orphans = self.state.get_orphaned_annotations(vault.name, record.obsidian_path)
+            if not orphans:
+                continue
+
+            # Check if file exists
+            file_path = vault.path / record.obsidian_path
+            if not file_path.exists():
+                logger.debug(f"Skipping orphan recovery for deleted file: {record.obsidian_path}")
+                continue
+
+            # Read current markdown content
+            try:
+                markdown_content = file_path.read_text(encoding="utf-8")
+            except Exception as e:
+                logger.warning(f"Failed to read {record.obsidian_path} for orphan recovery: {e}")
+                continue
+
+            # Check if any orphans might be recoverable
+            recoverable_orphans = []
+            for orphan in orphans:
+                if orphan.original_anchor_text:
+                    # Simple presence check - actual reanchoring will verify
+                    if orphan.original_anchor_text in markdown_content:
+                        recoverable_orphans.append(orphan)
+                        logger.debug(
+                            f"Orphan {orphan.annotation_id} potentially recoverable: "
+                            f"'{orphan.original_anchor_text[:30]}...' found in content"
+                        )
+
+            if not recoverable_orphans:
+                continue
+
+            logger.info(
+                f"Found {len(recoverable_orphans)} potentially recoverable orphan(s) "
+                f"for {vault.name}:{record.obsidian_path}"
+            )
+
+            if dry_run:
+                # In dry run, just report what we found
+                for orphan in recoverable_orphans:
+                    recovered_files.append((record.obsidian_path, orphan.annotation_id, 0))
+                continue
+
+            # Force a re-pull to attempt recovery
+            # Create a synthetic AnnotationChange to trigger pull_file
+            change = AnnotationChange(
+                vault_name=vault.name,
+                obsidian_path=record.obsidian_path,
+                remarkable_uuid=record.remarkable_uuid,
+                change_type="recovery",
+                current_annotation_hash="",  # Will be computed during pull
+                previous_annotation_hash=None,
+            )
+
+            # Count orphans before pull
+            orphan_count_before = len(orphans)
+
+            # Run pull_file - this will re-extract from device and reanchor
+            result = self.pull_file(change, vault.path, dry_run=False)
+
+            if result.success:
+                # Count orphans after pull
+                new_orphans = self.state.get_orphaned_annotations(vault.name, record.obsidian_path)
+                orphan_count_after = len(new_orphans)
+                recovered_count = orphan_count_before - orphan_count_after
+
+                if recovered_count > 0:
+                    # Find which orphans were recovered
+                    new_orphan_ids = {o.annotation_id for o in new_orphans}
+                    for orphan in orphans:
+                        if orphan.annotation_id not in new_orphan_ids:
+                            recovered_files.append((record.obsidian_path, orphan.annotation_id, 1))
+                    logger.info(
+                        f"Recovered {recovered_count} orphan(s) for "
+                        f"{vault.name}:{record.obsidian_path}"
+                    )
+                else:
+                    logger.debug(
+                        f"No orphans recovered for {vault.name}:{record.obsidian_path} "
+                        f"(reanchoring still failed)"
+                    )
+            else:
+                logger.warning(f"Failed to re-pull for orphan recovery: {result.error}")
+
+        return recovered_files

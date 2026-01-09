@@ -50,36 +50,34 @@ M5 bidirectional sync has solid unit test coverage for core algorithms, but roun
 
 ---
 
-### 2. Orphan Recovery Workflow - NOT TESTED
+### 2. Orphan Recovery Workflow - FIXED (2026-01-08)
 
-**Status**: Orphan creation works, but recovery is not implemented
+**File**: `src/rock_paper_sync/pull_sync.py`, `tests/test_pull_sync.py`
+**Status**: ✅ Implemented and tested
 
-**Problem**: When a user deletes annotated text (creating an orphan), then restores similar text, the orphan is never re-evaluated. Annotations are permanently lost after 7-day retention.
+**Problem**: When a user deletes annotated text (creating an orphan), then restores similar text, the orphan was never re-evaluated. Annotations were permanently lost after 7-day retention.
 
-**Example**:
-```
-1. User highlights "important section" on device
-2. User deletes paragraph containing it in Obsidian
-3. Sync creates orphan (stored in DB with 7-day TTL)
-4. User undoes deletion (text restored)
-5. Sync does NOT recover the orphan ← BUG
-6. After 7 days, annotation lost forever
-```
+**Fix**: Implemented `attempt_orphan_recovery()` in `PullSyncEngine`:
+1. Checks all synced files for orphans in DB
+2. For each orphan, checks if `original_anchor_text` now exists in markdown
+3. If text found, forces a re-pull from device to attempt reanchoring
+4. Successfully reanchored annotations are automatically cleared from orphan DB
+5. Called automatically during pull sync phase (before normal pull)
 
-**Impact**: Users lose annotations permanently when undoing deletions.
+**Changes**:
+- `src/rock_paper_sync/pull_sync.py`: Added `attempt_orphan_recovery()` method
+- `src/rock_paper_sync/cli.py`: Integrated recovery into `_run_pull_sync()`
+- `tests/test_pull_sync.py`: Added `TestOrphanRecovery` with 8 comprehensive tests
 
-**Code Locations**:
-- `state.py:add_orphaned_annotation()` - creates orphans ✓
-- `state.py:get_orphaned_annotations()` - retrieves orphans ✓
-- `state.py:delete_orphaned_annotation()` - exists but never called for recovery
-- `pull_sync.py:_record_orphans()` - creates orphans ✓
-- **MISSING**: `attempt_orphan_recovery()` method
-
-**Action Items**:
-- [ ] Implement `attempt_orphan_recovery()` in PullSyncEngine
-- [ ] Call it after markdown modifications
-- [ ] Add unit test for recovery workflow
-- [ ] Add round-trip test with device data
+**Tests Added**:
+- `test_recovery_no_orphans` - No orphans to recover
+- `test_recovery_no_synced_files` - Orphans exist but no synced files
+- `test_recovery_file_not_found` - File was deleted from vault
+- `test_recovery_text_not_in_content` - Orphan text still not in content
+- `test_recovery_dry_run` - Dry run reports but doesn't modify
+- `test_recovery_successful` - Full recovery workflow
+- `test_recovery_partial_success` - Some orphans recover, others don't
+- `test_recovery_multiple_files` - Recovery across multiple files
 
 ---
 
@@ -269,4 +267,5 @@ Paragraph with 5 strokes + 2 highlights
 | 2026-01-08 | P0 #1: X-shift re-anchoring | ✓ | Fixed disambiguation bug, enabled test |
 | 2026-01-08 | Related: find_and_resolve_anchor | ✓ | Added Y-position disambiguation |
 | 2026-01-08 | Related: create_anchor | ✓ | Added X-position disambiguation |
+| 2026-01-08 | P0 #2: Orphan recovery workflow | ✓ | Implemented attempt_orphan_recovery(), 8 unit tests |
 | | | | |
