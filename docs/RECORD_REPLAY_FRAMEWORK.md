@@ -375,19 +375,98 @@ def test_ocr_with_real_service(ocr_service):
 
 See `docker/ocr-minimal/README.md` for container details.
 
+## Consolidated Test Suite
+
+The test suite has been consolidated into focused, deep tests that maximize coverage while minimizing recording sessions. Tests are organized by feature area with multi-trip verification.
+
+### Test Summary
+
+| Test | Trips | Purpose |
+|------|-------|---------|
+| `test_comprehensive_highlights.py` | 7 | Highlights, reanchoring, conflicts, deletion, restructure |
+| `test_comprehensive_strokes.py` | 6 | Strokes, colors, tools, widths, margin notes, cross-page |
+| `test_orphan_and_recovery.py` | 8 | Orphan creation, recovery, re-orphan cycle |
+| `test_formatting_verification.py` | 1 | Visual verification of all formatting types |
+| `test_full_integration.py` | 3+ | All features combined, three-way merge |
+| `test_cross_page_reanchor.py` | 3 | Cross-page annotation migration |
+| `test_ocr_integration.py` | 2 | OCR recognition and correction workflow |
+| `test_calibration.py` | 1 | Device geometry measurement |
+| `test_font_calibration.py` | 1 | Font metrics calibration |
+| `test_paragraph_pagination.py` | 1 | Pagination accuracy |
+
+### Behaviors Covered
+
+**Highlights (test_comprehensive_highlights.py):**
+- Basic highlight capture
+- Highlight reanchoring after insertion
+- Highlight anchoring with text modification
+- Multi-line highlight handling
+- Duplicate text disambiguation
+- Highlight survival through section deletion
+- Orphan creation on deletion
+- Highlight survival through restructuring
+- Cumulative annotations (old + new)
+- Pull sync `==text==` rendering
+- Golden comparison for position accuracy
+
+**Strokes (test_comprehensive_strokes.py):**
+- Basic stroke capture
+- Pen color preservation (red, blue)
+- Pen tool preservation (pencil, marker, ballpoint)
+- Stroke width preservation
+- Margin note reanchoring
+- Cross-page stroke handling
+- Stroke survival through section deletion
+- Orphan creation for strokes
+- Stroke anchoring with text modification
+- Cumulative strokes (old + new)
+- Pull sync `[^n]` footnote rendering
+
+**Orphan Handling (test_orphan_and_recovery.py):**
+- Single orphan creation
+- Multiple orphan creation (batch)
+- Orphan comment rendering (with count)
+- Partial text does NOT trigger recovery
+- Exact text DOES trigger recovery
+- Re-orphan cycle (delete → recover → delete → recover)
+- Cumulative orphan tracking
+- Pull sync rendering of recovered annotations
+
+**Formatting (test_formatting_verification.py):**
+- Bold, italic, inline code
+- Combined styles (bold italic, bold code)
+- Unordered/ordered lists with nesting
+- Code blocks
+- Blockquotes with nesting
+- Header hierarchy (H3-H6)
+- Horizontal rules
+- Links and strikethrough
+
+### Recording a Test
+
+```bash
+# Record with device (online mode)
+uv run pytest tests/record_replay/test_comprehensive_highlights.py --online -s
+
+# Replay without device (offline mode)
+uv run pytest tests/record_replay/test_comprehensive_highlights.py
+```
+
+When recording, follow the printed instructions at each trip. Tests use multi-trip verification to test state transitions and cumulative changes.
+
 ## Running Tests
 
 ### Online Mode (Real Device)
 
 ```bash
 # Run single test
-uv run pytest tests/record_replay/scenarios/ocr_tests.py::OCRRecognitionTest --device-mode=online
+uv run pytest tests/record_replay/test_comprehensive_highlights.py --online -s
 
-# Run all device tests
-uv run pytest tests/record_replay --device-mode=online
+# Run all device tests (recording mode)
+uv run pytest tests/record_replay -m device --online -s
 
 # With verbose output
-uv run pytest tests/record_replay --device-mode=online -v -s
+uv run pytest tests/record_replay --online -v -s
 ```
 
 **Requirements:**

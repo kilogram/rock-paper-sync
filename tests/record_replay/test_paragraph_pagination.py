@@ -94,7 +94,6 @@ def generate_rm_files(config: LayoutConfig, md_path: Path) -> dict[int, bytes]:
 
 
 @pytest.mark.device
-@pytest.mark.skip(reason="Needs re-recording: layout/geometry changes since golden was recorded")
 @pytest.mark.parametrize("config_name", list(CONFIGS.keys()))
 def test_paragraph_pagination(config_name, device, workspace, testdata_store, device_mode):
     """Test paragraph pagination with golden .rm files.

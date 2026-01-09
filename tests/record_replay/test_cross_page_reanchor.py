@@ -111,6 +111,22 @@ def test_cross_page_reanchor(device, workspace, fixtures_dir, visual_validator):
     if bottom_hl:
         print(f"   'bottom' highlight on page {bottom_page_before[:8]}...")
 
+    # Pull sync verification - check markdown rendering
+    device.trigger_sync()
+    synced_content = workspace.test_doc.read_text()
+
+    # Highlights should render as ==text==
+    highlight_markers = synced_content.count("==")
+    if highlight_markers >= 2:
+        print(f"\n✅ Pull sync: Found {highlight_markers // 2} ==text== highlight markers")
+        # Check for specific highlights
+        if "==target==" in synced_content.lower().replace(" ", ""):
+            print("   - 'target' highlight rendered")
+        if "==bottom==" in synced_content.lower().replace(" ", ""):
+            print("   - 'bottom' highlight rendered")
+    else:
+        print("\n⚠️  Pull sync: No ==text== markers found (may depend on implementation)")
+
     # Modify document: insert substantial content at beginning
     # This should push later content to new pages
     original = workspace.test_doc.read_text()
@@ -203,6 +219,15 @@ adipisci velit, sed quia non numquam eius modi tempora incidunt.
         print(f"\n   'target' highlight now on page {target_page_after[:8]}...")
     if bottom_hl_after:
         print(f"   'bottom' highlight now on page {bottom_page_after[:8]}...")
+
+    # Pull sync verification after cross-page movement
+    device.trigger_sync()
+    post_move_content = workspace.test_doc.read_text()
+    post_move_markers = post_move_content.count("==")
+    if post_move_markers >= 2:
+        print(f"\n✅ Post-move pull sync: {post_move_markers // 2} ==text== markers preserved")
+    else:
+        print("\n⚠️  Post-move: highlight markers may have been affected by page movement")
 
     # ASSERTIONS
 

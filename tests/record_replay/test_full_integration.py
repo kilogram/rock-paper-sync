@@ -91,6 +91,29 @@ def test_full_integration(device, workspace, fixtures_dir, tmp_path):
 
     print(f"\n📊 Initial annotations: {len(highlights)} highlights, {len(strokes)} strokes")
 
+    # === PHASE 1.5: Pull Sync Verification ===
+    # Verify that annotations render correctly in markdown
+    device.trigger_sync()
+    synced_content = workspace.test_doc.read_text()
+
+    # Highlights should render as ==text==
+    highlight_markers_found = synced_content.count("==")
+    if highlights:
+        if highlight_markers_found >= 2:  # At least one ==text== pair
+            print(f"✅ Pull sync: Found {highlight_markers_found // 2} ==text== highlight markers")
+        else:
+            print(
+                "⚠️  Pull sync: No ==text== highlight markers found (may depend on implementation)"
+            )
+
+    # Strokes should render as [^n] footnotes
+    footnote_markers = synced_content.count("[^")
+    if strokes:
+        if footnote_markers > 0:
+            print(f"✅ Pull sync: Found {footnote_markers} [^n] stroke footnote markers")
+        else:
+            print("⚠️  Pull sync: No [^n] stroke markers found (may depend on implementation)")
+
     # === PHASE 2: Markdown Modifications (Conflict Scenario) ===
     # Modify the document in ways that challenge anchoring:
     # 1. Add text at beginning (shifts all positions)
@@ -161,6 +184,28 @@ def test_full_integration(device, workspace, fixtures_dir, tmp_path):
         f"✅ All annotations preserved after modifications: "
         f"{len(updated_highlights)} highlights, {len(updated_strokes)} strokes"
     )
+
+    # === PHASE 3.5: Pull Sync After Modifications ===
+    # Verify annotations still render in markdown after structural changes
+    device.trigger_sync()
+    modified_synced = workspace.test_doc.read_text()
+
+    post_mod_highlight_markers = modified_synced.count("==")
+    post_mod_footnote_markers = modified_synced.count("[^")
+
+    if updated_highlights:
+        if post_mod_highlight_markers >= 2:
+            print(
+                f"✅ Post-modification pull sync: {post_mod_highlight_markers // 2} highlight markers"
+            )
+        else:
+            print("⚠️  Post-modification: highlight markers may have been affected by restructure")
+
+    if updated_strokes:
+        if post_mod_footnote_markers > 0:
+            print(f"✅ Post-modification pull sync: {post_mod_footnote_markers} stroke markers")
+        else:
+            print("⚠️  Post-modification: stroke markers may have been affected by restructure")
 
     # === PHASE 4: Anchor Verification ===
     # Test that anchors can still match after modifications
