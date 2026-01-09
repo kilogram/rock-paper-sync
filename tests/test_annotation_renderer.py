@@ -318,6 +318,186 @@ class TestRenderResult:
         assert result.orphan_details == []
 
 
+class TestDenseAnnotationAreas:
+    """Tests for dense annotation areas (P1 #5).
+
+    Multiple annotations on the same paragraph may interfere during rendering.
+    These tests verify that ordering and positions are preserved correctly.
+    """
+
+    def test_multiple_strokes_same_paragraph(self) -> None:
+        """Test multiple strokes anchored to same paragraph."""
+        content = "This is a single paragraph with multiple annotations."
+        strokes = [
+            _make_stroke("single", content, ocr_text="Note 1"),
+            _make_stroke("paragraph", content, ocr_text="Note 2"),
+            _make_stroke("annotations", content, ocr_text="Note 3"),
+        ]
+
+        model = DocumentModel(paragraphs=[], annotations=strokes, full_text=content)
+        renderer = AnnotationRenderer()
+        result = renderer.render(content, model)
+
+        assert result.strokes_rendered == 3
+        # All footnote references should be present
+        assert "[^stroke-1]" in result.content
+        assert "[^stroke-2]" in result.content
+        assert "[^stroke-3]" in result.content
+        # All footnote definitions should be present
+        assert "Note 1" in result.content
+        assert "Note 2" in result.content
+        assert "Note 3" in result.content
+
+    def test_consecutive_highlights_no_space(self) -> None:
+        """Test highlights on consecutive words (adjacent in text)."""
+        content = "The quick brown fox jumps."
+        # Highlight three consecutive words
+        highlights = [
+            _make_highlight("quick", content),
+            _make_highlight("brown", content),
+            _make_highlight("fox", content),
+        ]
+
+        model = DocumentModel(paragraphs=[], annotations=highlights, full_text=content)
+        renderer = AnnotationRenderer()
+        result = renderer.render(content, model)
+
+        assert result.highlights_rendered == 3
+        # Each word should be independently highlighted
+        assert "==quick==" in result.content
+        assert "==brown==" in result.content
+        assert "==fox==" in result.content
+        # Verify they appear in order
+        q_pos = result.content.find("==quick==")
+        b_pos = result.content.find("==brown==")
+        f_pos = result.content.find("==fox==")
+        assert q_pos < b_pos < f_pos
+
+    def test_overlapping_anchor_areas_strokes(self) -> None:
+        """Test strokes with overlapping anchor text areas."""
+        content = "Important text here needs multiple notes."
+        # Multiple strokes anchored to overlapping text
+        strokes = [
+            _make_stroke("Important text", content, ocr_text="First note"),
+            _make_stroke("text here", content, ocr_text="Second note"),
+            _make_stroke("here needs", content, ocr_text="Third note"),
+        ]
+
+        model = DocumentModel(paragraphs=[], annotations=strokes, full_text=content)
+        renderer = AnnotationRenderer()
+        result = renderer.render(content, model)
+
+        # All strokes should render
+        assert result.strokes_rendered == 3
+        assert "First note" in result.content
+        assert "Second note" in result.content
+        assert "Third note" in result.content
+
+    def test_mixed_dense_annotations(self) -> None:
+        """Test dense area with both highlights and strokes."""
+        content = "Critical data requires careful review and notes."
+        highlight1 = _make_highlight("Critical", content)
+        highlight2 = _make_highlight("data", content)
+        stroke1 = _make_stroke("requires", content, ocr_text="Important!")
+        stroke2 = _make_stroke("review", content, ocr_text="Check twice")
+
+        model = DocumentModel(
+            paragraphs=[],
+            annotations=[highlight1, highlight2, stroke1, stroke2],
+            full_text=content,
+        )
+        renderer = AnnotationRenderer()
+        result = renderer.render(content, model)
+
+        assert result.highlights_rendered == 2
+        assert result.strokes_rendered == 2
+        assert "==Critical==" in result.content
+        assert "==data==" in result.content
+        assert "Important!" in result.content
+        assert "Check twice" in result.content
+
+    def test_annotation_ordering_preserved_on_same_word(self) -> None:
+        """Test that multiple strokes on same anchor position are all rendered."""
+        content = "The keyword here is important."
+        # Two strokes on the same word
+        strokes = [
+            _make_stroke("keyword", content, ocr_text="First thought"),
+            _make_stroke("keyword", content, ocr_text="Second thought"),
+        ]
+
+        model = DocumentModel(paragraphs=[], annotations=strokes, full_text=content)
+        renderer = AnnotationRenderer()
+        result = renderer.render(content, model)
+
+        # Both strokes should render, even on same word
+        assert result.strokes_rendered == 2
+        assert "First thought" in result.content
+        assert "Second thought" in result.content
+
+    def test_five_highlights_same_sentence(self) -> None:
+        """Test 5 highlights in a single sentence (stress test)."""
+        content = "The quick brown fox jumps over the lazy dog."
+        highlights = [
+            _make_highlight("The", content),
+            _make_highlight("quick", content),
+            _make_highlight("brown", content),
+            _make_highlight("fox", content),
+            _make_highlight("jumps", content),
+        ]
+
+        model = DocumentModel(paragraphs=[], annotations=highlights, full_text=content)
+        renderer = AnnotationRenderer()
+        result = renderer.render(content, model)
+
+        assert result.highlights_rendered == 5
+        assert "==The==" in result.content
+        assert "==quick==" in result.content
+        assert "==brown==" in result.content
+        assert "==fox==" in result.content
+        assert "==jumps==" in result.content
+
+    def test_five_strokes_same_paragraph(self) -> None:
+        """Test 5 strokes in a single paragraph (stress test)."""
+        content = "Paragraph with many words that all have annotations attached."
+        strokes = [
+            _make_stroke("Paragraph", content, ocr_text="Note A"),
+            _make_stroke("many", content, ocr_text="Note B"),
+            _make_stroke("words", content, ocr_text="Note C"),
+            _make_stroke("annotations", content, ocr_text="Note D"),
+            _make_stroke("attached", content, ocr_text="Note E"),
+        ]
+
+        model = DocumentModel(paragraphs=[], annotations=strokes, full_text=content)
+        renderer = AnnotationRenderer()
+        result = renderer.render(content, model)
+
+        assert result.strokes_rendered == 5
+        for note in ["Note A", "Note B", "Note C", "Note D", "Note E"]:
+            assert note in result.content
+
+    def test_highlight_position_stability_after_multiple_insertions(self) -> None:
+        """Verify highlight positions remain correct after inserting markers."""
+        content = "Word1 Word2 Word3 Word4 Word5"
+        # Create highlights in non-sequential order to test sorting
+        highlights = [
+            _make_highlight("Word3", content),
+            _make_highlight("Word1", content),
+            _make_highlight("Word5", content),
+            _make_highlight("Word2", content),
+            _make_highlight("Word4", content),
+        ]
+
+        model = DocumentModel(paragraphs=[], annotations=highlights, full_text=content)
+        renderer = AnnotationRenderer()
+        result = renderer.render(content, model)
+
+        # All should be highlighted
+        assert result.highlights_rendered == 5
+        # Check relative order is correct in output
+        expected = "==Word1== ==Word2== ==Word3== ==Word4== ==Word5=="
+        assert expected in result.content
+
+
 class TestConvenienceFunction:
     """Tests for the module-level convenience function."""
 

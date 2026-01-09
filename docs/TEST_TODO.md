@@ -147,22 +147,36 @@ M5 bidirectional sync has solid unit test coverage for core algorithms, but roun
 
 ---
 
-### 5. Dense Annotation Areas - NOT TESTED
+### 5. Dense Annotation Areas - VERIFIED (2026-01-09)
+
+**File**: `tests/test_annotation_renderer.py`
+**Status**: ✅ Working correctly, tests added
 
 **Problem**: Multiple annotations on the same paragraph may interfere during re-anchoring.
 
-**Example**:
-```
-Paragraph with 5 strokes + 2 highlights
-→ Paragraph modified
-→ All 7 annotations need independent re-anchoring
-→ Unknown if ordering/layering preserved
-```
+**Resolution**: The rendering system handles dense annotations correctly:
 
-**Action Items**:
-- [ ] Add test with multiple strokes in one paragraph
-- [ ] Add test with multiple highlights on consecutive words
-- [ ] Verify annotation ordering preserved
+1. **Highlights**: Sorted in reverse order by position before insertion
+   - Inserting `==` markers from end to start preserves offsets
+   - Multiple highlights on consecutive words work correctly
+   - Order is preserved regardless of annotation input order
+
+2. **Strokes**: Grouped by anchor position
+   - Multiple strokes on same word each get their own footnote
+   - Footnote numbering is sequential
+   - All footnote definitions are appended at document end
+
+**Tests Added** (`TestDenseAnnotationAreas`):
+- `test_multiple_strokes_same_paragraph` - 3 strokes in one paragraph
+- `test_consecutive_highlights_no_space` - 3 consecutive word highlights
+- `test_overlapping_anchor_areas_strokes` - Overlapping anchor text
+- `test_mixed_dense_annotations` - 2 highlights + 2 strokes in same sentence
+- `test_annotation_ordering_preserved_on_same_word` - 2 strokes on same word
+- `test_five_highlights_same_sentence` - 5 highlights stress test
+- `test_five_strokes_same_paragraph` - 5 strokes stress test
+- `test_highlight_position_stability_after_multiple_insertions` - Non-sequential input order
+
+**Key insight**: The reverse-order sorting in `render_highlights()` is critical - inserting from end to start ensures earlier positions remain valid.
 
 ---
 
@@ -289,4 +303,5 @@ Paragraph with 5 strokes + 2 highlights
 | 2026-01-08 | P0 #2: Orphan recovery workflow | ✓ | Implemented attempt_orphan_recovery(), 8 unit tests |
 | 2026-01-09 | P0 #3: Double conflict behavior | ✓ | Documented behavior, added 11 tests |
 | 2026-01-09 | P1 #4: Cascading conflicts | ✓ | Already handled by P0 #2, added 5 tests |
+| 2026-01-09 | P1 #5: Dense annotation areas | ✓ | Verified working correctly, added 8 tests |
 | | | | |
