@@ -1,5 +1,8 @@
 """Online device handler for recording real device interactions.
 
+Session-level tracking prevents redundant re-recording when multiple tests
+share the same fixture within a single pytest run.
+
 Records test artifacts by prompting user to perform actions on a physical
 reMarkable device or rmfakecloud simulation, then capturing the resulting
 annotations.
@@ -42,6 +45,25 @@ from .testdata import TestdataStore
 if TYPE_CHECKING:
     from .logging import Bench
     from .workspace import WorkspaceManager
+
+
+# Session-level tracking of recorded test_ids to prevent redundant re-recording
+# when multiple tests share the same fixture
+_session_recorded_tests: set[str] = set()
+
+
+class TestdataExistsError(Exception):
+    """Raised when testdata already exists and should be reused.
+
+    This exception signals that the test should skip recording and use
+    the existing testdata. It's caught by the test framework to handle
+    gracefully (e.g., by skipping the test or using offline mode).
+    """
+
+    def __init__(self, test_id: str, test_dir: Path) -> None:
+        self.test_id = test_id
+        self.test_dir = test_dir
+        super().__init__(f"Testdata already recorded this session: {test_id}")
 
 
 class OnlineDevice(DeviceInteractionManager):
@@ -96,8 +118,8 @@ class OnlineDevice(DeviceInteractionManager):
         """Begin recording a test.
 
         Creates directory structure and prepares to capture artifacts.
-        Automatically cleans up any existing testdata for this test_id
-        (git can restore if needed).
+        If testdata was already recorded in THIS SESSION (same fixture used
+        by another test), reuses it instead of re-recording.
 
         Args:
             test_id: Unique test identifier
@@ -110,11 +132,21 @@ class OnlineDevice(DeviceInteractionManager):
         self._has_golden = False
         self._doc_uuid = None
 
-        # Auto-cleanup existing testdata (git can restore if needed)
         test_dir = self.testdata_store.base_dir / test_id
+
+        # Check if this test_id was already recorded in this session
+        if test_id in _session_recorded_tests:
+            self.bench.ok(f"Reusing testdata recorded earlier this session: {test_id}")
+            raise TestdataExistsError(test_id, test_dir)
+
+        # Clean up any existing testdata from previous sessions
         if test_dir.exists():
             shutil.rmtree(test_dir)
             self.bench.info(f"Cleaned up existing testdata: {test_id}")
+
+        # Track this test_id BEFORE creating directory, so if we fail mid-recording,
+        # other tests sharing this fixture will still skip (and not wipe partial data)
+        _session_recorded_tests.add(test_id)
 
         # Create fresh testdata directory with trips structure
         (test_dir / "trips").mkdir(parents=True, exist_ok=True)
@@ -415,7 +447,10 @@ class OnlineDevice(DeviceInteractionManager):
         """Finalize test recording.
 
         Saves manifest and completes testdata capture.
-        Assumes test succeeded (failed tests raise exceptions before reaching here).
+
+        Note: Session tracking happens in start_test(), not here, so that
+        even if a test fails mid-recording, subsequent tests sharing the
+        same fixture will skip (and not wipe the partial data).
 
         Args:
             test_id: Test identifier

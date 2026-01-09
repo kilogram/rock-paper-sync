@@ -158,6 +158,23 @@ def pytest_sessionstart(session):
             session.config.option.capture = "no"
 
 
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_call(item):
+    """Handle TestdataExistsError by skipping the test.
+
+    When multiple tests share the same fixture, the first test records the testdata.
+    Subsequent tests in the same session should reuse that testdata rather than
+    re-recording. This hook catches TestdataExistsError and converts it to a skip.
+    """
+    from tests.record_replay.harness import TestdataExistsError
+
+    try:
+        outcome = yield
+        outcome.get_result()
+    except TestdataExistsError as e:
+        pytest.skip(f"Reusing testdata recorded earlier this session: {e.test_id}")
+
+
 def pytest_collection_modifyitems(config, items):
     """Handle --list-tests option and mode-based test selection."""
     # Handle --list-tests

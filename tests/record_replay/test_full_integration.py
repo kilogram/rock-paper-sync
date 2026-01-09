@@ -228,9 +228,10 @@ def test_full_integration(device, workspace, fixtures_dir, tmp_path):
                 page_num=0,
             )
 
-            # Verify anchor structure is valid
-            assert anchor.annotation_type == "highlight"
-            assert anchor.text is not None, "Highlight anchor should have text anchor"
+            # Verify anchor structure is valid (AnchorContext attributes)
+            assert anchor.text_content is not None, "Highlight anchor should have text content"
+            assert anchor.content_hash, "Highlight anchor should have content hash"
+            assert anchor.paragraph_index == para_idx, "Paragraph index should match"
 
     # Test stroke anchoring
     for i, stroke in enumerate(updated_strokes[:3]):  # Test first 3
@@ -242,10 +243,9 @@ def test_full_integration(device, workspace, fixtures_dir, tmp_path):
                 annotation=stroke, paragraph_text=para_text, paragraph_index=para_idx, page_num=0
             )
 
-            # Verify anchor structure is valid
-            assert anchor.annotation_type == "stroke"
-            assert anchor.page is not None, "Stroke anchor should have page position"
-            assert anchor.bbox is not None, "Stroke anchor should have bounding box"
+            # Verify anchor structure is valid (AnchorContext attributes)
+            assert anchor.y_position_hint is not None, "Stroke anchor should have Y position hint"
+            assert anchor.paragraph_index == para_idx, "Paragraph index should match"
 
     print("✅ Anchor creation successful after modifications")
 
@@ -327,8 +327,8 @@ def test_full_integration(device, workspace, fixtures_dir, tmp_path):
                 paragraph_index=para_idx,
                 page_num=0,
             )
-            if anchor.text:
-                highlight_anchors.append((anchor.annotation_id, anchor.text.content, para_idx))
+            if anchor.text_content:
+                highlight_anchors.append((highlight.annotation_id, anchor.text_content, para_idx))
 
     # If we have multiple highlight anchors, verify they can be distinguished
     if len(highlight_anchors) > 1:

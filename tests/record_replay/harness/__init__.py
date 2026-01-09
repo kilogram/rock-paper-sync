@@ -36,7 +36,7 @@ from .base import (
 from .logging import Bench
 from .ocr_integration import OCRIntegrationMixin, OCRTestRecording
 from .offline import OfflineEmulator
-from .online import OnlineDevice
+from .online import OnlineDevice, TestdataExistsError
 from .output import Colors
 from .prompts import user_confirm, user_prompt
 from .protocol import (
@@ -78,6 +78,7 @@ __all__ = [
     "derive_test_id",
     "OnlineDevice",
     "OfflineEmulator",
+    "TestdataExistsError",
     # Vault protocol and implementations
     "VaultInteractionManager",
     "VaultOperation",
