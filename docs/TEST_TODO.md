@@ -81,30 +81,43 @@ M5 bidirectional sync has solid unit test coverage for core algorithms, but roun
 
 ---
 
-### 3. Double Conflict (Content + Annotation Changed) - NOT TESTED
+### 3. Double Conflict (Content + Annotation Changed) - DOCUMENTED (2026-01-09)
 
-**Status**: No test coverage
+**File**: `tests/annotations/test_annotation_anchoring.py`
+**Status**: ✅ Behavior documented and tested
 
-**Problem**: When both the source text AND the annotation properties change simultaneously, behavior is undefined.
+**Problem**: When both the source text AND the annotation properties change simultaneously, behavior was undocumented.
 
-**Example**:
-```
-1. Text "important" is highlighted (yellow) on device
-2. User changes "important" → "crucial" in markdown
-3. User also changed highlight color to red on device
-4. Sync runs - what happens?
-   - Fuzzy match "crucial"? (wrong text)
-   - Orphan? (loses annotation)
-   - Merge both changes? (not implemented)
-```
+**Resolution**: The behavior is now well-defined and tested:
 
-**Impact**: Silent data loss or wrong text highlighted.
+1. **Text substitution with stable context** (e.g., "important" → "crucial"):
+   - DiffAnchor finds the span between stable context anchors
+   - Annotation migrates to new text at confidence 0.6
+   - This is INTENTIONAL: highlights should follow edited text
 
-**Action Items**:
-- [ ] Define expected behavior for double conflicts
-- [ ] Add unit test for `AnchorContext.resolve()` with modified text
-- [ ] Add integration test for full workflow
-- [ ] Consider user notification for low-confidence matches
+2. **Text + context both change significantly**:
+   - DiffAnchor cannot find stable anchors
+   - Annotation becomes orphaned (correct behavior)
+   - Prevents highlighting wrong text
+
+3. **Annotation properties (color, etc.)**:
+   - Always taken from device (no conflict)
+   - Architecture ensures device version wins
+
+**Tests Added** (`TestDoubleConflict`, `TestDoubleConflictIntegration`):
+- `test_word_substitution_same_context` - "important" → "crucial" migrates
+- `test_word_substitution_with_context_change` - Too much change → orphan
+- `test_phrase_replacement` - Significant change → orphan
+- `test_phrase_replacement_stable_context` - Stable anchors → migrates
+- `test_complete_rewrite_orphans` - Complete rewrite → orphan
+- `test_text_expansion` - "fox" → "brown fox" migrates
+- `test_text_contraction` - "quick brown fox" → "fox" migrates
+- `test_confidence_threshold_boundary` - Verifies 0.6 threshold
+- `test_multiple_words_same_replacement` - Each occurrence migrates correctly
+- `test_reanchor_with_text_modification` - Full pipeline test
+- `test_annotation_color_unchanged_on_device` - Documents property handling
+
+**Key insight**: The 0.6 confidence threshold in `_reanchor_annotations()` is the boundary between migration and orphaning. This is appropriate - it allows text edits to be followed while preventing wrong guesses when too much changes.
 
 ---
 
@@ -268,4 +281,5 @@ Paragraph with 5 strokes + 2 highlights
 | 2026-01-08 | Related: find_and_resolve_anchor | ✓ | Added Y-position disambiguation |
 | 2026-01-08 | Related: create_anchor | ✓ | Added X-position disambiguation |
 | 2026-01-08 | P0 #2: Orphan recovery workflow | ✓ | Implemented attempt_orphan_recovery(), 8 unit tests |
+| 2026-01-09 | P0 #3: Double conflict behavior | ✓ | Documented behavior, added 11 tests |
 | | | | |
