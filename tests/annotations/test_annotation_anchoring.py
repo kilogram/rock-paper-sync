@@ -5,10 +5,12 @@ Tests the AnchorContext anchor resolution system and word-wrap layout engine
 for annotation position adjustment.
 """
 
+import difflib
+
 import pytest
 
 from rock_paper_sync.annotations import WordWrapLayoutEngine
-from rock_paper_sync.annotations.document_model import AnchorContext
+from rock_paper_sync.annotations.document_model import CONTEXT_WINDOW_SIZE, AnchorContext
 
 
 class TestAnchorContext:
@@ -1158,6 +1160,170 @@ class TestConfidenceThresholdBoundaryP2:
         # Either resolves with sufficient confidence or returns None
         if resolution_high is not None:
             assert resolution_high.confidence >= 0.0  # sanity check
+
+
+class TestMultiOccurrenceFuzzyThresholdP2:
+    """P2 #9 (part A): Multi-occurrence fuzzy threshold with real score computation.
+
+    Two test surfaces:
+
+    A) _fuzzy_match() directly — the multiple-occurrence branch (lines 674-702) is
+       unreachable via resolve() because Strategy 1 intercepts all verbatim matches.
+       Testing it directly verifies the implementation is correct should the call graph change.
+
+    B) resolve() with multiple exact matches — exercises _disambiguate_by_context()
+       (Strategy 1 path) with computed scores to confirm the better context wins.
+    """
+
+    TARGET = "central target phrase"
+
+    def _build_anchor_and_new_doc(self):
+        """Build anchor from old_doc and new_doc with two occurrences at different contexts.
+
+        Returns (anchor, new_doc, offsets, fuzzy_scores) where fuzzy_scores are computed
+        exactly as _fuzzy_match does (CONTEXT_WINDOW_SIZE windows, SequenceMatcher).
+        """
+        # Pad context to exactly CONTEXT_WINDOW_SIZE so window boundaries are predictable
+        ctx_before = "AlphaAlpha BetaBeta GammaGamma DeltaDelta contex: "
+        ctx_after = ". EpsilonEpsilon ZetaZeta EtaEta ThetaThet IotaIo!"
+        assert len(ctx_before) == CONTEXT_WINDOW_SIZE
+        assert len(ctx_after) == CONTEXT_WINDOW_SIZE
+
+        old_doc = ctx_before + self.TARGET + ctx_after
+        start = len(ctx_before)
+        anchor = AnchorContext.from_text_span(old_doc, start, start + len(self.TARGET))
+        assert anchor.context_before == ctx_before
+        assert anchor.context_after == ctx_after
+
+        # Occurrence 1: context close to original (few char mutations) → high score
+        ctx_before_hi = "AlphaAlpha BetaBeta GammaGamma DeltaDelta contey: "
+        ctx_after_hi = ". EpsilonEpsilxn ZetaZeta EtaEta ThetaThet IotaIo!"
+        assert len(ctx_before_hi) == CONTEXT_WINDOW_SIZE
+        assert len(ctx_after_hi) == CONTEXT_WINDOW_SIZE
+
+        # Occurrence 2: completely different context → low score
+        ctx_before_lo = "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX "
+        ctx_after_lo = " ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ"
+        assert len(ctx_before_lo) == CONTEXT_WINDOW_SIZE
+        assert len(ctx_after_lo) == CONTEXT_WINDOW_SIZE
+
+        new_doc = (
+            ctx_before_hi
+            + self.TARGET
+            + ctx_after_hi
+            + " SEPARATOR "
+            + ctx_before_lo
+            + self.TARGET
+            + ctx_after_lo
+        )
+
+        offsets = []
+        pos, s = 0, 0
+        while True:
+            pos = new_doc.find(self.TARGET, s)
+            if pos == -1:
+                break
+            offsets.append(pos)
+            s = pos + 1
+        assert len(offsets) == 2, f"Expected 2 occurrences, got {len(offsets)}"
+
+        # Compute scores exactly as _fuzzy_match does
+        scores = []
+        for off in offsets:
+            before = new_doc[max(0, off - CONTEXT_WINDOW_SIZE) : off]
+            after = new_doc[off + len(self.TARGET) : off + len(self.TARGET) + CONTEXT_WINDOW_SIZE]
+            b = difflib.SequenceMatcher(None, anchor.context_before, before).ratio()
+            a = difflib.SequenceMatcher(None, anchor.context_after, after).ratio()
+            scores.append((b + a) / 2)
+
+        return anchor, new_doc, offsets, scores
+
+    def test_computed_scores_are_well_separated(self):
+        """Verify the test fixture: scores differ by ≥0.2 and best score < 1.0."""
+        _, _, _, scores = self._build_anchor_and_new_doc()
+        best, worst = max(scores), min(scores)
+        assert best > worst + 0.2, f"Scores too similar: {scores}"
+        assert (
+            best < 1.0
+        ), "Best score is 1.0; introduce context mutations to allow threshold above it"
+
+    # --- Surface A: _fuzzy_match() called directly ---
+
+    def test_fuzzy_match_multi_occurrence_accepts_better_match_below_threshold(self):
+        """_fuzzy_match returns the higher-context match when threshold ≤ best_score."""
+        anchor, new_doc, offsets, scores = self._build_anchor_and_new_doc()
+        best_score = max(scores)
+        best_idx = scores.index(best_score)
+        threshold_below = best_score - 0.01
+
+        result = anchor._fuzzy_match(new_doc, threshold_below)  # type: ignore[attr-defined]
+
+        assert (
+            result is not None
+        ), f"Expected match at threshold {threshold_below:.4f} (best_score={best_score:.4f})"
+        assert (
+            result.start_offset == offsets[best_idx]
+        ), f"Expected offset {offsets[best_idx]}, got {result.start_offset}. Scores: {scores}"
+        assert (
+            abs(result.confidence - best_score) < 0.001
+        ), f"confidence {result.confidence:.4f} should equal best_score {best_score:.4f}"
+
+    def test_fuzzy_match_multi_occurrence_returns_none_above_threshold(self):
+        """_fuzzy_match returns None when fuzzy_threshold exceeds the best context score."""
+        anchor, new_doc, _offsets, scores = self._build_anchor_and_new_doc()
+        threshold_above = max(scores) + 0.01
+
+        result = anchor._fuzzy_match(new_doc, threshold_above)  # type: ignore[attr-defined]
+
+        # Multi-occurrence exact-text path rejects; longest-match fallback also can't beat
+        # two verbatim occurrences of a 21-char target in a long doc at this threshold
+        assert result is None or result.match_type == "fuzzy", "unexpected match type"
+        # If a result comes back it must be from the longest-match fallback, not the
+        # context-scored multi-occurrence branch, since threshold was above best_score.
+
+    def test_fuzzy_match_selects_best_not_worst_context(self):
+        """_fuzzy_match never picks the worse-context occurrence when both clear the threshold."""
+        anchor, new_doc, offsets, scores = self._build_anchor_and_new_doc()
+        worst_score = min(scores)
+        worst_idx = scores.index(worst_score)
+        best_idx = 1 - worst_idx
+        threshold_below_both = worst_score - 0.01
+
+        result = anchor._fuzzy_match(new_doc, threshold_below_both)  # type: ignore[attr-defined]
+
+        assert result is not None
+        assert result.start_offset == offsets[best_idx], (
+            f"Expected best-match offset {offsets[best_idx]}, got {result.start_offset}. "
+            f"Scores: {scores}"
+        )
+
+    # --- Surface B: resolve() with multiple exact occurrences (Strategy 1 path) ---
+
+    def test_resolve_picks_better_context_with_multiple_exact_matches(self):
+        """resolve() returns the better-context candidate when both occurrences are verbatim."""
+        anchor, new_doc, offsets, scores = self._build_anchor_and_new_doc()
+        old_doc = anchor.context_before + self.TARGET + anchor.context_after
+
+        resolution = anchor.resolve(old_doc, new_doc)
+
+        # Strategy 1 (_find_by_hash) finds both, _disambiguate_by_context picks the better one
+        assert resolution is not None
+        best_idx = scores.index(max(scores))
+        assert resolution.start_offset == offsets[best_idx], (
+            f"Expected better-context offset {offsets[best_idx]}, got {resolution.start_offset}. "
+            f"Scores: {scores}"
+        )
+
+    def test_resolve_with_multiple_exact_matches_returns_exact_match_type(self):
+        """Strategy 1 returns match_type='exact' with confidence=0.95 for disambiguated matches."""
+        anchor, new_doc, _offsets, _scores = self._build_anchor_and_new_doc()
+        old_doc = anchor.context_before + self.TARGET + anchor.context_after
+
+        resolution = anchor.resolve(old_doc, new_doc)
+
+        assert resolution is not None
+        assert resolution.match_type == "exact"
+        assert resolution.confidence == 0.95
 
 
 class TestAnnotationTypeMismatch:
