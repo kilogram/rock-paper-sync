@@ -5,10 +5,16 @@ reMarkable v6 format files with pagination and rmscene integration.
 """
 
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 import rmscene
 
+from rock_paper_sync.annotations.document_model import (
+    AnchorContext,
+    DocumentAnnotation,
+    PageProjection,
+)
 from rock_paper_sync.config import LayoutConfig
 from rock_paper_sync.generator import (
     RemarkableDocument,
@@ -841,3 +847,163 @@ class TestParagraphSplitting:
 
             parsed_blocks = list(rmscene.read_blocks(io.BytesIO(rm_data)))
             assert len(parsed_blocks) > 0, f"Page {i} has no blocks"
+
+
+def _make_glyph_block(text: str = "target") -> MagicMock:
+    """Build a minimal SceneGlyphItemBlock mock for highlight tests."""
+    rect = MagicMock()
+    rect.x = 100.0
+    rect.y = 200.0
+    rect.w = 80.0
+    rect.h = 30.0
+
+    glyph_value = MagicMock()
+    glyph_value.text = text
+    glyph_value.rectangles = [rect]
+
+    item = MagicMock()
+    item.value = glyph_value
+    item.item_id = MagicMock()
+
+    block = MagicMock()
+    block.item = item
+    block.extra_value_data = None
+    type(block).__name__ = "SceneGlyphItemBlock"
+    return block
+
+
+def _make_highlight_annotation(
+    text: str = "target", source_page_idx: int = 0
+) -> DocumentAnnotation:
+    anchor = AnchorContext(
+        content_hash="abc",
+        text_content=text,
+        context_before="some ",
+        context_after=" word",
+        paragraph_index=0,
+    )
+    return DocumentAnnotation(
+        annotation_id="test-anno-1",
+        annotation_type="highlight",
+        anchor_context=anchor,
+        original_rm_block=_make_glyph_block(text),
+        source_page_idx=source_page_idx,
+    )
+
+
+class TestCrossPageHighlightPositioning:
+    """Tests for P2 #8: cross-page highlight coordinate fix.
+
+    When content is added so that a highlight reflows to a different page,
+    old_text from the source page must NOT be used as the delta base for the
+    target page. Doing so computes a position delta in the wrong coordinate
+    space, silently placing the highlight at a wrong Y on the device.
+    """
+
+    @pytest.fixture
+    def gen(self) -> RemarkableGenerator:
+        return RemarkableGenerator(LayoutConfig())
+
+    def _make_page(self) -> RemarkablePage:
+        return RemarkablePage(uuid="page-uuid-0", text_items=[], text_blocks=[])
+
+    def test_same_page_highlight_uses_delta(self, gen: RemarkableGenerator) -> None:
+        """When source and target page match, old_text is passed for delta positioning."""
+        anno = _make_highlight_annotation(source_page_idx=0)
+        projection = PageProjection(
+            page_index=0,
+            page_uuid="page-uuid-0",
+            page_text="target word",
+            annotations=[anno],
+        )
+
+        page = self._make_page()
+        fake_rm_path = MagicMock(spec=Path)
+
+        captured: dict = {}
+
+        def fake_apply_to_page(
+            block,
+            page_text,
+            new_origin,
+            layout_engine,
+            geometry,
+            anchor_context,
+            old_text=None,
+            old_origin=None,
+            crdt_base_id=16,
+        ):
+            captured["old_text"] = old_text
+            captured["old_origin"] = old_origin
+            return None
+
+        with patch.object(gen._highlight_handler, "apply_to_page", side_effect=fake_apply_to_page):
+            with patch.object(
+                gen,
+                "_extract_text_blocks_from_rm",
+                return_value=([], DEFAULT_DEVICE.text_pos_y, "target word"),
+            ):
+                gen._apply_annotations_to_page(
+                    page,
+                    projection,
+                    {"page-uuid-0": fake_rm_path},
+                )
+
+        assert (
+            captured.get("old_text") == "target word"
+        ), "Same-page highlight should receive old_text for delta positioning"
+        assert captured.get("old_origin") is not None
+
+    def test_cross_page_highlight_uses_layout_based(self, gen: RemarkableGenerator) -> None:
+        """When highlight moves to a different page, old_text must be None.
+
+        If old_text from the source page were passed, calculate_position_delta()
+        would compute a delta from source-page coords to target-page coords,
+        silently placing the highlight at the wrong Y on the device.
+        """
+        anno = _make_highlight_annotation(source_page_idx=0)
+        projection = PageProjection(
+            page_index=1,  # annotation moved to page 1 after content was inserted
+            page_uuid="page-uuid-1",
+            page_text="target word",
+            annotations=[anno],
+        )
+
+        page = self._make_page()
+        fake_rm_path_p0 = MagicMock(spec=Path)
+        fake_rm_path_p1 = MagicMock(spec=Path)
+
+        captured: dict = {}
+
+        def fake_apply_to_page(
+            block,
+            page_text,
+            new_origin,
+            layout_engine,
+            geometry,
+            anchor_context,
+            old_text=None,
+            old_origin=None,
+            crdt_base_id=16,
+        ):
+            captured["old_text"] = old_text
+            captured["old_origin"] = old_origin
+            return None
+
+        with patch.object(gen._highlight_handler, "apply_to_page", side_effect=fake_apply_to_page):
+            with patch.object(
+                gen,
+                "_extract_text_blocks_from_rm",
+                return_value=([], DEFAULT_DEVICE.text_pos_y, "old source page text"),
+            ):
+                gen._apply_annotations_to_page(
+                    page,
+                    projection,
+                    {"page-uuid-0": fake_rm_path_p0, "page-uuid-1": fake_rm_path_p1},
+                )
+
+        assert captured.get("old_text") is None, (
+            "Cross-page highlight must NOT receive old_text from the source page; "
+            "doing so computes the delta in the wrong coordinate space"
+        )
+        assert captured.get("old_origin") is None

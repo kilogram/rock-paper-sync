@@ -399,15 +399,23 @@ class RemarkableGenerator:
                 # Highlight - use HighlightHandler.relocate for delta-based positioning
                 # This preserves original rectangle precision while correctly shifting positions
 
-                # Get old text from source page using source_page_idx
+                # Get old text from source page using source_page_idx.
+                # Only use delta-based positioning when annotation stays on the same page;
+                # cross-page moves must use layout-based absolute positioning because the
+                # old_text from the source page has no meaningful relationship to the
+                # target page's coordinate space.
                 source_page_idx = doc_anno.source_page_idx
-                old_text = ""
-                old_origin = new_origin  # Default to same origin
+                target_page_idx = projection.page_index
+                old_text = None
+                old_origin = None
 
-                # Find source .rm file from uuid_to_rm_path using page index
-                # The uuid_to_rm_path maps page UUIDs to .rm files
-                if source_page_idx is not None and uuid_to_rm_path:
-                    # Get the rm_path for the source page (UUIDs are ordered by page)
+                is_same_page = (
+                    source_page_idx is not None
+                    and source_page_idx == target_page_idx
+                    and uuid_to_rm_path
+                )
+
+                if is_same_page:
                     rm_paths = list(uuid_to_rm_path.values())
                     if source_page_idx < len(rm_paths):
                         source_rm_path = rm_paths[source_page_idx]
@@ -418,6 +426,11 @@ class RemarkableGenerator:
                             old_origin = (self.geometry.text_pos_x, old_origin_y)
                         except Exception as e:
                             logger.warning(f"Could not get old text from {source_rm_path}: {e}")
+                elif source_page_idx != target_page_idx:
+                    logger.debug(
+                        f"Cross-page highlight move: source={source_page_idx} -> "
+                        f"target={target_page_idx}; using layout-based positioning"
+                    )
 
                 # Use unified apply_to_page - returns AbsolutePosition with adjusted block
                 result = self._highlight_handler.apply_to_page(
@@ -427,8 +440,8 @@ class RemarkableGenerator:
                     self.layout_engine,
                     self.geometry,
                     doc_anno.anchor_context,
-                    old_text=old_text if old_text else None,
-                    old_origin=old_origin if old_text else None,
+                    old_text=old_text,
+                    old_origin=old_origin,
                     crdt_base_id=16,
                 )
 
