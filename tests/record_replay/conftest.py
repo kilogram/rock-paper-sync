@@ -935,37 +935,60 @@ def visual_validator(testdata_store, tmp_path):
         def assert_match(
             self,
             result: VisualComparisonResult,
+            test_rm_files: dict[str, bytes] | None = None,
+            golden_rm_files: dict[str, bytes] | None = None,
             max_hash_distance: int = 15,
         ) -> None:
             """Assert that visual comparison passed.
 
+            When test_rm_files and golden_rm_files are provided, saves debug
+            images automatically on failure so you can diagnose what went wrong.
+
             Args:
                 result: Comparison result to validate
+                test_rm_files: page_uuid -> .rm bytes (for debug images on failure)
+                golden_rm_files: page_uuid -> .rm bytes (for debug images on failure)
                 max_hash_distance: Maximum allowed perceptual hash distance
 
             Raises:
                 AssertionError: If comparison failed
             """
-            if result.render_errors:
-                raise AssertionError(
-                    "Failed to render .rm files:\n"
-                    + "\n".join(f"  - {e}" for e in result.render_errors)
-                )
+            failure_msg: str | None = None
 
-            if not result.all_matched:
+            if result.render_errors:
+                failure_msg = "Failed to render .rm files:\n" + "\n".join(
+                    f"  - {e}" for e in result.render_errors
+                )
+            elif not result.all_matched:
                 lines = [f"Missing {len(result.missing_in_test)} stroke(s) in test output:"]
                 for bbox in result.missing_in_test:
                     lines.append(f"  - bbox at ({bbox.x:.0f}, {bbox.y:.0f})")
-                raise AssertionError("\n".join(lines))
+                failure_msg = "\n".join(lines)
+            else:
+                failures = [m for m in result.matches if not m.within_threshold(max_hash_distance)]
+                if failures:
+                    lines = [
+                        f"Visual mismatch for {len(failures)} stroke(s) (threshold={max_hash_distance}):"
+                    ]
+                    for f in failures:
+                        lines.append(f.format_diff())
+                    failure_msg = "\n".join(lines)
 
-            failures = [m for m in result.matches if not m.within_threshold(max_hash_distance)]
-            if failures:
-                lines = [
-                    f"Visual mismatch for {len(failures)} stroke(s) (threshold={max_hash_distance}):"
-                ]
-                for f in failures:
-                    lines.append(f.format_diff())
-                raise AssertionError("\n".join(lines))
+            if failure_msg is not None:
+                if test_rm_files and golden_rm_files:
+                    try:
+                        saved = save_comparison_debug_images(
+                            test_rm_files,
+                            golden_rm_files,
+                            self.debug_dir / "assertion_failure",
+                        )
+                        if saved:
+                            failure_msg += (
+                                f"\n\nDebug images saved to: {self.debug_dir / 'assertion_failure'}"
+                            )
+                    except Exception:
+                        pass
+                raise AssertionError(failure_msg)
 
         def assert_visual_match(
             self,
@@ -976,6 +999,8 @@ def visual_validator(testdata_store, tmp_path):
             position_tolerance: float = 100.0,
         ) -> VisualComparisonResult:
             """Compare and assert visual match in one call.
+
+            Saves debug images automatically if the assertion fails.
 
             Args:
                 test_rm_files: page_uuid -> .rm bytes from test output
@@ -988,7 +1013,7 @@ def visual_validator(testdata_store, tmp_path):
                 VisualComparisonResult on success
 
             Raises:
-                AssertionError: If comparison failed
+                AssertionError: If comparison failed (debug images saved automatically)
             """
             result = self.compare(
                 test_rm_files,
@@ -996,7 +1021,7 @@ def visual_validator(testdata_store, tmp_path):
                 padding=padding,
                 position_tolerance=position_tolerance,
             )
-            self.assert_match(result, max_hash_distance)
+            self.assert_match(result, test_rm_files, golden_rm_files, max_hash_distance)
             return result
 
         def print_comparison(

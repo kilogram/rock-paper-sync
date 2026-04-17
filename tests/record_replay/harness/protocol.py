@@ -366,6 +366,60 @@ class DeviceInteractionProtocol(Protocol):
         """
         ...
 
+    # =========================================================================
+    # Comparison Methods
+    # =========================================================================
+
+    def compare_to_golden(
+        self,
+        test_rm_files: dict[str, bytes],
+        test_id: str | None = None,
+        tolerance_px: float = 5.0,
+        visual: bool = True,
+        debug_dir: Path | None = None,
+    ) -> None:
+        """Assert test_rm_files match the golden trip for this test.
+
+        Combines positional comparison (highlight rectangles) and optional
+        visual comparison (perceptual hashing). Saves debug images on failure
+        if debug_dir is provided or falls back to a default debug path.
+
+        Args:
+            test_rm_files: page_uuid -> .rm bytes from the test output
+            test_id: Test identifier (defaults to the current test's id)
+            tolerance_px: Maximum highlight position difference in pixels
+            visual: Also run perceptual hash comparison of rendered images
+            debug_dir: Directory for debug images on failure (auto-selected if None)
+
+        Raises:
+            AssertionError: If no golden exists or comparison fails
+        """
+        ...
+
+    def compare_trips(
+        self,
+        from_trip: int,
+        to_trip: int,
+        test_id: str | None = None,
+        tolerance_px: float = 5.0,
+    ) -> None:
+        """Assert annotation positions are consistent between two stored trips.
+
+        Loads the .rm files for both trips from testdata and calls
+        assert_highlights_match() to validate that highlight positions haven't
+        drifted between trips.
+
+        Args:
+            from_trip: First trip number (1-indexed)
+            to_trip: Second trip number (1-indexed)
+            test_id: Test identifier (defaults to the current test's id)
+            tolerance_px: Maximum highlight position difference in pixels
+
+        Raises:
+            AssertionError: If either trip is missing or positions differ
+        """
+        ...
+
 
 # Backward compatibility aliases
 DeviceProtocol = DeviceInteractionProtocol

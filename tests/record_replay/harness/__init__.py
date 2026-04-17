@@ -38,6 +38,7 @@ from .ocr_integration import OCRIntegrationMixin, OCRTestRecording
 from .offline import OfflineEmulator
 from .online import OnlineDevice, TestdataExistsError
 from .output import Colors
+from .phase import AnnotationState, PhaseContext, debug_on_failure, extract_annotations
 from .prompts import user_confirm, user_prompt
 from .protocol import (
     DeviceInteractionManager,  # Backward compatibility
@@ -97,6 +98,11 @@ __all__ = [
     # OCR integration
     "OCRIntegrationMixin",
     "OCRTestRecording",
+    # Phase management and annotation state
+    "PhaseContext",
+    "AnnotationState",
+    "extract_annotations",
+    "debug_on_failure",
     # Visual comparison
     "ClusterMatch",
     "StrokeCluster",

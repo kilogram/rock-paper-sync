@@ -944,3 +944,71 @@ class OnlineDevice(DeviceInteractionManager):
             Phase number to resume from, or None if starting fresh
         """
         return self._resume_from_phase
+
+    # =========================================================================
+    # Comparison Methods
+    # =========================================================================
+
+    def compare_to_golden(
+        self,
+        test_rm_files: dict[str, bytes],
+        test_id: str | None = None,
+        tolerance_px: float = 5.0,
+        visual: bool = True,
+        debug_dir: "Path | None" = None,
+    ) -> None:
+        """Assert test_rm_files match the golden trip for this test."""
+        from pathlib import Path
+
+        from .comparison import assert_highlights_match
+        from .phase import debug_on_failure
+        from .visual_comparison import assert_rm_files_match_visually
+
+        tid = test_id or self._current_test_id
+        if not tid:
+            raise AssertionError("No test_id: call start_test() before compare_to_golden()")
+
+        golden = self.testdata_store.get_golden(tid)
+        if golden is None or golden.annotations is None:
+            raise AssertionError(
+                f"No golden trip found for '{tid}'. "
+                "Record a golden trip first (trip with is_golden=True)."
+            )
+        golden_rm = golden.annotations.rm_files
+
+        _debug_dir = debug_dir or (Path(__file__).parent.parent / "debug_images")
+
+        with debug_on_failure(test_rm_files, golden_rm, _debug_dir, f"{tid}_highlights"):
+            assert_highlights_match(test_rm_files, golden_rm, tolerance_px=tolerance_px)
+
+        if visual:
+            with debug_on_failure(test_rm_files, golden_rm, _debug_dir, f"{tid}_visual"):
+                assert_rm_files_match_visually(test_rm_files, golden_rm)
+
+    def compare_trips(
+        self,
+        from_trip: int,
+        to_trip: int,
+        test_id: str | None = None,
+        tolerance_px: float = 5.0,
+    ) -> None:
+        """Assert annotation positions are consistent between two stored trips."""
+        from .comparison import assert_highlights_match
+
+        tid = test_id or self._current_test_id
+        if not tid:
+            raise AssertionError("No test_id: call start_test() before compare_trips()")
+
+        trip_a = self.testdata_store.get_trip(tid, from_trip)
+        trip_b = self.testdata_store.get_trip(tid, to_trip)
+
+        if trip_a is None or trip_a.annotations is None:
+            raise AssertionError(f"Trip {from_trip} not found for '{tid}'")
+        if trip_b is None or trip_b.annotations is None:
+            raise AssertionError(f"Trip {to_trip} not found for '{tid}'")
+
+        assert_highlights_match(
+            trip_a.annotations.rm_files,
+            trip_b.annotations.rm_files,
+            tolerance_px=tolerance_px,
+        )
