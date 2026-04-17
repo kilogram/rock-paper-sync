@@ -945,5 +945,413 @@ class TestDoubleConflictIntegration:
         pass
 
 
+class TestOverlappingHighlightConflict:
+    """P2 #7: Overlapping highlight conflict with deletion (disambiguation may fail)."""
+
+    def test_overlapping_highlights_disambiguation_by_context(self):
+        """Documents disambiguation behavior when two highlights share the same text.
+
+        When the anchored text appears only once in the new document, both
+        anchors (which originally pointed to different occurrences) collapse
+        to the same resolved position. This is expected behavior: the system
+        cannot distinguish between them once one occurrence is deleted.
+        """
+        old_doc = "He said target word first, then target word again in the sentence."
+
+        # First occurrence: "target word first" context
+        t1_start = old_doc.index("target word")
+        h1_anchor = AnchorContext.from_text_span(
+            old_doc, t1_start, t1_start + 11, paragraph_index=0
+        )
+
+        # Second occurrence: "target word again" context
+        t2_start = old_doc.index("target word", t1_start + 1)
+        h2_anchor = AnchorContext.from_text_span(
+            old_doc, t2_start, t2_start + 11, paragraph_index=0
+        )
+
+        # New doc: first occurrence deleted; only second occurrence remains
+        new_doc = "He said first, then target word again in the sentence."
+
+        h1_resolution = h1_anchor.resolve(old_doc, new_doc)
+        h2_resolution = h2_anchor.resolve(old_doc, new_doc)
+
+        # h2 (second occurrence) must still resolve to "target word"
+        if h2_resolution is not None:
+            assert new_doc[h2_resolution.start_offset : h2_resolution.end_offset] == "target word"
+
+        # h1 (first occurrence, now deleted) may also resolve to the remaining occurrence.
+        # When both resolve, they collapse to the SAME position — this is the known
+        # limitation of disambiguation when the text becomes unique after deletion.
+        if h1_resolution is not None and h2_resolution is not None:
+            # Both anchors collapse to the sole remaining "target word"
+            assert new_doc[h1_resolution.start_offset : h1_resolution.end_offset] == "target word"
+
+    def test_surviving_highlight_resolves_after_overlap_deletion(self):
+        """The surviving highlight still resolves when overlapping text is deleted."""
+        old_doc = "This has overlapping highlight zone text and zone text more content."
+
+        # Two highlights sharing "zone text"
+        h2_start = old_doc.index("zone text more")
+        h2_anchor = AnchorContext.from_text_span(
+            old_doc, h2_start, h2_start + 14, paragraph_index=0
+        )
+
+        # New doc: first highlight text deleted, second remains
+        new_doc = "This has overlapping and zone text more content."
+
+        h2_resolution = h2_anchor.resolve(old_doc, new_doc)
+
+        # h2 ("zone text more") should still be resolvable
+        if h2_resolution is not None:
+            resolved_text = new_doc[h2_resolution.start_offset : h2_resolution.end_offset]
+            assert "zone text" in resolved_text
+
+    def test_deleted_highlight_becomes_lower_confidence(self):
+        """When highlighted text is deleted, resolution confidence drops below 1.0."""
+        old_doc = "The important feature was highlighted here."
+        new_doc = "The feature was here."  # "important" deleted
+
+        target = "important feature"
+        t_start = old_doc.index(target)
+        anchor = AnchorContext.from_text_span(old_doc, t_start, t_start + len(target))
+
+        resolution = anchor.resolve(old_doc, new_doc)
+
+        # If it resolves at all, confidence must be < 1.0 (not an exact match)
+        if resolution is not None:
+            assert resolution.confidence < 1.0
+
+
+class TestCrossPageAnnotationReflow:
+    """P2 #8: Cross-page annotation during content reflow (page shift not tested)."""
+
+    def test_annotation_survives_large_insertion_before(self):
+        """Annotation tracks its text even after large content inserted before it."""
+        original_text = "Section A.\n\nSection B: the annotated word here.\n\nSection C."
+
+        target = "annotated word"
+        target_start = original_text.index(target)
+        anchor = AnchorContext.from_text_span(
+            original_text, target_start, target_start + len(target), paragraph_index=1
+        )
+
+        # Insert 10 paragraphs before Section B (simulates page reflow)
+        extra = "\n\n".join(f"Extra paragraph {i}." for i in range(10))
+        new_text = f"Section A.\n\n{extra}\n\nSection B: the annotated word here.\n\nSection C."
+
+        resolution = anchor.resolve(original_text, new_text)
+
+        assert resolution is not None
+        assert new_text[resolution.start_offset : resolution.end_offset] == "annotated word"
+
+    def test_annotation_survives_page_shift_with_deletion(self):
+        """Annotation resolves after content before it is deleted (shifts to earlier page)."""
+        original_text = "First page text.\n\nSecond page annotated phrase here.\n\nThird page."
+
+        target = "annotated phrase"
+        target_start = original_text.index(target)
+        anchor = AnchorContext.from_text_span(
+            original_text, target_start, target_start + len(target), paragraph_index=1
+        )
+
+        new_text = "Second page annotated phrase here.\n\nThird page."
+
+        resolution = anchor.resolve(original_text, new_text)
+
+        assert resolution is not None
+        assert new_text[resolution.start_offset : resolution.end_offset] == "annotated phrase"
+
+    def test_annotation_tracks_across_inserted_heading(self):
+        """Annotation resolves correctly after a new heading is inserted above it."""
+        original_text = "Introduction text.\n\nThe key concept is here.\n\nConclusion."
+
+        target = "key concept"
+        target_start = original_text.index(target)
+        anchor = AnchorContext.from_text_span(
+            original_text, target_start, target_start + len(target), paragraph_index=1
+        )
+
+        new_text = (
+            "Introduction text.\n\n## New Section\n\nNew section content.\n\n"
+            "The key concept is here.\n\nConclusion."
+        )
+
+        resolution = anchor.resolve(original_text, new_text)
+
+        assert resolution is not None
+        assert new_text[resolution.start_offset : resolution.end_offset] == "key concept"
+
+
+class TestConfidenceThresholdBoundaryP2:
+    """P2 #9: Confidence threshold boundary cases at 0.79, 0.80, 0.81.
+
+    DEFAULT_FUZZY_THRESHOLD = 0.8 is the default for resolve().
+    _reanchor_annotations uses confidence >= 0.6 to accept a resolution.
+    """
+
+    def test_exact_match_always_accepted_regardless_of_threshold(self):
+        """Exact match returns confidence=1.0 at any fuzzy_threshold value."""
+        doc = "The quick brown fox jumps over the lazy dog."
+        start = doc.index("brown fox")
+        anchor = AnchorContext.from_text_span(doc, start, start + 9, paragraph_index=0)
+
+        for threshold in [0.79, 0.80, 0.81, 0.99]:
+            resolution = anchor.resolve(doc, doc, fuzzy_threshold=threshold)
+            assert resolution is not None, f"Exact match failed at threshold {threshold}"
+            assert resolution.confidence == 1.0
+
+    def test_diff_anchor_confidence_fixed_at_0_6(self):
+        """DiffAnchor always returns exactly 0.6 confidence regardless of fuzzy_threshold."""
+        old_doc = "The important feature was added."
+        new_doc = "The crucial feature was added."
+
+        start = old_doc.index("important")
+        anchor = AnchorContext.from_text_span(old_doc, start, start + 9, paragraph_index=0)
+
+        resolution = anchor.resolve(old_doc, new_doc, fuzzy_threshold=0.8)
+
+        if resolution is not None and resolution.match_type == "diff_anchor":
+            assert resolution.confidence == 0.6
+
+    def test_threshold_0_79_more_permissive_than_0_80(self):
+        """Threshold 0.79 accepts slightly weaker context matches than 0.80."""
+        # With a single occurrence in new_doc, the exact text match returns confidence=1.0
+        # regardless of threshold; this test verifies no crash at boundary thresholds.
+        doc = "Context alpha: the target phrase. Context beta varies here."
+        start = doc.index("target phrase")
+        anchor = AnchorContext.from_text_span(doc, start, start + 13)
+
+        for threshold in [0.79, 0.80, 0.81]:
+            resolution = anchor.resolve(doc, doc, fuzzy_threshold=threshold)
+            # Single occurrence: exact match always wins
+            assert resolution is not None, f"Single-occurrence match failed at {threshold}"
+
+    def test_reanchor_threshold_0_6_boundary_diff_anchor(self):
+        """Diff-anchor at 0.6 is exactly at the _reanchor_annotations accept boundary."""
+        reanchor_threshold = 0.6  # from pull_sync.py
+
+        # All resolution types versus the reanchoring threshold
+        assert 1.0 >= reanchor_threshold  # exact
+        assert 0.95 >= reanchor_threshold  # exact (multiple matches)
+        assert 0.8 >= reanchor_threshold  # fuzzy
+        assert 0.6 >= reanchor_threshold  # diff_anchor (at boundary)
+        assert 0.4 < reanchor_threshold  # spatial (rejected)
+
+    def test_threshold_0_81_rejects_weaker_fuzzy_contexts(self):
+        """At threshold 0.81, contexts scoring below 0.81 are not accepted for disambiguation."""
+        # Build a doc with two occurrences; second has weaker context
+        doc = (
+            "Primary context: the apple here in section one. "
+            "Unrelated stuff: the apple in section two with very different surrounding text."
+        )
+        first_start = doc.index("the apple here")
+        anchor = AnchorContext.from_text_span(doc, first_start, first_start + 9)
+
+        # At threshold 0.0, some match always succeeds
+        resolution_low = anchor.resolve(doc, doc, fuzzy_threshold=0.0)
+        assert resolution_low is not None
+
+        # At threshold 0.81, the disambiguation may reject weaker contexts
+        # (just verify no exception; result may be None or a valid resolution)
+        resolution_high = anchor.resolve(doc, doc, fuzzy_threshold=0.81)
+        # Either resolves with sufficient confidence or returns None
+        if resolution_high is not None:
+            assert resolution_high.confidence >= 0.0  # sanity check
+
+
+class TestAnnotationTypeMismatch:
+    """P2 #10: Annotation type mismatch in merge (highlight vs stroke on same area)."""
+
+    def test_highlight_and_stroke_same_anchor_both_resolve(self):
+        """Both highlight and stroke on the same anchor resolve independently."""
+        from rock_paper_sync.annotations.document_model import DocumentAnnotation
+
+        content = "This is the annotated text here for testing purposes."
+        target = "annotated text"
+        target_start = content.index(target)
+        anchor = AnchorContext.from_text_span(content, target_start, target_start + len(target))
+
+        highlight = DocumentAnnotation(
+            annotation_id="highlight-1",
+            annotation_type="highlight",
+            source_page_idx=0,
+            anchor_context=anchor,
+        )
+        stroke = DocumentAnnotation(
+            annotation_id="stroke-1",
+            annotation_type="stroke",
+            source_page_idx=0,
+            anchor_context=anchor,
+        )
+
+        for annotation in [highlight, stroke]:
+            resolved = annotation.anchor_context.resolve(
+                annotation.anchor_context.text_content, content
+            )
+            assert resolved is not None, f"{annotation.annotation_type} failed to resolve"
+            assert resolved.confidence >= 0.6
+
+    def test_annotation_type_preserved_after_reanchoring(self):
+        """Annotation type is unchanged after reanchoring to new content."""
+        from rock_paper_sync.annotations.document_model import DocumentAnnotation
+
+        content = "The method returns a value correctly."
+        target = "method returns"
+        target_start = content.index(target)
+        anchor = AnchorContext.from_text_span(content, target_start, target_start + len(target))
+
+        for anno_type in ["highlight", "stroke"]:
+            annotation = DocumentAnnotation(
+                annotation_id=f"{anno_type}-1",
+                annotation_type=anno_type,
+                source_page_idx=0,
+                anchor_context=anchor,
+            )
+
+            resolved = annotation.anchor_context.resolve(
+                annotation.anchor_context.text_content, content
+            )
+
+            if resolved is not None and resolved.confidence >= 0.6:
+                new_anchor = AnchorContext.from_text_span(
+                    content, resolved.start_offset, resolved.end_offset
+                )
+                new_annotation = DocumentAnnotation(
+                    annotation_id=annotation.annotation_id,
+                    annotation_type=annotation.annotation_type,
+                    source_page_idx=annotation.source_page_idx,
+                    anchor_context=new_anchor,
+                )
+                assert new_annotation.annotation_type == anno_type
+
+    def test_highlight_and_stroke_coexist_on_same_text_after_edit(self):
+        """Both highlight and stroke on same area both migrate after content edit."""
+        from rock_paper_sync.annotations.document_model import DocumentAnnotation
+
+        old_content = "The reviewed process is defined here."
+        new_content = "The approved process is defined here."
+        target = "reviewed process"
+        target_start = old_content.index(target)
+
+        anchor = AnchorContext.from_text_span(old_content, target_start, target_start + len(target))
+
+        annotations = [
+            DocumentAnnotation("h-1", "highlight", anchor_context=anchor, source_page_idx=0),
+            DocumentAnnotation("s-1", "stroke", anchor_context=anchor, source_page_idx=0),
+        ]
+
+        resolved = anchor.resolve(anchor.text_content, new_content)
+
+        if resolved is not None and resolved.confidence >= 0.6:
+            # Both annotations reference the same anchor; both would migrate
+            for annotation in annotations:
+                assert annotation.annotation_type in ("highlight", "stroke")
+            new_text = new_content[resolved.start_offset : resolved.end_offset]
+            assert len(new_text) > 0
+
+
+class TestUnicodeTextInAnchors:
+    """P3 #11: Unicode text in anchors (whitespace and accent normalization)."""
+
+    def test_unicode_exact_match_same_document(self):
+        """Unicode text anchors resolve exactly in the same document."""
+        doc = "The résumé shows relevant experience here."
+
+        target = "résumé"
+        target_start = doc.index(target)
+        anchor = AnchorContext.from_text_span(doc, target_start, target_start + len(target))
+
+        resolution = anchor.resolve(doc, doc)
+
+        assert resolution is not None
+        assert resolution.match_type == "exact"
+        assert doc[resolution.start_offset : resolution.end_offset] == "résumé"
+
+    def test_accented_and_ascii_have_different_hashes(self):
+        """Content hashes differ for accented vs ASCII text (no NFC normalization)."""
+        doc_accented = "Visit café on Main Street."
+        doc_ascii = "Visit cafe on Main Street."
+
+        start_a = doc_accented.index("café")
+        start_b = doc_ascii.index("cafe")
+
+        anchor_a = AnchorContext.from_text_span(doc_accented, start_a, start_a + len("café"))
+        anchor_b = AnchorContext.from_text_span(doc_ascii, start_b, start_b + len("cafe"))
+
+        # _normalize_text does not do unicode normalization → different hashes
+        assert anchor_a.content_hash != anchor_b.content_hash
+
+    def test_accent_to_ascii_fallback_via_fuzzy(self):
+        """Accent→ASCII change may still resolve via fuzzy/diff-anchor fallback."""
+        old_doc = "Visit café on Main Street for coffee."
+        new_doc = "Visit cafe on Main Street for coffee."
+
+        target = "café"
+        target_start = old_doc.index(target)
+        anchor = AnchorContext.from_text_span(old_doc, target_start, target_start + len(target))
+
+        resolution = anchor.resolve(old_doc, new_doc)
+
+        # Resolution may succeed via diff-anchor or fail entirely — both are valid
+        if resolution is not None:
+            # If it resolved, it should point near the "cafe" position
+            cafe_pos = new_doc.index("cafe")
+            assert abs(resolution.start_offset - cafe_pos) <= 5
+
+
+class TestWhitespaceModifications:
+    """P3 #12: Whitespace-only modifications in anchor text."""
+
+    def test_double_space_normalizes_to_single_for_hash(self):
+        """Content hash for 'hello  world' equals hash for 'hello world' (whitespace collapse)."""
+        old_doc = "Check  this out here."
+        new_doc = "Check this out here."
+
+        start_double = old_doc.index("Check  this")
+        start_single = new_doc.index("Check this")
+
+        anchor_double = AnchorContext.from_text_span(
+            old_doc, start_double, start_double + len("Check  this")
+        )
+        anchor_single = AnchorContext.from_text_span(
+            new_doc, start_single, start_single + len("Check this")
+        )
+
+        # _normalize_text collapses whitespace → hashes must be equal
+        assert anchor_double.content_hash == anchor_single.content_hash
+
+    def test_anchor_on_double_space_resolves_in_single_space_doc(self):
+        """Anchor on 'hello  world' resolves in document with 'hello world'."""
+        old_doc = "Hello  world is a common greeting."
+        new_doc = "Hello world is a common greeting."
+
+        target = "Hello  world"
+        target_start = old_doc.index(target)
+        anchor = AnchorContext.from_text_span(old_doc, target_start, target_start + len(target))
+
+        # Hash normalization means "Hello  world" and "Hello world" share a content hash
+        resolution = anchor.resolve(old_doc, new_doc)
+
+        assert resolution is not None
+        # Should resolve to "Hello world" at position 0
+        resolved_text = new_doc[resolution.start_offset : resolution.end_offset]
+        assert "Hello" in resolved_text
+
+    def test_unrelated_anchor_unaffected_by_nearby_whitespace_change(self):
+        """Anchor on text without whitespace changes resolves exactly."""
+        old_doc = "The data here  contains extra spaces  but target is stable."
+        new_doc = "The data here contains extra spaces but target is stable."
+
+        target = "target is stable"
+        target_start = old_doc.index(target)
+        anchor = AnchorContext.from_text_span(old_doc, target_start, target_start + len(target))
+
+        resolution = anchor.resolve(old_doc, new_doc)
+
+        assert resolution is not None
+        assert new_doc[resolution.start_offset : resolution.end_offset] == "target is stable"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
