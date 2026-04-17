@@ -1,9 +1,9 @@
 {
   "test_id": "paragraph_pagination/with_split",
   "format": "trips",
-  "created_at": "2026-04-17T14:50:59.169400",
+  "created_at": "2026-04-17T14:57:08.630050",
   "description": "Verify pagination: with_split",
-  "doc_uuid": "91cc791e-0130-4f20-8d17-fe8fcfae4ada",
+  "doc_uuid": "2037d2a6-db53-4852-a8a6-04451d5bf718",
   "trips_recorded": [],
   "has_golden": false
 }
