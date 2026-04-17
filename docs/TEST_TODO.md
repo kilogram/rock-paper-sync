@@ -242,46 +242,69 @@ M5 bidirectional sync has solid unit test coverage for core algorithms, but roun
 
 ---
 
-### 8. Cross-Page Annotation During Reflow - VERIFIED (2026-04-17)
+### 8. Cross-Page Annotation During Reflow - PARTIALLY CORRECT (2026-04-17)
 
 **File**: `tests/annotations/test_annotation_anchoring.py` (`TestCrossPageAnnotationReflow`)
-**Status**: ✅ Working correctly, tests added
+**Status**: ⚠️ Tests verify anchor resolution only — generator coordinate bug unaddressed
 
-**Resolution**: Page boundaries in our model are logical (based on text offset), not physical.
-Reflow is equivalent to inserting/removing content before an annotation. Three tests verify:
-- `test_annotation_survives_large_insertion_before`: 10 paragraphs inserted before annotation.
-- `test_annotation_survives_page_shift_with_deletion`: Content before annotation deleted.
-- `test_annotation_tracks_across_inserted_heading`: New heading inserted above annotation.
-All three show the annotation correctly follows its text.
+**What the tests actually verify**: `AnchorContext.resolve()` correctly finds the anchor
+text's new character offset after content is inserted or deleted. That part works.
+
+**Real bug not yet fixed** (`generator.py:402–433`): when a highlight migrates from page N
+to page M due to content reflow, the generator fetches old text from `rm_paths[source_page_idx]`
+(always the ORIGINAL page N) to compute the coordinate delta. It then places the highlight on
+page M using that wrong old_text/old_origin pair. The delta calculation is wrong because
+page N's layout doesn't match page M's layout context.
+
+**Consequence**: after content reflow, a highlight that was on page 1 and is now on page 2
+will appear at incorrect Y-coordinates on the device — visually misplaced.
+
+**Not triggered if annotation stays on the same page**, which is why record-replay tests
+haven't caught it yet.
 
 ---
 
-### 9. Confidence Threshold Boundary Cases - DOCUMENTED (2026-04-17)
+### 9. Confidence Threshold Boundary Cases - SHALLOW TESTS (2026-04-17)
 
 **File**: `tests/annotations/test_annotation_anchoring.py` (`TestConfidenceThresholdBoundaryP2`)
-**Status**: ✅ Behavior documented and tested
+**Status**: ⚠️ Tests verify single-occurrence cases only — multi-occurrence fuzzy boundary untested
 
-**Resolution**: Five tests document confidence levels and threshold behavior:
-- Exact match always returns 1.0 at any `fuzzy_threshold` (0.79, 0.80, 0.81, 0.99).
-- DiffAnchor always returns exactly 0.6.
-- Threshold 0.79/0.80/0.81 tested against single-occurrence text (exact match wins).
-- The reanchoring boundary (0.6): exact (1.0), fuzzy (≥0.8), diff_anchor (0.6 ✓), spatial (0.4 ✗).
-- Threshold 0.81 with multiple candidates: no crash, may accept or reject weaker contexts.
+**What the tests actually verify**: With a single occurrence of the target text in the new
+document, `_find_by_hash` returns it at confidence=1.0 regardless of `fuzzy_threshold`.
+The fuzzy threshold is never consulted in any of the five tests.
+
+**What should be tested**: `_fuzzy_match` uses `fuzzy_threshold` only for the
+multi-occurrence case (`if best_score >= fuzzy_threshold`). A test at the boundary should
+have two copies of the same text with differing context similarity scores, where the best
+score is precisely near 0.80 — verifying that threshold=0.79 accepts it but threshold=0.81
+falls through to diff_anchor instead.
+
+**Deeper policy question unresolved**: `DiffAnchor` always returns exactly `confidence=0.6`,
+and the reanchor threshold is `>= 0.6`, so every diff_anchor result unconditionally passes.
+If a highlight was on "brown fox" and someone replaces it with "completely different text",
+the highlight migrates to "completely different text" at 0.6 confidence. This was documented
+as intentional in P0 #3 ("highlights follow edited text"), but the diff_anchor confidence
+carries no information about how much the in-between text changed. The threshold does not
+guard against large-scale text replacement — only against the stable anchors not being found.
 
 ---
 
-### 10. Annotation Type Mismatch in Merge - DOCUMENTED (2026-04-17)
+### 10. Annotation Type Mismatch in Merge - BY DESIGN (2026-04-17)
 
 **File**: `tests/annotations/test_annotation_anchoring.py` (`TestAnnotationTypeMismatch`)
-**Status**: ✅ Behavior documented and tested
+**Status**: ✅ Correctly by design — no fix needed
 
 **Resolution**: Three tests confirm annotation type is orthogonal to anchor resolution:
 - `test_highlight_and_stroke_same_anchor_both_resolve`: Both types resolve independently.
 - `test_annotation_type_preserved_after_reanchoring`: Type is unchanged after migration.
 - `test_highlight_and_stroke_coexist_on_same_text_after_edit`: Both migrate after content edit.
 
-**Key insight**: `annotation_type` has no effect on anchor resolution. Both highlights and
-strokes use the same `AnchorContext.resolve()` path; type only affects rendering.
+**Why this is genuinely fine**: Highlights (GlyphBlock) and strokes (LineBlock) are separate
+CRDT structures produced by separate tools on the device. The generator dispatches on
+`type(original_rm_block).__name__`, not `annotation_type`, so the correct handler is always
+used. Having both a highlight and a stroke at the same text position is a valid user state
+(e.g., the user highlighted text AND wrote a margin note on the same words). Coexistence
+is correct behaviour.
 
 ---
 
@@ -369,9 +392,108 @@ follows already operates on the full string, so detecting anywhere is sufficient
 | 2026-01-09 | P1 #5: Dense annotation areas | ✓ | Verified working correctly, added 8 tests |
 | 2026-01-09 | P1 #6: Race condition analysis | ✓ | By design - no locking needed for normal use |
 | 2026-04-17 | P2 #7: Overlapping highlight conflict | ✓ | Documented: when text unique after deletion, both anchors collapse |
-| 2026-04-17 | P2 #8: Cross-page annotation reflow | ✓ | Verified: large insertions/deletions before annotation don't break anchoring |
-| 2026-04-17 | P2 #9: Confidence threshold boundary | ✓ | Documented: exact=1.0, fuzzy≥0.8, diff_anchor=0.6, spatial=0.4; reanchor threshold=0.6 |
-| 2026-04-17 | P2 #10: Annotation type mismatch | ✓ | Documented: type is orthogonal to anchoring, both types migrate identically |
+| 2026-04-17 | P2 #8: Cross-page annotation reflow | ⚠ | Anchor resolution correct; generator uses wrong old_text/origin for cross-page moves |
+| 2026-04-17 | P2 #9: Confidence threshold boundary | ⚠ | Tests are shallow (single-occurrence only); multi-occurrence fuzzy boundary untested |
+| 2026-04-17 | P2 #10: Annotation type mismatch | ✓ | By design: GlyphBlock/LineBlock are independent; coexistence is correct |
 | 2026-04-17 | P3 #11: Unicode text in anchors | ✓ | Documented: no NFC normalization; diff-anchor fallback for accent→ASCII |
 | 2026-04-17 | P3 #12: Whitespace-only modifications | ✓ | Documented: double→single space shares hash; resolves correctly |
 | 2026-04-17 | P3 #13: Orphan comment placement | ✓ | Fixed: content[:100] → content; comment now detected anywhere in document |
+
+---
+
+## Open Issues — Priority for Fresh Agents
+
+The two remaining ⚠ items from this document, plus the known limitation from P2 #7,
+ranked by user-facing impact and implementation complexity:
+
+### Priority 1 — Fix cross-page highlight coordinate bug (P2 #8)
+
+**Why first**: Silent data corruption. A highlight that reflows to a different page appears
+at the wrong Y-coordinate on the device with no warning. Users see their highlights in the
+wrong place; the system reports success.
+
+**What to fix**: `generator.py` around line 402–433. When a highlight's target page differs
+from `source_page_idx`, the generator must use the NEW page's text and origin for the delta
+calculation, not the original page's. Specifically:
+
+1. After `apply_to_page()` routes the annotation to `target_page_idx`, check if
+   `target_page_idx != source_page_idx`.
+2. If they differ (cross-page move), re-fetch old_text and old_origin from
+   `rm_paths[target_page_idx]` (the page the annotation is going TO), or set
+   `old_text = None` to force an absolute placement rather than a delta.
+3. Add a unit test and a record-replay integration test that inserts content large enough
+   to push a highlight to the next page and asserts its Y-coordinate lands within the
+   correct page's bounds in the generated .rm file.
+
+**Scope**: Medium. Touches the generator and highlight_handler; no schema changes.
+
+---
+
+### Priority 2 — Write real multi-occurrence fuzzy threshold tests (P2 #9, part A)
+
+**Why second**: The existing tests give false confidence. A future change to `_fuzzy_match`
+or `DEFAULT_FUZZY_THRESHOLD` would pass the existing test suite even if it broke the
+multi-occurrence disambiguation.
+
+**What to fix**: Add tests to `TestConfidenceThresholdBoundaryP2` (or a new class) where:
+
+1. The document contains two copies of the target text with measurably different contexts.
+2. Compute the expected `difflib.SequenceMatcher` score between each candidate's surrounding
+   text and the stored `context_before`/`context_after`.
+3. Assert that at `fuzzy_threshold` just below that score the better match is accepted,
+   and at `fuzzy_threshold` just above it the result falls through to diff_anchor.
+
+No production code changes needed — this is a test gap only.
+
+**Scope**: Small. Tests only.
+
+---
+
+### Priority 3 — Define policy for diff_anchor confidence on large text changes (P2 #9, part B)
+
+**Why third**: Currently diff_anchor returns a fixed 0.6 regardless of how much the text
+between stable anchors changed. A highlight on two words that is now anchored to an entire
+paragraph is technically "resolved" at 0.6. This is a policy decision, not a clear bug.
+
+**Options to consider**:
+
+A. **Status quo** — intentional: highlights follow edited text wherever the stable context
+   leads. Document this explicitly as the accepted PM decision.
+
+B. **Proportional confidence** — compute `difflib.SequenceMatcher(old_span_text,
+   new_span_text).ratio()` and use `min(0.6, ratio)` as the confidence. Spans that change
+   drastically get confidence < 0.6, become orphaned. Spans with minor edits stay at ~0.6.
+   This adds one `ratio()` call to `DiffAnchor.resolve_in()`.
+
+C. **Length guard** — reject diff_anchor if the new span is more than N× longer or shorter
+   than the original. Simple heuristic; avoids migrating a two-word highlight to a paragraph.
+
+The right answer requires a product decision. An agent implementing this should first confirm
+option A (status quo) or B/C with the user before writing any code.
+
+**Scope**: Small if status quo; small-medium if proportional confidence or length guard.
+
+---
+
+### Priority 4 — Context validation for single hash matches (P2 #7)
+
+**Why fourth**: Currently `_find_by_hash` returns confidence=1.0 for a single occurrence
+without checking context at all. When two highlights had the same text and one occurrence
+is deleted, both anchors collapse to the remaining occurrence — the annotation that *should*
+be orphaned migrates silently to the wrong position.
+
+**What to fix** (`document_model.py`, `AnchorContext.resolve()`):
+
+1. After `_find_by_hash` returns a single match, compute a context similarity score
+   (same formula used in `_disambiguate_by_context`).
+2. If the context score is below a threshold (suggested: 0.3 — intentionally permissive,
+   since text may have moved far), return a reduced confidence (e.g. `0.6 * score`) instead
+   of 1.0, or fall through to DiffAnchor.
+3. Update `TestOverlappingHighlightConflict::test_overlapping_highlights_disambiguation_by_context`
+   — the test currently documents both anchors collapsing to the same position; after the fix
+   the orphaned anchor should get low confidence and become orphaned.
+4. Verify no regression in normal cases (text moved to new section: context score will be
+   low but the hash match is correct; this is the tricky trade-off to calibrate).
+
+**Scope**: Medium. Core anchor resolution change; must be carefully calibrated to avoid
+increasing the orphan rate for legitimate moved-text cases.
