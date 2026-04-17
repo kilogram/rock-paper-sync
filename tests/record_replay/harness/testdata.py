@@ -1260,3 +1260,219 @@ class TestdataStore:
             return (test_dir / "trips").exists()
         except FileNotFoundError:
             return False
+
+    # =========================================================================
+    # Recording Phase Methods (for test resumption)
+    # =========================================================================
+
+    def save_recording_phase(
+        self,
+        test_id: str,
+        phase_id: int,
+        phase_name: str,
+        vault_dir: Path,
+        doc_uuid: str | None = None,
+        rm_files: dict[str, bytes] | None = None,
+        page_uuids: list[str] | None = None,
+        current_trip: int = 1,
+        trips_recorded: list[int] | None = None,
+        description: str = "",
+    ) -> Path:
+        """Save recording state at a specific phase for later resumption.
+
+        Recording phases are checkpoints during online test recording that allow
+        resuming from a specific point. This is distinct from trips (annotation
+        capture cycles) and legacy phases.
+
+        Directory structure:
+            testdata/{test_id}/recording_phases/{phase_id}/
+            ├── phase_info.json    # Phase metadata
+            ├── vault/             # Full vault state
+            └── annotations/       # Annotations if any (rm_files + metadata)
+
+        Args:
+            test_id: Test identifier
+            phase_id: Phase number (1-indexed)
+            phase_name: Human-readable phase name
+            vault_dir: Path to vault directory to snapshot
+            doc_uuid: Document UUID if uploaded
+            rm_files: Annotation .rm files if any
+            page_uuids: Page UUIDs in order
+            current_trip: Current trip number at this phase
+            trips_recorded: List of trips already recorded
+            description: Phase description
+
+        Returns:
+            Path to the recording phase directory
+        """
+        test_dir = self.base_dir / test_id
+        phase_dir = test_dir / "recording_phases" / str(phase_id)
+
+        # Clean up existing phase if present
+        if phase_dir.exists():
+            shutil.rmtree(phase_dir)
+        phase_dir.mkdir(parents=True)
+
+        # Save vault snapshot
+        vault_dest = phase_dir / "vault"
+        shutil.copytree(
+            vault_dir,
+            vault_dest,
+            ignore=shutil.ignore_patterns(
+                ".state", ".cache", "logs", "*.db", "config.toml", ".test_config"
+            ),
+        )
+
+        # Save annotations if provided
+        if rm_files:
+            annotations_dir = phase_dir / "annotations"
+            rm_dir = annotations_dir / "rm_files"
+            rm_dir.mkdir(parents=True)
+
+            for page_uuid, rm_bytes in rm_files.items():
+                (rm_dir / f"{page_uuid}.rm").write_bytes(rm_bytes)
+
+            metadata = {
+                "doc_uuid": doc_uuid or "",
+                "page_uuids": page_uuids or list(rm_files.keys()),
+                "rm_files_count": len(rm_files),
+                "timestamp": datetime.now().isoformat(),
+            }
+            (annotations_dir / "metadata.json").write_text(json.dumps(metadata, indent=2))
+
+        # Save phase info
+        phase_info = {
+            "phase_id": phase_id,
+            "phase_name": phase_name,
+            "description": description,
+            "doc_uuid": doc_uuid,
+            "current_trip": current_trip,
+            "trips_recorded": trips_recorded or [],
+            "has_annotations": rm_files is not None and len(rm_files) > 0,
+            "timestamp": datetime.now().isoformat(),
+        }
+        (phase_dir / "phase_info.json").write_text(json.dumps(phase_info, indent=2))
+
+        return phase_dir
+
+    def load_recording_phase(self, test_id: str, phase_id: int) -> dict | None:
+        """Load recording phase state for resumption.
+
+        Args:
+            test_id: Test identifier
+            phase_id: Phase number to load
+
+        Returns:
+            Dict with phase state, or None if not found:
+            {
+                "phase_id": int,
+                "phase_name": str,
+                "vault_path": Path,
+                "doc_uuid": str | None,
+                "rm_files": dict[str, bytes],
+                "page_uuids": list[str],
+                "current_trip": int,
+                "trips_recorded": list[int],
+            }
+        """
+        try:
+            test_dir = self._find_test_dir(test_id)
+        except FileNotFoundError:
+            return None
+
+        phase_dir = test_dir / "recording_phases" / str(phase_id)
+        if not phase_dir.exists():
+            return None
+
+        phase_info_file = phase_dir / "phase_info.json"
+        if not phase_info_file.exists():
+            return None
+
+        phase_info = json.loads(phase_info_file.read_text())
+
+        # Load vault path
+        vault_path = phase_dir / "vault"
+        if not vault_path.exists():
+            vault_path = None
+
+        # Load annotations if present
+        rm_files: dict[str, bytes] = {}
+        page_uuids: list[str] = []
+        annotations_dir = phase_dir / "annotations"
+        if annotations_dir.exists():
+            rm_dir = annotations_dir / "rm_files"
+            if rm_dir.exists():
+                for rm_file in rm_dir.glob("*.rm"):
+                    rm_files[rm_file.stem] = rm_file.read_bytes()
+
+            metadata_file = annotations_dir / "metadata.json"
+            if metadata_file.exists():
+                metadata = json.loads(metadata_file.read_text())
+                page_uuids = metadata.get("page_uuids", [])
+
+        return {
+            "phase_id": phase_info["phase_id"],
+            "phase_name": phase_info["phase_name"],
+            "vault_path": vault_path,
+            "doc_uuid": phase_info.get("doc_uuid"),
+            "rm_files": rm_files,
+            "page_uuids": page_uuids,
+            "current_trip": phase_info.get("current_trip", 1),
+            "trips_recorded": phase_info.get("trips_recorded", []),
+        }
+
+    def get_recording_phases(self, test_id: str) -> list[dict]:
+        """Get list of available recording phases for a test.
+
+        Args:
+            test_id: Test identifier
+
+        Returns:
+            List of phase info dicts sorted by phase_id
+        """
+        try:
+            test_dir = self._find_test_dir(test_id)
+        except FileNotFoundError:
+            return []
+
+        phases_dir = test_dir / "recording_phases"
+        if not phases_dir.exists():
+            return []
+
+        phases: list[dict] = []
+        for phase_dir in sorted(phases_dir.iterdir()):
+            if not phase_dir.is_dir():
+                continue
+            phase_info_file = phase_dir / "phase_info.json"
+            if phase_info_file.exists():
+                phases.append(json.loads(phase_info_file.read_text()))
+
+        return sorted(phases, key=lambda p: p.get("phase_id", 0))
+
+    def has_recording_phases(self, test_id: str) -> bool:
+        """Check if test has any recording phases saved.
+
+        Args:
+            test_id: Test identifier
+
+        Returns:
+            True if recording phases exist
+        """
+        return len(self.get_recording_phases(test_id)) > 0
+
+    def clear_recording_phases(self, test_id: str) -> None:
+        """Clear all recording phases for a test.
+
+        Used when starting a fresh recording.
+
+        Args:
+            test_id: Test identifier
+        """
+        try:
+            test_dir = self._find_test_dir(test_id)
+        except FileNotFoundError:
+            return
+
+        phases_dir = test_dir / "recording_phases"
+        if phases_dir.exists():
+            shutil.rmtree(phases_dir)

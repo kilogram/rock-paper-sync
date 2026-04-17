@@ -316,6 +316,56 @@ class DeviceInteractionProtocol(Protocol):
         """
         ...
 
+    # =========================================================================
+    # Recording Phase Methods (for test resumption)
+    # =========================================================================
+
+    def begin_phase(self, phase_id: int, phase_name: str, description: str = "") -> bool:
+        """Begin a named recording phase.
+
+        In online mode: Marks the start of a phase. If resuming, skips phases
+        that have already been recorded.
+        In offline mode: No-op (phases are not used in replay).
+
+        Args:
+            phase_id: Phase number (1-indexed)
+            phase_name: Human-readable phase name (e.g., "initial_upload")
+            description: Phase description
+
+        Returns:
+            True if phase should be executed, False if should be skipped
+            (e.g., when resuming from a later phase)
+        """
+        ...
+
+    def end_phase(self) -> None:
+        """End the current recording phase and save state.
+
+        In online mode: Saves vault state and annotations for resumption.
+        In offline mode: No-op.
+
+        Call this at the end of each phase to create a resumption checkpoint.
+        """
+        ...
+
+    @property
+    def current_phase(self) -> int | None:
+        """Get current phase number.
+
+        Returns:
+            Current phase number, or None if not in a phase
+        """
+        ...
+
+    @property
+    def resume_phase(self) -> int | None:
+        """Get phase to resume from (if any).
+
+        Returns:
+            Phase number to resume from, or None if starting fresh
+        """
+        ...
+
 
 # Backward compatibility aliases
 DeviceProtocol = DeviceInteractionProtocol

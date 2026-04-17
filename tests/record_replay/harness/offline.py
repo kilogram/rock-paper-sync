@@ -850,3 +850,48 @@ class OfflineEmulator(DeviceInteractionManager):
                 self.bench.observe(f"Downloaded {count} rm file(s) to cache")
         except Exception as e:
             self.bench.warn(f"Failed to download rm files to cache: {e}")
+
+    # =========================================================================
+    # Recording Phase Methods (no-op for offline mode)
+    # =========================================================================
+
+    def begin_phase(self, phase_id: int, phase_name: str, description: str = "") -> bool:
+        """No-op for offline mode.
+
+        Recording phases are only used during online recording. In offline
+        replay, all phases are executed.
+
+        Args:
+            phase_id: Ignored
+            phase_name: Ignored
+            description: Ignored
+
+        Returns:
+            Always True (execute all phases)
+        """
+        return True
+
+    def end_phase(self) -> None:
+        """No-op for offline mode.
+
+        Recording phases are only saved during online recording.
+        """
+        pass
+
+    @property
+    def current_phase(self) -> int | None:
+        """Get current phase number.
+
+        Returns:
+            Always None in offline mode
+        """
+        return None
+
+    @property
+    def resume_phase(self) -> int | None:
+        """Get phase to resume from.
+
+        Returns:
+            Always None in offline mode
+        """
+        return None

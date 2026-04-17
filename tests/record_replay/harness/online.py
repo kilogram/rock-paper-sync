@@ -94,6 +94,7 @@ class OnlineDevice(DeviceInteractionManager):
         workspace: "WorkspaceManager",
         testdata_store: TestdataStore,
         bench: "Bench",
+        resume_from_phase: int | None = None,
     ) -> None:
         """Initialize online device recorder.
 
@@ -101,6 +102,7 @@ class OnlineDevice(DeviceInteractionManager):
             workspace: Workspace manager for sync operations (provides cloud_url)
             testdata_store: Store for saving testdata artifacts
             bench: Bench utilities for logging
+            resume_from_phase: Phase number to resume from (None = fresh start)
         """
         self.workspace = workspace
         self.testdata_store = testdata_store
@@ -114,12 +116,22 @@ class OnlineDevice(DeviceInteractionManager):
         self._has_golden: bool = False
         self._doc_uuid: str | None = None
 
+        # Recording phase state (for resumption)
+        self._resume_from_phase: int | None = resume_from_phase
+        self._current_phase: int | None = None
+        self._current_phase_name: str | None = None
+        self._cached_rm_files: dict[str, bytes] = {}
+        self._cached_page_uuids: list[str] = []
+
     def start_test(self, test_id: str, description: str = "") -> None:
         """Begin recording a test.
 
         Creates directory structure and prepares to capture artifacts.
         If testdata was already recorded in THIS SESSION (same fixture used
         by another test), reuses it instead of re-recording.
+
+        If resuming from a phase, restores state from that phase instead
+        of creating fresh directories.
 
         Args:
             test_id: Unique test identifier
@@ -131,18 +143,63 @@ class OnlineDevice(DeviceInteractionManager):
         self._trips_recorded = []
         self._has_golden = False
         self._doc_uuid = None
+        self._current_phase = None
+        self._current_phase_name = None
 
         test_dir = self.testdata_store.base_dir / test_id
+
+        # Handle resumption
+        if self._resume_from_phase is not None:
+            phase_state = self.testdata_store.load_recording_phase(test_id, self._resume_from_phase)
+            if phase_state is None:
+                available = self.testdata_store.get_recording_phases(test_id)
+                if available:
+                    phase_list = ", ".join(str(p["phase_id"]) for p in available)
+                    raise RuntimeError(
+                        f"Cannot resume from phase {self._resume_from_phase}: not found. "
+                        f"Available phases: {phase_list}"
+                    )
+                else:
+                    raise RuntimeError(
+                        f"Cannot resume from phase {self._resume_from_phase}: "
+                        f"no recording phases exist for test '{test_id}'. "
+                        "Run test without --resume-from-phase first to create phases."
+                    )
+
+            # Restore state from phase
+            self._restore_from_phase(phase_state)
+            self.bench.ok(
+                f"Resumed from phase {self._resume_from_phase}: "
+                f"{phase_state['phase_name']} (trip {self._current_trip})"
+            )
+            if description:
+                self.bench.info(f"Description: {description}")
+            return
 
         # Check if this test_id was already recorded in this session
         if test_id in _session_recorded_tests:
             self.bench.ok(f"Reusing testdata recorded earlier this session: {test_id}")
             raise TestdataExistsError(test_id, test_dir)
 
-        # Clean up any existing testdata from previous sessions
+        # Clean up any existing testdata from previous sessions (but keep recording_phases)
         if test_dir.exists():
+            # Preserve recording_phases directory
+            recording_phases_dir = test_dir / "recording_phases"
+            recording_phases_backup = None
+            if recording_phases_dir.exists():
+                import tempfile
+
+                recording_phases_backup = Path(tempfile.mkdtemp()) / "recording_phases"
+                shutil.copytree(recording_phases_dir, recording_phases_backup)
+
             shutil.rmtree(test_dir)
             self.bench.info(f"Cleaned up existing testdata: {test_id}")
+
+            # Restore recording_phases if it existed
+            if recording_phases_backup:
+                test_dir.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(recording_phases_backup, recording_phases_dir)
+                shutil.rmtree(recording_phases_backup.parent)  # Clean up temp dir
 
         # Track this test_id BEFORE creating directory, so if we fail mid-recording,
         # other tests sharing this fixture will still skip (and not wipe partial data)
@@ -154,6 +211,41 @@ class OnlineDevice(DeviceInteractionManager):
         self.bench.ok(f"Started recording: {test_id}")
         if description:
             self.bench.info(f"Description: {description}")
+
+    def _restore_from_phase(self, phase_state: dict) -> None:
+        """Restore workspace and recording state from a saved phase.
+
+        Args:
+            phase_state: Phase state dict from load_recording_phase()
+        """
+        # Restore recording state
+        self._current_trip = phase_state.get("current_trip", 1)
+        self._trips_recorded = list(phase_state.get("trips_recorded", []))
+        self._doc_uuid = phase_state.get("doc_uuid")
+        self._cached_rm_files = phase_state.get("rm_files", {})
+        self._cached_page_uuids = phase_state.get("page_uuids", [])
+
+        # Restore vault from phase
+        vault_path = phase_state.get("vault_path")
+        if vault_path and vault_path.exists():
+            workspace_dir = self.workspace.workspace_dir
+
+            # Clear workspace (preserve .state, .cache, logs, config, .test_config)
+            for item in workspace_dir.iterdir():
+                if item.name not in [".state", ".cache", "logs", "config.toml", ".test_config"]:
+                    if item.is_file():
+                        item.unlink()
+                    elif item.is_dir():
+                        shutil.rmtree(item)
+
+            # Copy files from vault snapshot
+            for item in vault_path.iterdir():
+                if item.is_file():
+                    shutil.copy(item, workspace_dir / item.name)
+                elif item.is_dir():
+                    shutil.copytree(item, workspace_dir / item.name)
+
+            self.bench.ok(f"Restored vault from phase {phase_state['phase_id']}")
 
     def start_test_for_fixture(self, fixture_path: Path, description: str = "") -> str:
         """Begin recording a test, deriving test_id from fixture path.
@@ -766,3 +858,89 @@ class OnlineDevice(DeviceInteractionManager):
                 self.bench.observe(f"Downloaded {count} rm file(s) to cache")
         except Exception as e:
             self.bench.warn(f"Failed to download rm files to cache: {e}")
+
+    # =========================================================================
+    # Recording Phase Methods (for test resumption)
+    # =========================================================================
+
+    def begin_phase(self, phase_id: int, phase_name: str, description: str = "") -> bool:
+        """Begin a named recording phase.
+
+        Marks the start of a phase. If resuming, skips phases that have
+        already been recorded (phases before the resume point).
+
+        Args:
+            phase_id: Phase number (1-indexed)
+            phase_name: Human-readable phase name (e.g., "initial_upload")
+            description: Phase description
+
+        Returns:
+            True if phase should be executed, False if should be skipped
+        """
+        # If resuming, skip phases before the resume point
+        if self._resume_from_phase is not None and phase_id < self._resume_from_phase:
+            self.bench.info(
+                f"Skipping phase {phase_id}: {phase_name} (resuming from {self._resume_from_phase})"
+            )
+            return False
+
+        self._current_phase = phase_id
+        self._current_phase_name = phase_name
+        self.bench.ok(f"Phase {phase_id}: {phase_name}")
+        if description:
+            self.bench.info(f"  {description}")
+
+        return True
+
+    def end_phase(self) -> None:
+        """End the current recording phase and save state.
+
+        Saves vault state and annotations for resumption. Call this at the
+        end of each phase to create a resumption checkpoint.
+        """
+        if self._current_phase is None or not self._current_test_id:
+            return
+
+        # Get current annotations if we have a document
+        rm_files: dict[str, bytes] = {}
+        page_uuids: list[str] = []
+        if self._doc_uuid:
+            state = self.get_document_state(self._doc_uuid)
+            rm_files = state.rm_files
+            page_uuids = state.page_uuids
+
+        # Save phase state
+        self.testdata_store.save_recording_phase(
+            test_id=self._current_test_id,
+            phase_id=self._current_phase,
+            phase_name=self._current_phase_name or f"phase_{self._current_phase}",
+            vault_dir=self.workspace.workspace_dir,
+            doc_uuid=self._doc_uuid,
+            rm_files=rm_files if rm_files else None,
+            page_uuids=page_uuids if page_uuids else None,
+            current_trip=self._current_trip,
+            trips_recorded=self._trips_recorded,
+        )
+
+        self.bench.ok(f"Saved phase {self._current_phase} checkpoint")
+
+        self._current_phase = None
+        self._current_phase_name = None
+
+    @property
+    def current_phase(self) -> int | None:
+        """Get current phase number.
+
+        Returns:
+            Current phase number, or None if not in a phase
+        """
+        return self._current_phase
+
+    @property
+    def resume_phase(self) -> int | None:
+        """Get phase to resume from (if any).
+
+        Returns:
+            Phase number to resume from, or None if starting fresh
+        """
+        return self._resume_from_phase

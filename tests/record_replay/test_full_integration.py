@@ -21,7 +21,14 @@ Focus on challenging scenarios:
 - Multiple annotations in close proximity
 
 Recording Usage:
+    # Full recording from scratch
     uv run pytest tests/record_replay/test_full_integration.py --online -s
+
+    # List available recording phases
+    uv run pytest tests/record_replay/ --list-phases
+
+    # Resume recording from phase 3 (after modifications applied)
+    uv run pytest tests/record_replay/test_full_integration.py --online -s --resume-from-phase=3
 
     When prompted: Follow all instructions in the test document.
     This will take 5-10 minutes to annotate thoroughly.
@@ -67,147 +74,189 @@ def test_full_integration(device, workspace, fixtures_dir, tmp_path):
     except FileNotFoundError:
         pytest.skip(f"Testdata '{test_id}' not available. Run with --online -s to record.")
 
+    # Variables that need to persist across phases (set to defaults)
+    doc_uuid = None
+    highlights = []
+    strokes = []
+
     # === PHASE 1: Initial Upload and Annotation ===
-    doc_uuid = device.upload_document(workspace.test_doc)
+    if device.begin_phase(1, "initial_upload", "Upload document and wait for annotations"):
+        doc_uuid = device.upload_document(workspace.test_doc)
 
-    initial_state = device.wait_for_annotations(doc_uuid)
-    assert initial_state.has_annotations, "Need comprehensive annotations for integration test"
+        initial_state = device.wait_for_annotations(doc_uuid)
+        assert initial_state.has_annotations, "Need comprehensive annotations for integration test"
 
-    # Extract all annotations
-    all_annotations = []
-    for page_uuid, rm_data in initial_state.rm_files.items():
-        annotations = read_annotations(io.BytesIO(rm_data))
-        all_annotations.extend(annotations)
+        # Extract all annotations
+        all_annotations = []
+        for page_uuid, rm_data in initial_state.rm_files.items():
+            annotations = read_annotations(io.BytesIO(rm_data))
+            all_annotations.extend(annotations)
 
-    assert len(all_annotations) > 0, "Should have captured annotations"
+        assert len(all_annotations) > 0, "Should have captured annotations"
 
-    # Categorize annotations
-    highlights = [a for a in all_annotations if a.type == AnnotationType.HIGHLIGHT]
-    strokes = [a for a in all_annotations if a.type == AnnotationType.STROKE]
+        # Categorize annotations
+        highlights = [a for a in all_annotations if a.type == AnnotationType.HIGHLIGHT]
+        strokes = [a for a in all_annotations if a.type == AnnotationType.STROKE]
 
-    # Should have both types for comprehensive testing
-    assert len(highlights) > 0, "Need highlights for integration test"
-    assert len(strokes) > 0, "Need strokes for integration test"
+        # Should have both types for comprehensive testing
+        assert len(highlights) > 0, "Need highlights for integration test"
+        assert len(strokes) > 0, "Need strokes for integration test"
 
-    print(f"\n📊 Initial annotations: {len(highlights)} highlights, {len(strokes)} strokes")
+        print(f"\n📊 Initial annotations: {len(highlights)} highlights, {len(strokes)} strokes")
 
-    # === PHASE 1.5: Pull Sync Verification ===
-    # Verify that annotations render correctly in markdown
-    device.trigger_sync()
-    synced_content = workspace.test_doc.read_text()
+        device.end_phase()
+    else:
+        # Resuming: get doc_uuid from workspace state
+        doc_uuid = workspace.get_document_uuid()
 
-    # Highlights should render as ==text==
-    highlight_markers_found = synced_content.count("==")
-    if highlights:
-        if highlight_markers_found >= 2:  # At least one ==text== pair
-            print(f"✅ Pull sync: Found {highlight_markers_found // 2} ==text== highlight markers")
-        else:
-            print(
-                "⚠️  Pull sync: No ==text== highlight markers found (may depend on implementation)"
-            )
+    # === PHASE 2: Pull Sync Verification ===
+    if device.begin_phase(2, "pull_sync", "Verify annotations render correctly in markdown"):
+        device.trigger_sync()
+        synced_content = workspace.test_doc.read_text()
 
-    # Strokes should render as [^n] footnotes
-    footnote_markers = synced_content.count("[^")
-    if strokes:
-        if footnote_markers > 0:
-            print(f"✅ Pull sync: Found {footnote_markers} [^n] stroke footnote markers")
-        else:
-            print("⚠️  Pull sync: No [^n] stroke markers found (may depend on implementation)")
+        # Highlights should render as ==text==
+        highlight_markers_found = synced_content.count("==")
+        if highlights:
+            if highlight_markers_found >= 2:  # At least one ==text== pair
+                print(
+                    f"✅ Pull sync: Found {highlight_markers_found // 2} ==text== highlight markers"
+                )
+            else:
+                print(
+                    "⚠️  Pull sync: No ==text== highlight markers found (may depend on implementation)"
+                )
 
-    # === PHASE 2: Markdown Modifications (Conflict Scenario) ===
-    # Modify the document in ways that challenge anchoring:
-    # 1. Add text at beginning (shifts all positions)
-    # 2. Insert paragraphs in middle (breaks anchors)
-    # 3. Reformat sections (changes paragraph boundaries)
-    # 4. Modify annotated text slightly (anchor tolerance test)
+        # Strokes should render as [^n] footnotes
+        footnote_markers = synced_content.count("[^")
+        if strokes:
+            if footnote_markers > 0:
+                print(f"✅ Pull sync: Found {footnote_markers} [^n] stroke footnote markers")
+            else:
+                print("⚠️  Pull sync: No [^n] stroke markers found (may depend on implementation)")
 
-    original_content = workspace.test_doc.read_text()
+        device.end_phase()
 
-    modified_content = original_content
+    # === PHASE 3: Markdown Modifications (Conflict Scenario) ===
+    if device.begin_phase(3, "markdown_mods", "Apply structural modifications to markdown"):
+        # Modify the document in ways that challenge anchoring:
+        # 1. Add text at beginning (shifts all positions)
+        # 2. Insert paragraphs in middle (breaks anchors)
+        # 3. Reformat sections (changes paragraph boundaries)
+        # 4. Modify annotated text slightly (anchor tolerance test)
 
-    # Modification 1: Add header text (shifts everything down)
-    modified_content = modified_content.replace(
-        "# Full Integration Test",
-        "# Full Integration Test\n\n> **Version 2.0** - Modified after initial annotations",
-    )
+        original_content = workspace.test_doc.read_text()
 
-    # Modification 2: Insert new section in middle
-    modified_content = modified_content.replace(
-        "## Part 3: Overlapping Annotations",
-        "## Part 2.5: Inserted Section\n\n"
-        "This section was added AFTER annotations were created.\n"
-        "It tests whether anchoring can handle structural changes.\n\n"
-        "## Part 3: Overlapping Annotations",
-    )
+        modified_content = original_content
 
-    # Modification 3: Reformat annotated section (change whitespace/structure)
-    modified_content = modified_content.replace(
-        "This integration testing document validates complex scenarios.",
-        "This **integration testing** document validates **complex scenarios**.\n\n"
-        "_Note: Formatting changed after annotation._",
-    )
+        # Modification 1: Add header text (shifts everything down)
+        modified_content = modified_content.replace(
+            "# Full Integration Test",
+            "# Full Integration Test\n\n> **Version 2.0** - Modified after initial annotations",
+        )
 
-    # Modification 4: Subtle text change near annotation
-    modified_content = modified_content.replace(
-        "Additional context before and after to test anchoring.",
-        "Additional context before and after to test anchoring robustness.",
-    )
+        # Modification 2: Insert new section in middle
+        modified_content = modified_content.replace(
+            "## Part 3: Overlapping Annotations",
+            "## Part 2.5: Inserted Section\n\n"
+            "This section was added AFTER annotations were created.\n"
+            "It tests whether anchoring can handle structural changes.\n\n"
+            "## Part 3: Overlapping Annotations",
+        )
 
-    # Write modified content
-    workspace.test_doc.write_text(modified_content)
-    print("\n📝 Applied structural modifications to markdown")
+        # Modification 3: Reformat annotated section (change whitespace/structure)
+        modified_content = modified_content.replace(
+            "This integration testing document validates complex scenarios.",
+            "This **integration testing** document validates **complex scenarios**.\n\n"
+            "_Note: Formatting changed after annotation._",
+        )
 
-    # === PHASE 3: Re-sync with Modifications ===
-    device.trigger_sync()
+        # Modification 4: Subtle text change near annotation
+        modified_content = modified_content.replace(
+            "Additional context before and after to test anchoring.",
+            "Additional context before and after to test anchoring robustness.",
+        )
 
-    updated_state = device.get_document_state(doc_uuid)
-    assert updated_state.has_annotations, "Annotations should survive markdown modifications"
+        # Write modified content
+        workspace.test_doc.write_text(modified_content)
+        print("\n📝 Applied structural modifications to markdown")
 
-    # Extract updated annotations
-    updated_annotations = []
-    for page_uuid, rm_data in updated_state.rm_files.items():
-        annotations = read_annotations(io.BytesIO(rm_data))
-        updated_annotations.extend(annotations)
+        device.end_phase()
 
-    updated_highlights = [a for a in updated_annotations if a.type == AnnotationType.HIGHLIGHT]
-    updated_strokes = [a for a in updated_annotations if a.type == AnnotationType.STROKE]
+    # === PHASE 4: Re-sync with Modifications ===
+    if device.begin_phase(4, "resync", "Re-sync and verify annotations preserved"):
+        device.trigger_sync()
 
-    # Critical: Annotations should not be lost during modifications
-    assert len(updated_highlights) == len(
-        highlights
-    ), f"Highlights lost during modification: {len(highlights)} -> {len(updated_highlights)}"
-    assert len(updated_strokes) == len(
-        strokes
-    ), f"Strokes lost during modification: {len(strokes)} -> {len(updated_strokes)}"
+        updated_state = device.get_document_state(doc_uuid)
+        assert updated_state.has_annotations, "Annotations should survive markdown modifications"
 
-    print(
-        f"✅ All annotations preserved after modifications: "
-        f"{len(updated_highlights)} highlights, {len(updated_strokes)} strokes"
-    )
+        # Extract updated annotations
+        updated_annotations = []
+        for page_uuid, rm_data in updated_state.rm_files.items():
+            annotations = read_annotations(io.BytesIO(rm_data))
+            updated_annotations.extend(annotations)
 
-    # === PHASE 3.5: Pull Sync After Modifications ===
-    # Verify annotations still render in markdown after structural changes
-    device.trigger_sync()
-    modified_synced = workspace.test_doc.read_text()
+        updated_highlights = [a for a in updated_annotations if a.type == AnnotationType.HIGHLIGHT]
+        updated_strokes = [a for a in updated_annotations if a.type == AnnotationType.STROKE]
 
-    post_mod_highlight_markers = modified_synced.count("==")
-    post_mod_footnote_markers = modified_synced.count("[^")
+        # Critical: Annotations should not be lost during modifications
+        # Note: When resuming, highlights/strokes may be empty from earlier phase skip
+        if highlights:
+            assert (
+                len(updated_highlights) == len(highlights)
+            ), f"Highlights lost during modification: {len(highlights)} -> {len(updated_highlights)}"
+        if strokes:
+            assert len(updated_strokes) == len(
+                strokes
+            ), f"Strokes lost during modification: {len(strokes)} -> {len(updated_strokes)}"
 
-    if updated_highlights:
-        if post_mod_highlight_markers >= 2:
-            print(
-                f"✅ Post-modification pull sync: {post_mod_highlight_markers // 2} highlight markers"
-            )
-        else:
-            print("⚠️  Post-modification: highlight markers may have been affected by restructure")
+        print(
+            f"✅ All annotations preserved after modifications: "
+            f"{len(updated_highlights)} highlights, {len(updated_strokes)} strokes"
+        )
 
-    if updated_strokes:
-        if post_mod_footnote_markers > 0:
-            print(f"✅ Post-modification pull sync: {post_mod_footnote_markers} stroke markers")
-        else:
-            print("⚠️  Post-modification: stroke markers may have been affected by restructure")
+        # Update the variables for later phases
+        highlights = updated_highlights
+        strokes = updated_strokes
 
-    # === PHASE 4: Anchor Verification ===
+        # Pull sync to verify annotations render in markdown after modifications
+        device.trigger_sync()
+        modified_synced = workspace.test_doc.read_text()
+
+        post_mod_highlight_markers = modified_synced.count("==")
+        post_mod_footnote_markers = modified_synced.count("[^")
+
+        if updated_highlights:
+            if post_mod_highlight_markers >= 2:
+                print(
+                    f"✅ Post-modification pull sync: {post_mod_highlight_markers // 2} highlight markers"
+                )
+            else:
+                print(
+                    "⚠️  Post-modification: highlight markers may have been affected by restructure"
+                )
+
+        if updated_strokes:
+            if post_mod_footnote_markers > 0:
+                print(f"✅ Post-modification pull sync: {post_mod_footnote_markers} stroke markers")
+            else:
+                print("⚠️  Post-modification: stroke markers may have been affected by restructure")
+
+        device.end_phase()
+    else:
+        # Resuming: reload annotations from current state
+        updated_state = device.get_document_state(doc_uuid)
+        updated_annotations = []
+        for page_uuid, rm_data in updated_state.rm_files.items():
+            annotations = read_annotations(io.BytesIO(rm_data))
+            updated_annotations.extend(annotations)
+        highlights = [a for a in updated_annotations if a.type == AnnotationType.HIGHLIGHT]
+        strokes = [a for a in updated_annotations if a.type == AnnotationType.STROKE]
+
+    # Use updated_ variables for remaining phases
+    updated_highlights = highlights
+    updated_strokes = strokes
+
+    # === PHASE 5: Anchor Verification (no checkpoint - pure validation) ===
     # Test that anchors can still match after modifications
     highlight_handler = HighlightHandler()
     stroke_handler = StrokeHandler()
@@ -249,7 +298,7 @@ def test_full_integration(device, workspace, fixtures_dir, tmp_path):
 
     print("✅ Anchor creation successful after modifications")
 
-    # === PHASE 5: OCR Correction Detection ===
+    # === PHASE 6: OCR Correction Detection (no checkpoint - pure validation) ===
     # Simulate user correcting OCR text after markdown modifications
     # This tests the complete correction workflow with anchoring
 
@@ -291,7 +340,7 @@ def test_full_integration(device, workspace, fixtures_dir, tmp_path):
 
     print(f"✅ OCR correction detection working: {corrections_found} corrections found")
 
-    # === PHASE 6: Annotation Markers in Modified Document ===
+    # === PHASE 7: Annotation Markers in Modified Document (no checkpoint) ===
     # Verify that annotation markers are present in the modified markdown
     final_markdown = workspace.test_doc.read_text()
 
@@ -310,7 +359,7 @@ def test_full_integration(device, workspace, fixtures_dir, tmp_path):
         assert has_stroke_markers, "Modified document should contain stroke markers"
         print("✅ Stroke markers present in modified markdown")
 
-    # === PHASE 7: Anchor Disambiguation ===
+    # === PHASE 8: Anchor Disambiguation (no checkpoint) ===
     # Test that anchors can disambiguate between nearby annotations
     # This is critical when multiple annotations are close together
 

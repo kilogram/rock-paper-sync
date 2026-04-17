@@ -108,6 +108,18 @@ def pytest_addoption(parser):
         default=False,
         help="Run online tests with real device (implies --capture=no for interactive prompts)",
     )
+    parser.addoption(
+        "--resume-from-phase",
+        type=int,
+        default=None,
+        help="Resume test recording from a specific phase (online mode only)",
+    )
+    parser.addoption(
+        "--list-phases",
+        action="store_true",
+        default=False,
+        help="List available recording phases for a test",
+    )
 
 
 def pytest_configure(config):
@@ -176,13 +188,15 @@ def pytest_runtest_call(item):
 
 
 def pytest_collection_modifyitems(config, items):
-    """Handle --list-tests option and mode-based test selection."""
+    """Handle --list-tests, --list-phases options and mode-based test selection."""
+    TestdataStore = _get_testdata_store()  # noqa: N806
+    # Testdata is now at tests/record_replay/testdata/
+    fixtures_dir = Path(__file__).parent / "fixtures"
+    testdata_dir = fixtures_dir.parent / "testdata"
+    store = TestdataStore(testdata_dir)
+
     # Handle --list-tests
     if config.getoption("--list-tests"):
-        TestdataStore = _get_testdata_store()  # noqa: N806
-        fixtures_dir = Path(__file__).parent / "fixtures"
-        store = TestdataStore(fixtures_dir / "testdata")
-
         print("\nAvailable offline test artifacts:")
         print("-" * 60)
         manifests = store.list_available_tests()
@@ -195,6 +209,30 @@ def pytest_collection_modifyitems(config, items):
             print("  (none found)")
         print("-" * 60)
         pytest.exit("Listed available tests", returncode=0)
+
+    # Handle --list-phases
+    if config.getoption("--list-phases"):
+        print("\nAvailable recording phases:")
+        print("-" * 60)
+        manifests = store.list_available_tests()
+        found_phases = False
+        for m in manifests:
+            phases = store.get_recording_phases(m.test_id)
+            if phases:
+                found_phases = True
+                print(f"\n  {m.test_id}:")
+                for p in phases:
+                    has_ann = "✓" if p.get("has_annotations") else " "
+                    print(
+                        f"    Phase {p['phase_id']}: {p['phase_name']} "
+                        f"[{has_ann}annotations] trip={p.get('current_trip', '?')}"
+                    )
+        if not found_phases:
+            print("  (no recording phases found)")
+            print("\n  Recording phases are created during online recording.")
+            print("  Run tests with --online -s to start recording.")
+        print("-" * 60)
+        pytest.exit("Listed available phases", returncode=0)
 
     # Determine device mode from --online flag
     online = config.getoption("--online")
@@ -472,7 +510,8 @@ def device(request, workspace, testdata_store, bench, rmfakecloud) -> "DeviceInt
 
     if online:
         OnlineDevice = _get_online_device()  # noqa: N806
-        dev = OnlineDevice(workspace, testdata_store, bench)
+        resume_from_phase = request.config.getoption("--resume-from-phase")
+        dev = OnlineDevice(workspace, testdata_store, bench, resume_from_phase=resume_from_phase)
     else:
         OfflineEmulator = _get_offline_emulator()  # noqa: N806
         # cloud_url comes from workspace (set during workspace setup)
