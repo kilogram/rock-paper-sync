@@ -1,51 +1,9 @@
 {
   "test_id": "paragraph_pagination/with_split",
-  "created_at": "2025-12-06T23:27:31.853973",
-  "doc_uuid": "d948a870-f85d-4c07-9401-8424d3ebf55b",
-  "page_uuids": [
-    "09754683-1bd2-41ef-9d93-f1c437b6027d",
-    "2fd2b219-7e7b-4e40-9ca3-0ebf21f6df7e",
-    "ca4b5e83-08f3-437d-afff-d564a0c6e074",
-    "cc248272-e82d-4938-a04e-1bfbc8087d0e"
-  ],
+  "format": "trips",
+  "created_at": "2026-04-17T14:50:59.169400",
   "description": "Verify pagination: with_split",
-  "annotations_count": 4,
-  "source_document": "source.md",
-  "phases": [
-    {
-      "phase_number": 0,
-      "phase_name": "initial",
-      "action": "setup",
-      "vault_files": [
-        "document.md"
-      ],
-      "device_state": {
-        "doc_uuid": null,
-        "page_uuids": [],
-        "rm_files_count": 0,
-        "has_annotations": false
-      },
-      "has_rm_files": false
-    },
-    {
-      "phase_number": 1,
-      "phase_name": "post_upload",
-      "action": "upload",
-      "vault_files": [
-        "document.md"
-      ],
-      "device_state": {
-        "doc_uuid": "d948a870-f85d-4c07-9401-8424d3ebf55b",
-        "page_uuids": [
-          "09754683-1bd2-41ef-9d93-f1c437b6027d",
-          "2fd2b219-7e7b-4e40-9ca3-0ebf21f6df7e",
-          "ca4b5e83-08f3-437d-afff-d564a0c6e074",
-          "cc248272-e82d-4938-a04e-1bfbc8087d0e"
-        ],
-        "rm_files_count": 4,
-        "has_annotations": true
-      },
-      "has_rm_files": true
-    }
-  ]
+  "doc_uuid": "91cc791e-0130-4f20-8d17-fe8fcfae4ada",
+  "trips_recorded": [],
+  "has_golden": false
 }

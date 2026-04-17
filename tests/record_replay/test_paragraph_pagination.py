@@ -57,8 +57,45 @@ def compare_rm_content(generated: bytes, golden: bytes) -> tuple[bool, str]:
     return False, "Unknown difference"
 
 
-# Test document content - deterministic, long enough to span multiple pages
-LONG_PARAGRAPH = "The quick brown fox jumps over the lazy dog. " * 100
+# Test paragraphs of varying sizes to exercise split/no_split behaviour.
+# 25 lines/page; ~22 fox sentences fills one page.
+
+# ~10 sentences: about half a page, never causes a split
+SHORT_PARAGRAPH = "The quick brown fox jumps over the lazy dog. " * 10
+
+# ~22 sentences: fills one page, leaves no room for the next paragraph
+FULL_PAGE_PARAGRAPH = "Pack my box with five dozen liquor jugs, the quick brown fox jumps. " * 22
+
+# ~26 sentences: just goes over a page boundary.
+# split=True  → paragraph is cut at the boundary and continues on the next page.
+# no_split=False → whole paragraph is pushed to the next page (previous page ends early).
+BOUNDARY_PARAGRAPH = "Sphinx of black quartz judges the five boxing wizards very quickly. " * 26
+
+# ~70 sentences: much larger than a page.
+# Must split in BOTH configs (oversized; no_split only avoids splits when the paragraph fits).
+OVERSIZED_PARAGRAPH = (
+    "How valiantly did the quick brown fox leap over the extremely lazy dog. " * 70
+)
+
+# ~8 sentences: short paragraph after the oversized one to test correct continuation.
+TRAILING_PARAGRAPH = "Waltz, bad nymph, for quick jigs vex the old sphinx of black quartz. " * 8
+
+
+def _test_document(config_name: str) -> str:
+    """Build the test document for a given config."""
+    return (
+        "\n\n".join(
+            [
+                f"# Pagination Test ({config_name})",
+                SHORT_PARAGRAPH,
+                FULL_PAGE_PARAGRAPH,
+                BOUNDARY_PARAGRAPH,
+                OVERSIZED_PARAGRAPH,
+                TRAILING_PARAGRAPH,
+            ]
+        )
+        + "\n"
+    )
 
 
 # Test configs - test allow_paragraph_splitting behavior
@@ -120,7 +157,7 @@ def test_paragraph_pagination(config_name, device, workspace, testdata_store, de
     workspace.set_layout_config(allow_paragraph_splitting=config.allow_paragraph_splitting)
 
     # Write test document to workspace.test_doc (the standard location)
-    workspace.test_doc.write_text(f"# Pagination Test ({config_name})\n\n{LONG_PARAGRAPH}\n")
+    workspace.test_doc.write_text(_test_document(config_name))
 
     # Generate .rm files with our config
     generated = generate_rm_files(config, workspace.test_doc)
