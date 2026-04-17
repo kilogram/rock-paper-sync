@@ -17,6 +17,8 @@ This creates a clean separation where:
 
 from .intents import (
     HighlightPlacement,
+    LayerPlan,
+    LayerType,
     PageTransformPlan,
     PreserveUnknown,
     StrokePlacement,
@@ -28,5 +30,7 @@ __all__ = [
     "StrokePlacement",
     "HighlightPlacement",
     "PreserveUnknown",
+    "LayerType",
+    "LayerPlan",
     "PageTransformPlan",
 ]

@@ -11,6 +11,15 @@ Key design principles:
 2. The opaque_handle field carries Layer 2 data without Layer 1 knowing its type
 3. PageTransformPlan is the ONLY input to PageTransformExecutor.execute()
 
+Layer Model
+-----------
+PageTransformPlan contains a list of LayerPlan objects. Each LayerPlan corresponds
+to one layer in the output .rm file. Current usage is a single CONTENT layer, but
+M5.5 adds a PRESERVATION layer for orphaned annotations and M7 adds full multi-layer
+support.
+
+Ordering convention: content -> user layers -> system layers -> annotations (top of stack)
+
 Handler Placement Types
 -----------------------
 Handlers return one of two placement types from apply_to_page():
@@ -31,9 +40,10 @@ This distinction exists because:
 
 Example:
     # In domain code (generator.py or similar):
-    plan = PageTransformPlan(
-        page_uuid="abc-123",
-        page_text="Hello world",
+    content_layer = LayerPlan(
+        layer_type=LayerType.CONTENT,
+        visible=True,
+        label="Layer 1",
         stroke_placements=[
             StrokePlacement(
                 opaque_handle=bundle,  # StrokeBundle from extraction
@@ -42,6 +52,11 @@ Example:
             )
         ],
     )
+    plan = PageTransformPlan(
+        page_uuid="abc-123",
+        page_text="Hello world",
+        layers=[content_layer],
+    )
 
     # In scene_adapter:
     executor = PageTransformExecutor(geometry)
@@ -49,6 +64,7 @@ Example:
 """
 
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -169,6 +185,58 @@ class PreserveUnknown(TransformIntent):
     opaque_handle: Any  # Raw rmscene block
 
 
+# =============================================================================
+# Layer Model
+# =============================================================================
+
+
+class LayerType(Enum):
+    """Semantic type of a layer in the output .rm file.
+
+    Controls routing, visibility defaults, and how the executor generates
+    the layer's structural blocks.
+
+    Ordering convention in output: CONTENT -> USER -> OCR_ORIGINAL ->
+    PRESERVATION -> ANNOTATIONS (top of stack, always visible).
+    """
+
+    CONTENT = "content"  # Generated text rendering (visible)
+    ANNOTATIONS = "annotations"  # Fresh layer for new user annotations (visible, top)
+    OCR_ORIGINAL = "ocr-original"  # Original strokes before OCR processing (hidden)
+    PRESERVATION = "preservation"  # Orphaned/unhandled content we cannot process (hidden)
+    USER = "user"  # User-created layers, preserved exactly as-is
+
+
+@dataclass
+class LayerPlan:
+    """Plan for a single layer in the output .rm file.
+
+    Each LayerPlan becomes one SceneTreeBlock + TreeNodeBlock + SceneGroupItemBlock
+    triple in the output, plus any annotation blocks placed on that layer.
+
+    Attributes:
+        layer_type: Semantic role of this layer (controls routing and visibility).
+        visible: Whether this layer is visible in xochitl. PRESERVATION and
+                 OCR_ORIGINAL layers default to False.
+        label: Human-readable layer name shown in xochitl's layer panel.
+        stroke_placements: Strokes to place on this layer.
+        highlight_placements: Highlights to place on this layer.
+        unknown_blocks: Unknown blocks to preserve verbatim on this layer.
+    """
+
+    layer_type: LayerType
+    visible: bool
+    label: str
+    stroke_placements: list[StrokePlacement] = field(default_factory=list)
+    highlight_placements: list[HighlightPlacement] = field(default_factory=list)
+    unknown_blocks: list[PreserveUnknown] = field(default_factory=list)
+
+    @property
+    def has_annotations(self) -> bool:
+        """Check if this layer has any annotations to place."""
+        return bool(self.stroke_placements or self.highlight_placements)
+
+
 @dataclass
 class PageTransformPlan:
     """Complete transformation plan for generating a page's .rm file.
@@ -176,14 +244,13 @@ class PageTransformPlan:
     This is the ONLY input needed by PageTransformExecutor. All rmscene
     mechanics are handled internally by the executor.
 
-    The plan expresses WHAT should be on the page:
-    - The text content (from markdown)
-    - Which strokes to place and where
-    - Which highlights to place and where
-    - Which unknown blocks to preserve
+    The plan expresses WHAT should be on the page via a list of LayerPlans.
+    Current usage is a single CONTENT layer. M5.5 adds a PRESERVATION layer
+    for orphaned annotations. M7 adds full multi-layer support (user layers,
+    OCR_ORIGINAL, ANNOTATIONS).
 
     The executor handles HOW to implement this:
-    - Regenerating structural blocks
+    - Regenerating structural blocks per layer
     - Creating/updating TreeNodeBlocks with correct anchors
     - Maintaining scene graph integrity
     - Block ordering for device compatibility
@@ -191,24 +258,21 @@ class PageTransformPlan:
 
     Attributes:
         page_uuid: UUID for this page
-        page_text: Text content for the page (from markdown)
-        stroke_placements: Strokes to place on this page
-        highlight_placements: Highlights to place on this page
-        unknown_blocks: Unknown blocks to preserve verbatim
+        page_text: Text content for the page (from markdown; belongs to CONTENT layer)
+        layers: Ordered list of layers to emit. Ordering: CONTENT -> USER ->
+                OCR_ORIGINAL -> PRESERVATION -> ANNOTATIONS (top of stack).
         source_rm_path: Path to existing .rm file (for roundtrip extraction)
     """
 
     page_uuid: str
     page_text: str
-    stroke_placements: list[StrokePlacement] = field(default_factory=list)
-    highlight_placements: list[HighlightPlacement] = field(default_factory=list)
-    unknown_blocks: list[PreserveUnknown] = field(default_factory=list)
+    layers: list[LayerPlan] = field(default_factory=list)
     source_rm_path: Path | None = None
 
     @property
     def has_annotations(self) -> bool:
-        """Check if this plan has any annotations to place."""
-        return bool(self.stroke_placements or self.highlight_placements)
+        """Check if any layer in this plan has annotations to place."""
+        return any(layer.has_annotations for layer in self.layers)
 
     @property
     def is_roundtrip(self) -> bool:

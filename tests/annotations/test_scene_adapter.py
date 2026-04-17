@@ -9,6 +9,8 @@ Tests the new layered architecture components:
 
 from rock_paper_sync.annotations.domain import (
     HighlightPlacement,
+    LayerPlan,
+    LayerType,
     PageTransformPlan,
     PreserveUnknown,
     StrokePlacement,
@@ -171,9 +173,7 @@ class TestDomainIntents:
         )
         assert plan.page_uuid == "test-uuid"
         assert plan.page_text == "Hello world"
-        assert plan.stroke_placements == []
-        assert plan.highlight_placements == []
-        assert plan.unknown_blocks == []
+        assert plan.layers == []
         assert plan.source_rm_path is None
 
     def test_page_transform_plan_has_annotations(self):
@@ -181,10 +181,16 @@ class TestDomainIntents:
         empty_plan = PageTransformPlan(page_uuid="1", page_text="")
         assert not empty_plan.has_annotations
 
+        stroke_layer = LayerPlan(
+            layer_type=LayerType.CONTENT,
+            visible=True,
+            label="Layer 1",
+            stroke_placements=[StrokePlacement(opaque_handle="b", anchor_char_offset=0)],
+        )
         stroke_plan = PageTransformPlan(
             page_uuid="2",
             page_text="",
-            stroke_placements=[StrokePlacement(opaque_handle="b", anchor_char_offset=0)],
+            layers=[stroke_layer],
         )
         assert stroke_plan.has_annotations
 

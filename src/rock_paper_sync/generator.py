@@ -23,6 +23,8 @@ from .annotations.document_model import (
 )
 from .annotations.domain import (
     HighlightPlacement,
+    LayerPlan,
+    LayerType,
     PageTransformPlan,
     StrokePlacement,
 )
@@ -853,11 +855,17 @@ class RemarkableGenerator:
                 )
                 highlight_placements.append(placement)
 
+        content_layer = LayerPlan(
+            layer_type=LayerType.CONTENT,
+            visible=True,
+            label="Layer 1",
+            stroke_placements=stroke_placements,
+            highlight_placements=highlight_placements,
+        )
         return PageTransformPlan(
             page_uuid=page.uuid,
             page_text=page_text,
-            stroke_placements=stroke_placements,
-            highlight_placements=highlight_placements,
+            layers=[content_layer],
             source_rm_path=ctx.source_rm_path if ctx else None,
         )
 
@@ -887,9 +895,11 @@ class RemarkableGenerator:
 
         ctx = page.annotation_context
         if ctx and ctx.source_rm_path:
+            strokes = sum(len(layer.stroke_placements) for layer in plan.layers)
+            highlights = sum(len(layer.highlight_placements) for layer in plan.layers)
             logger.info(
                 f"Generated .rm file via executor: {len(rm_bytes)} bytes "
-                f"({len(plan.stroke_placements)} strokes, {len(plan.highlight_placements)} highlights)"
+                f"({strokes} strokes, {highlights} highlights)"
             )
         else:
             logger.debug(f"Generated .rm file from scratch: {len(rm_bytes)} bytes")

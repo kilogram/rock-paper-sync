@@ -171,25 +171,17 @@ class PageTransformExecutor:
         # Step 2: REGENERATE - Build structural blocks from source of truth
         self._regenerate_structural(ctx)
 
-        # Step 3: MIGRATE - Apply stroke placements from plan
-        # All strokes that should be on this page are in stroke_placements.
-        # The DocumentModel routes ALL strokes - we regenerate fresh each run.
-        for placement in plan.stroke_placements:
-            self._apply_stroke_placement(ctx, placement)
-
-        # NOTE: _preserve_unreplaced_strokes removed - if we're generating fresh,
-        # all strokes should be in stroke_placements. Preserving from source file
-        # caused duplication when strokes moved cross-page.
-
-        # Step 4: MIGRATE - Apply highlight placements
-        for placement in plan.highlight_placements:
-            self._apply_highlight_placement(ctx, placement)
-
-        # NOTE: _preserve_unreplaced_highlights removed - same as strokes
-
-        # Step 5: PRESERVE - Append unknown blocks verbatim
-        for unknown in plan.unknown_blocks:
-            ctx.output_blocks.append(unknown.opaque_handle)
+        # Steps 3–5: MIGRATE + PRESERVE — iterate over layers in plan order.
+        # Each layer contributes its stroke placements, highlight placements,
+        # and unknown blocks. M5.5 adds a second PRESERVATION layer here;
+        # M7 adds user layers, OCR_ORIGINAL, and ANNOTATIONS.
+        for layer in plan.layers:
+            for placement in layer.stroke_placements:
+                self._apply_stroke_placement(ctx, placement)
+            for placement in layer.highlight_placements:
+                self._apply_highlight_placement(ctx, placement)
+            for unknown in layer.unknown_blocks:
+                ctx.output_blocks.append(unknown.opaque_handle)
 
         # Also append unknown blocks from source file
         ctx.output_blocks.extend(ctx.unknown_blocks)
