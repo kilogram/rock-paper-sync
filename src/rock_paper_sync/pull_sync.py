@@ -23,6 +23,7 @@ from rock_paper_sync.annotation_renderer import (
 )
 from rock_paper_sync.annotation_sync_helper import AnnotationChange, AnnotationSyncHelper
 from rock_paper_sync.annotations.document_model import DocumentAnnotation, DocumentModel
+from rock_paper_sync.annotations.services.hidden_layer import serialize_annotation_blocks
 from rock_paper_sync.config import VaultConfig
 from rock_paper_sync.layout import DEFAULT_DEVICE
 from rock_paper_sync.rm_cloud_sync import RmCloudSync
@@ -333,11 +334,13 @@ class PullSyncEngine:
         # Clear previous orphans for this file
         self.state.delete_all_orphaned_annotations(change.vault_name, change.obsidian_path)
 
-        # Record new orphans
+        # Record new orphans (with serialised blocks for hidden-layer preservation)
         for annotation in orphaned:
             anchor_text = None
             if annotation.anchor_context:
                 anchor_text = annotation.anchor_context.text_content
+
+            blocks_blob = serialize_annotation_blocks(annotation)
 
             orphan_record = OrphanedAnnotation(
                 vault_name=change.vault_name,
@@ -346,6 +349,8 @@ class PullSyncEngine:
                 annotation_type=annotation.annotation_type,
                 original_anchor_text=anchor_text,
                 orphaned_at=int(time.time()),
+                blocks_blob=blocks_blob,
+                source_page_idx=annotation.source_page_idx,
             )
             self.state.add_orphaned_annotation(orphan_record)
 

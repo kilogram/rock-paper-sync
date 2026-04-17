@@ -59,9 +59,11 @@ class PullState:
 
 @dataclass
 class OrphanedAnnotation:
-    """Record of an orphaned annotation (schema v7).
+    """Record of an orphaned annotation (schema v8).
 
     Tracks annotations that could not be reanchored after content changes.
+    blocks_blob stores serialized rmscene blocks for hidden-layer preservation
+    (added in schema v8 / M5.5).
     """
 
     vault_name: str
@@ -70,12 +72,14 @@ class OrphanedAnnotation:
     annotation_type: str  # 'highlight' or 'stroke'
     original_anchor_text: str | None  # What the annotation was anchored to
     orphaned_at: int
+    blocks_blob: bytes | None = None  # Serialized rmscene blocks (v8)
+    source_page_idx: int | None = None  # Source page index on device (v8)
 
 
 class StateManager:
     """Manages sync state using SQLite database."""
 
-    SCHEMA_VERSION = 7  # Schema v7: Add pull_state and orphaned_annotations for M5
+    SCHEMA_VERSION = 8  # Schema v8: Add blocks_blob/source_page_idx to orphaned_annotations (M5.5)
 
     def __init__(self, db_path: Path) -> None:
         """Initialize state manager with database at given path.
@@ -201,7 +205,7 @@ class StateManager:
                     PRIMARY KEY (vault_name, obsidian_path)
                 ) STRICT;
 
-                -- Orphaned annotations tracking (schema v7)
+                -- Orphaned annotations tracking (schema v8)
                 CREATE TABLE IF NOT EXISTS orphaned_annotations (
                     vault_name TEXT NOT NULL,
                     obsidian_path TEXT NOT NULL,
@@ -209,6 +213,8 @@ class StateManager:
                     annotation_type TEXT NOT NULL,
                     original_anchor_text TEXT,
                     orphaned_at INTEGER NOT NULL,
+                    blocks_blob BLOB,
+                    source_page_idx INTEGER,
                     PRIMARY KEY (vault_name, obsidian_path, annotation_id)
                 ) STRICT;
 
@@ -242,16 +248,28 @@ class StateManager:
         """Run any pending schema migrations."""
         if current_version < 7:
             self._migrate_to_v7()
+        if current_version < 8:
+            self._migrate_to_v8()
 
     def _migrate_to_v7(self) -> None:
         """Migrate from v5/v6 to v7: Add pull_state and orphaned_annotations tables."""
         logger.info("Migrating database schema to v7...")
         with self.conn:
-            # Tables are created via CREATE IF NOT EXISTS in _ensure_schema
-            # Just update the version
             self.conn.execute("DELETE FROM schema_version")
             self.conn.execute("INSERT INTO schema_version (version) VALUES (7)")
         logger.info("Database schema migrated to v7")
+
+    def _migrate_to_v8(self) -> None:
+        """Migrate from v7 to v8: Add blocks_blob and source_page_idx to orphaned_annotations."""
+        logger.info("Migrating database schema to v8...")
+        with self.conn:
+            self.conn.executescript("""
+                ALTER TABLE orphaned_annotations ADD COLUMN blocks_blob BLOB;
+                ALTER TABLE orphaned_annotations ADD COLUMN source_page_idx INTEGER;
+            """)
+            self.conn.execute("DELETE FROM schema_version")
+            self.conn.execute("INSERT INTO schema_version (version) VALUES (8)")
+        logger.info("Database schema migrated to v8")
 
     def get_file_state(self, vault_name: str, obsidian_path: str) -> SyncRecord | None:
         """Get sync state for a file.
@@ -943,7 +961,7 @@ class StateManager:
             cursor = self.conn.execute("SELECT * FROM pull_state")
         return [PullState(**dict(row)) for row in cursor.fetchall()]
 
-    # Orphaned annotations methods (schema v7)
+    # Orphaned annotations methods (schema v7/v8)
 
     def add_orphaned_annotation(self, orphan: OrphanedAnnotation) -> None:
         """Record an orphaned annotation.
@@ -956,8 +974,8 @@ class StateManager:
                 """
                 INSERT OR REPLACE INTO orphaned_annotations
                 (vault_name, obsidian_path, annotation_id, annotation_type,
-                 original_anchor_text, orphaned_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                 original_anchor_text, orphaned_at, blocks_blob, source_page_idx)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     orphan.vault_name,
@@ -966,6 +984,8 @@ class StateManager:
                     orphan.annotation_type,
                     orphan.original_anchor_text,
                     orphan.orphaned_at,
+                    orphan.blocks_blob,
+                    orphan.source_page_idx,
                 ),
             )
         logger.debug(
@@ -989,7 +1009,45 @@ class StateManager:
             "SELECT * FROM orphaned_annotations WHERE vault_name = ? AND obsidian_path = ?",
             (vault_name, obsidian_path),
         )
-        return [OrphanedAnnotation(**dict(row)) for row in cursor.fetchall()]
+        rows = cursor.fetchall()
+        result = []
+        for row in rows:
+            d = dict(row)
+            # Provide defaults for pre-v8 rows missing the new columns
+            d.setdefault("blocks_blob", None)
+            d.setdefault("source_page_idx", None)
+            result.append(OrphanedAnnotation(**d))
+        return result
+
+    def get_orphan_blobs_for_document(
+        self, vault_name: str, obsidian_path: str
+    ) -> list[tuple[str, int | None, bytes]]:
+        """Get orphaned annotation blobs for document, for hidden-layer preservation.
+
+        Returns only orphans that have a stored blocks_blob (i.e. were recorded
+        after the v8 migration with M5.5 pull sync).
+
+        Args:
+            vault_name: Name of the vault
+            obsidian_path: Relative path of file in Obsidian vault
+
+        Returns:
+            List of (annotation_id, source_page_idx, blocks_blob) for orphans
+            that have stored blocks.
+        """
+        cursor = self.conn.execute(
+            """
+            SELECT annotation_id, source_page_idx, blocks_blob
+            FROM orphaned_annotations
+            WHERE vault_name = ? AND obsidian_path = ?
+              AND blocks_blob IS NOT NULL
+            """,
+            (vault_name, obsidian_path),
+        )
+        return [
+            (row["annotation_id"], row["source_page_idx"], row["blocks_blob"])
+            for row in cursor.fetchall()
+        ]
 
     def delete_orphaned_annotation(
         self, vault_name: str, obsidian_path: str, annotation_id: str

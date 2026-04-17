@@ -41,6 +41,7 @@ from .block_registry import BlockKind, classify_block
 from .bundle import StrokeBundle
 from .scene_index import (
     SceneGraphIndex,
+    layer_crdt_id,
     validate_scene_graph,
 )
 from .translator import (
@@ -169,7 +170,7 @@ class PageTransformExecutor:
             self._load_and_partition(ctx, plan.source_rm_path)
 
         # Step 2: REGENERATE - Build structural blocks from source of truth
-        self._regenerate_structural(ctx)
+        self._regenerate_structural(ctx, plan)
 
         # Steps 3–5: MIGRATE + PRESERVE — iterate over layers in plan order.
         # Each layer contributes its stroke placements, highlight placements,
@@ -271,42 +272,46 @@ class PageTransformExecutor:
 
         return 0
 
-    def _regenerate_structural(self, ctx: ExecutionContext) -> None:
-        """Regenerate structural blocks from page text.
+    def _regenerate_structural(
+        self,
+        ctx: ExecutionContext,
+        plan: PageTransformPlan,
+    ) -> None:
+        """Regenerate structural blocks from page text and layer plan.
 
         These blocks are always regenerated from the source of truth
         (the markdown content), never preserved from the source file.
 
-        Includes:
+        Emits once per page:
         - Header blocks (AuthorIds, MigrationInfo, PageInfo)
-        - Scene tree declaration for Layer 1
         - RootTextBlock with text content
-        - System TreeNodeBlocks (0:1 root, 0:11 layer)
+        - Root TreeNodeBlock (0:1)
+
+        Emits once per layer in plan.layers (falling back to a single default
+        content layer when plan.layers is empty, for backward compatibility):
+        - SceneTreeBlock declaring the layer
+        - TreeNodeBlock with layer label and visibility
         - SceneGroupItemBlock linking layer to root
         """
         text = ctx.page_text or " "
-
-        # Build text styles (single paragraph style based on first block type)
         styles = self._build_text_styles(ctx)
 
-        structural_blocks = [
-            # Header blocks
-            AuthorIdsBlock(author_uuids={1: uuid4()}),
-            MigrationInfoBlock(migration_id=CrdtId(1, 1), is_device=True),
-            PageInfoBlock(
-                loads_count=1,
-                merges_count=0,
-                text_chars_count=len(text) + 1,
-                text_lines_count=text.count("\n") + 1,
-            ),
-            # Scene tree root declaration (Layer 1)
-            SceneTreeBlock(
-                tree_id=CrdtId(0, 11),
-                node_id=CrdtId(0, 0),
-                is_update=True,
-                parent_id=CrdtId(0, 1),
-            ),
-            # Text content
+        # Header blocks (once per page)
+        ctx.output_blocks.extend(
+            [
+                AuthorIdsBlock(author_uuids={1: uuid4()}),
+                MigrationInfoBlock(migration_id=CrdtId(1, 1), is_device=True),
+                PageInfoBlock(
+                    loads_count=1,
+                    merges_count=0,
+                    text_chars_count=len(text) + 1,
+                    text_lines_count=text.count("\n") + 1,
+                ),
+            ]
+        )
+
+        # Text content (once per page, belongs to the content / Layer 1)
+        ctx.output_blocks.append(
             RootTextBlock(
                 block_id=CrdtId(0, 0),
                 value=si.Text(
@@ -326,33 +331,80 @@ class PageTransformExecutor:
                     pos_y=self.geometry.text_pos_y,
                     width=self.geometry.text_width,
                 ),
-            ),
-            # System TreeNodeBlocks (required for valid scene graph)
-            TreeNodeBlock(
-                si.Group(
-                    node_id=CrdtId(0, 1),
-                )
-            ),
-            TreeNodeBlock(
-                si.Group(
-                    node_id=CrdtId(0, 11),
-                    label=LwwValue(timestamp=CrdtId(0, 12), value="Layer 1"),
-                )
-            ),
-            # SceneGroupItemBlock linking Layer 1 to root
-            SceneGroupItemBlock(
-                parent_id=CrdtId(0, 1),
-                item=CrdtSequenceItem(
-                    item_id=CrdtId(0, 13),
-                    left_id=CrdtId(0, 0),
-                    right_id=CrdtId(0, 0),
-                    deleted_length=0,
-                    value=CrdtId(0, 11),
-                ),
-            ),
-        ]
+            )
+        )
 
-        ctx.output_blocks.extend(structural_blocks)
+        # Scene root node (once per page)
+        ctx.output_blocks.append(TreeNodeBlock(si.Group(node_id=CrdtId(0, 1))))
+
+        # Per-layer structural blocks.
+        # If no layers are specified (e.g. bare PageTransformPlan in tests), emit the
+        # default single content layer with CrdtId(0,11) for full backward compatibility.
+        layers = plan.layers
+        if not layers:
+            ctx.output_blocks.extend(
+                [
+                    SceneTreeBlock(
+                        tree_id=CrdtId(0, 11),
+                        node_id=CrdtId(0, 0),
+                        is_update=True,
+                        parent_id=CrdtId(0, 1),
+                    ),
+                    TreeNodeBlock(
+                        si.Group(
+                            node_id=CrdtId(0, 11),
+                            label=LwwValue(timestamp=CrdtId(0, 12), value="Layer 1"),
+                        )
+                    ),
+                    SceneGroupItemBlock(
+                        parent_id=CrdtId(0, 1),
+                        item=CrdtSequenceItem(
+                            item_id=CrdtId(0, 13),
+                            left_id=CrdtId(0, 0),
+                            right_id=CrdtId(0, 0),
+                            deleted_length=0,
+                            value=CrdtId(0, 11),
+                        ),
+                    ),
+                ]
+            )
+            return
+
+        for idx, layer in enumerate(layers):
+            layer_id = layer_crdt_id(idx)
+            label_ts = CrdtId(0, layer_id.part2 + 1)
+            link_id = CrdtId(0, layer_id.part2 + 2)
+
+            group = si.Group(
+                node_id=layer_id,
+                label=LwwValue(timestamp=label_ts, value=layer.label),
+            )
+            # Only set visible explicitly for hidden layers to avoid altering
+            # the default (CrdtId(0,0), True) serialisation for visible layers.
+            if not layer.visible:
+                group.visible = LwwValue(timestamp=label_ts, value=False)
+
+            ctx.output_blocks.extend(
+                [
+                    SceneTreeBlock(
+                        tree_id=layer_id,
+                        node_id=CrdtId(0, 0),
+                        is_update=True,
+                        parent_id=CrdtId(0, 1),
+                    ),
+                    TreeNodeBlock(group),
+                    SceneGroupItemBlock(
+                        parent_id=CrdtId(0, 1),
+                        item=CrdtSequenceItem(
+                            item_id=link_id,
+                            left_id=CrdtId(0, 0),
+                            right_id=CrdtId(0, 0),
+                            deleted_length=0,
+                            value=layer_id,
+                        ),
+                    ),
+                ]
+            )
 
     def _build_text_styles(self, ctx: ExecutionContext) -> dict:
         """Build rmscene styles dictionary.

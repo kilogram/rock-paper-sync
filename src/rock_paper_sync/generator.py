@@ -32,6 +32,7 @@ from .annotations.scene_adapter import (
     PageTransformExecutor,
     StrokeBundle,
 )
+from .annotations.services.hidden_layer import HiddenLayerManager
 from .annotations.services.merger import AnnotationMerger, MergeContext
 from .config import LayoutConfig as AppLayoutConfig
 from .layout import DeviceGeometry, WordWrapLayoutEngine
@@ -107,6 +108,7 @@ class RemarkablePage:
     text_blocks: list[TextBlock] = field(default_factory=list)
     annotation_context: PageAnnotationContext | None = None
     content_blocks: list = field(default_factory=list)
+    orphan_blobs: list[bytes] = field(default_factory=list)  # M5.5: hidden layer blobs
 
 
 @dataclass
@@ -253,6 +255,7 @@ class RemarkableGenerator:
         doc_uuid: str | None = None,
         existing_page_uuids: list[str] | None = None,
         existing_rm_files: list[Path | None] | None = None,
+        orphan_blobs: list[bytes] | None = None,
     ) -> RemarkableDocument:
         """Convert markdown document to reMarkable format.
 
@@ -267,6 +270,9 @@ class RemarkableGenerator:
             existing_rm_files: List of paths to existing .rm files for annotation preservation.
                               List should match existing_page_uuids in length and order.
                               None entries indicate no existing file for that page.
+            orphan_blobs: Serialised rmscene blocks for orphaned annotations (M5.5).
+                         When provided, a hidden PRESERVATION layer is added to the
+                         first page of the generated document.
 
         Returns:
             RemarkableDocument ready to be written to disk
@@ -344,6 +350,10 @@ class RemarkableGenerator:
                     page.annotation_context.source_rm_path = uuid_to_rm_path[projection.page_uuid]
 
             pages.append(page)
+
+        # M5.5: attach orphan blobs to page 0 for hidden-layer preservation
+        if orphan_blobs and pages:
+            pages[0].orphan_blobs = orphan_blobs
 
         logger.debug(
             f"Generated document {doc_uuid} with {len(pages)} page(s) "
@@ -862,10 +872,16 @@ class RemarkableGenerator:
             stroke_placements=stroke_placements,
             highlight_placements=highlight_placements,
         )
+        layers = [content_layer]
+        if page.orphan_blobs:
+            manager = HiddenLayerManager()
+            preservation_layer = manager.build_preservation_layer(page.orphan_blobs)
+            if preservation_layer:
+                layers.append(preservation_layer)
         return PageTransformPlan(
             page_uuid=page.uuid,
             page_text=page_text,
-            layers=[content_layer],
+            layers=layers,
             source_rm_path=ctx.source_rm_path if ctx else None,
         )
 

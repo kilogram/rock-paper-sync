@@ -59,10 +59,27 @@ def format_crdt_id(node_id: CrdtId) -> str:
 
 # Well-known system node IDs
 SYSTEM_ROOT = CrdtId(0, 1)
-SYSTEM_LAYER_1 = CrdtId(0, 11)
+SYSTEM_LAYER_1 = CrdtId(0, 11)  # Content layer (Layer 1)
 SYSTEM_LAYER_1_GROUP = CrdtId(0, 13)
+SYSTEM_LAYER_2 = CrdtId(0, 21)  # Preservation layer (Layer 2, hidden)
 
 KNOWN_SYSTEM_NODES = frozenset({SYSTEM_ROOT, SYSTEM_LAYER_1, SYSTEM_LAYER_1_GROUP})
+
+# Layer 0-based index → CrdtId scheme:
+#   Layer N tree_id  = CrdtId(0, 11 + N*10)  e.g. N=0→(0,11), N=1→(0,21)
+#   Layer N label ts = CrdtId(0, 12 + N*10)
+#   Layer N link id  = CrdtId(0, 13 + N*10)
+_LAYER_BASE = 11
+_LAYER_STEP = 10
+
+
+def layer_crdt_id(layer_index: int) -> CrdtId:
+    """Return the tree_id/node_id CrdtId for the layer at 0-based index.
+
+    Layer 0 (CONTENT) → CrdtId(0, 11) — backward-compatible with existing files.
+    Layer 1 (PRESERVATION) → CrdtId(0, 21).
+    """
+    return CrdtId(0, _LAYER_BASE + layer_index * _LAYER_STEP)
 
 
 # =============================================================================

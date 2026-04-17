@@ -461,8 +461,19 @@ class SyncEngine:
 
             # Create document with clean content (no markers)
             # Use clean_doc directly - parser strips markers before computing hash
+            orphan_blobs = [
+                blob
+                for _, _, blob in self.state.get_orphan_blobs_for_document(
+                    vault.name, relative_path
+                )
+            ]
             rm_doc = self.generator.generate_document(
-                clean_doc, parent_uuid, existing_uuid, existing_page_uuids, existing_rm_files
+                clean_doc,
+                parent_uuid,
+                existing_uuid,
+                existing_page_uuids,
+                existing_rm_files,
+                orphan_blobs=orphan_blobs or None,
             )
 
             # Generate binary .rm files for each page

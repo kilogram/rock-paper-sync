@@ -39,6 +39,7 @@ from .scene_index import (
     KNOWN_SYSTEM_NODES,
     SYSTEM_LAYER_1,
     SYSTEM_LAYER_1_GROUP,
+    SYSTEM_LAYER_2,
     SYSTEM_ROOT,
     SceneGraphIndex,
     SceneGraphValidationResult,
@@ -46,6 +47,7 @@ from .scene_index import (
     format_crdt_id,
     is_system_node,
     is_user_node,
+    layer_crdt_id,
     validate_scene_graph,
     validate_scene_graph_file,
 )
@@ -82,6 +84,8 @@ __all__ = [
     "SYSTEM_ROOT",
     "SYSTEM_LAYER_1",
     "SYSTEM_LAYER_1_GROUP",
+    "SYSTEM_LAYER_2",
+    "layer_crdt_id",
     # Translator
     "SceneTranslator",
     "build_stroke_bundles",
