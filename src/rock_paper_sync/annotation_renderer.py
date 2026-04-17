@@ -290,9 +290,9 @@ class AnnotationRenderer:
         comment = f"<!-- {count} orphaned annotation{'s' if count != 1 else ''} preserved in device file -->\n\n"
 
         if self.config.orphan_comment_location == "top":
-            # Check if there's already an orphan comment
-            if "orphaned annotation" in content[:100]:
-                # Update existing comment
+            # Check if there's already an orphan comment anywhere in the document
+            if "orphaned annotation" in content:
+                # Update existing comment in-place (regardless of where it sits)
                 content = re.sub(
                     r"<!-- \d+ orphaned annotations? preserved in device file -->\n\n",
                     comment,

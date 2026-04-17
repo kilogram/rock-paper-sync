@@ -311,18 +311,23 @@ strokes use the same `AnchorContext.resolve()` path; type only affects rendering
 
 ---
 
-### 13. Orphan Comment Placement with Dynamic Structure - DOCUMENTED (2026-04-17)
+### 13. Orphan Comment Placement with Dynamic Structure - FIXED (2026-04-17)
 
-**File**: `tests/test_annotation_renderer.py` (`TestOrphanCommentPlacementDynamicStructure`)
-**Status**: ✅ Behavior documented and tested
+**File**: `src/rock_paper_sync/annotation_renderer.py`, `tests/test_annotation_renderer.py`
+**Status**: ✅ Bug fixed and tested
 
-**Known limitation**: The renderer checks only `content[:100]` for an existing orphan comment.
-If the comment moves past position 100 (user adds content above, or comment was placed at
-bottom), the next render prepends a NEW comment at top without removing the old one,
-resulting in duplicate orphan comments. Three tests document this:
-- Comment at top (within 100 chars): detected and updated correctly (no duplicate).
-- Comment at bottom (past 100 chars): NOT detected → two comments after next render.
-- Comment in middle after user appends content: same limitation applies.
+**Root cause**: `render_orphan_comment()` checked only `content[:100]` for an existing
+orphan comment. If the comment moved past position 100 (user added content above, or
+comment was placed at bottom), the check failed and a new comment was prepended at top,
+leaving the old one in place — resulting in duplicate orphan comments.
+
+**Fix**: Changed `content[:100]` → `content` in the existence check. The `re.sub()` that
+follows already operates on the full string, so detecting anywhere is sufficient.
+
+**Tests updated** (`TestOrphanCommentPlacementDynamicStructure`):
+- `test_comment_at_top_is_detected_and_updated`: unchanged — still passes.
+- `test_comment_at_bottom_is_detected_and_updated`: now verifies no duplicate.
+- `test_comment_in_middle_after_user_adds_content_below`: now verifies updated in-place.
 
 ---
 
@@ -369,4 +374,4 @@ resulting in duplicate orphan comments. Three tests document this:
 | 2026-04-17 | P2 #10: Annotation type mismatch | ✓ | Documented: type is orthogonal to anchoring, both types migrate identically |
 | 2026-04-17 | P3 #11: Unicode text in anchors | ✓ | Documented: no NFC normalization; diff-anchor fallback for accent→ASCII |
 | 2026-04-17 | P3 #12: Whitespace-only modifications | ✓ | Documented: double→single space shares hash; resolves correctly |
-| 2026-04-17 | P3 #13: Orphan comment placement | ✓ | Documented known limitation: comment past char 100 causes duplicate |
+| 2026-04-17 | P3 #13: Orphan comment placement | ✓ | Fixed: content[:100] → content; comment now detected anywhere in document |

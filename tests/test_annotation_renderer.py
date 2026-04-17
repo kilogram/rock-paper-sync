@@ -523,40 +523,29 @@ class TestOrphanCommentPlacementDynamicStructure:
         assert result.content.count("orphaned annotation") == 1
         assert "2 orphaned annotations" in result.content
 
-    def test_comment_at_bottom_not_detected_creates_duplicate(self) -> None:
-        """Documents known limitation: comment past 100-char boundary causes duplication.
-
-        When the orphan comment is past position 100, the renderer does not
-        detect it and prepends a new one at the top, resulting in two comments.
-        """
-        # Build content where orphan comment lands past char 100
+    def test_comment_at_bottom_is_detected_and_updated(self) -> None:
+        """Orphan comment anywhere in the document is detected and updated in-place."""
         long_preamble = (
             "# Document\n\n"
             "This document has content that fills well over one hundred characters. "
             "The preamble is intentionally long to push the orphan comment past position 100.\n\n"
         )
-        content = long_preamble + "<!-- 2 orphaned annotations preserved in device file -->"
+        content = long_preamble + "<!-- 2 orphaned annotations preserved in device file -->\n\n"
 
         assert len(long_preamble) > 100
-        assert "orphaned annotation" not in content[:100]
+        assert "orphaned annotation" not in content[:100]  # Past the old 100-char boundary
 
         orphan = _make_highlight("deleted text", "deleted text context")
         model = DocumentModel(paragraphs=[], annotations=[], full_text=content)
         renderer = AnnotationRenderer()
         result = renderer.render(content, model, orphaned_annotations=[orphan])
 
-        # Known limitation: a second comment is added at top; old one stays at bottom
-        orphan_comment_count = result.content.count("orphaned annotation")
-        assert (
-            orphan_comment_count == 2
-        ), f"Expected 2 orphan comments (bottom comment undetected), got {orphan_comment_count}."
+        # Comment is found anywhere in the document and updated in-place (no duplicate)
+        assert result.content.count("orphaned annotation") == 1
+        assert "1 orphaned annotation" in result.content
 
     def test_comment_in_middle_after_user_adds_content_below(self) -> None:
-        """Documents behavior when user adds content below the orphan comment.
-
-        Scenario: orphan comment was placed, user appended content, comment is
-        now in the middle. The next render cannot find it and prepends a new one.
-        """
+        """Orphan comment in middle of document is updated in-place, not duplicated."""
         content = (
             "# Document\n\n"
             "Some content here with more than one hundred characters total in this block.\n\n"
@@ -566,16 +555,18 @@ class TestOrphanCommentPlacementDynamicStructure:
 
         assert "orphaned annotation" not in content[:100]
 
-        orphan = _make_highlight("another deletion", "another deletion context")
+        orphans = [
+            _make_highlight("another deletion", "another deletion context"),
+            _make_highlight("more deletion", "more deletion context"),
+        ]
         model = DocumentModel(paragraphs=[], annotations=[], full_text=content)
         config = RenderConfig(orphan_comment_location="top")
         renderer = AnnotationRenderer(config)
-        result = renderer.render(content, model, orphaned_annotations=[orphan])
+        result = renderer.render(content, model, orphaned_annotations=orphans)
 
-        # New comment prepended at top
-        assert result.content.startswith("<!-- 1 orphaned annotation")
-        # Old comment still present → two total
-        assert result.content.count("orphaned annotation") == 2
+        # Comment is updated in-place to the new count — no duplicate
+        assert result.content.count("orphaned annotation") == 1
+        assert "2 orphaned annotations" in result.content
 
 
 class TestConvenienceFunction:
