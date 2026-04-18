@@ -38,7 +38,7 @@ It verifies that non-orphaned annotations are unaffected.
 ## Section 5: Recovery Zone
 
 This section starts empty.
-In Trip 4, the text "preserved forever" will be re-added here to verify
+In Trip 4, the anchor phrase will be re-introduced here to verify
 that the orphaned annotation in the hidden layer can be re-anchored.
 
 ---

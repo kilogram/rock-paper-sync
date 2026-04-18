@@ -288,9 +288,9 @@ def test_hidden_layer_orphans(device, workspace, fixtures_dir):
     current = workspace.test_doc.read_text()
     # Inject the original anchor text into the Recovery Zone
     modified = current.replace(
-        'In Trip 4, the text "preserved forever" will be re-added here to verify',
+        "In Trip 4, the anchor phrase will be re-introduced here to verify",
         "The phrase preserved forever has been restored here.\n"
-        'In Trip 4, the text "preserved forever" was re-added to verify',
+        "In Trip 4, the anchor phrase was re-introduced to verify",
     )
     workspace.test_doc.write_text(modified)
     print("  Restored 'preserved forever' into Section 5 (Recovery Zone)")
