@@ -306,6 +306,35 @@ class DeviceInteractionProtocol(Protocol):
         """
         ...
 
+    def assert_trip_png_goldens(
+        self,
+        rm_files: dict[str, bytes],
+        trip_number: int,
+        page_order: list[str] | None = None,
+    ) -> None:
+        """Save or compare PNG goldens for a trip's rm files.
+
+        Renders two views per page and either saves them (online/record mode)
+        or compares against previously saved goldens (offline/replay mode):
+          - ``page{N}_all.png``    — all layers, hidden layers included
+          - ``page{N}_hidden.png`` — hidden/preservation layer items only
+
+        In online (record) mode:
+            Renders and saves to testdata as committed goldens.
+            Run with --online to record, inspect PNGs, then git-commit them.
+
+        In offline (replay) mode:
+            Renders and compares against committed goldens using perceptual
+            hashing. Raises AssertionError if images diverge.
+            If no golden exists yet, the check is skipped with a warning.
+
+        Args:
+            rm_files: Mapping of page_uuid -> .rm bytes (from get_document_state)
+            trip_number: Trip number the rm_files belong to (1-indexed)
+            page_order: Page UUIDs in display order (default: sorted keys)
+        """
+        ...
+
     def cleanup(self) -> None:
         """Cleanup after test completion.
 

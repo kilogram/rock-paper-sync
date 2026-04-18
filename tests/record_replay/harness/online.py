@@ -589,6 +589,66 @@ class OnlineDevice(DeviceInteractionManager):
             "Press Enter when you're ready to continue...",
         )
 
+    def assert_trip_png_goldens(
+        self,
+        rm_files: dict[str, bytes],
+        trip_number: int,
+        page_order: list[str] | None = None,
+    ) -> None:
+        """Render and save PNG goldens for a trip (online/record mode).
+
+        Saves two views per page to testdata for the user to inspect and
+        commit as approved goldens:
+          - page{N}_all.png    — all layers, hidden layers included
+          - page{N}_hidden.png — preservation layer items only
+
+        Args:
+            rm_files: page_uuid -> .rm bytes
+            trip_number: Trip number (1-indexed)
+            page_order: Page UUIDs in display order
+        """
+        from rmscene import CrdtId
+
+        from tests.record_replay.harness.visual_comparison import (
+            image_to_png_bytes,
+            render_rm_pages,
+        )
+
+        if not self._current_test_id:
+            self.bench.warn("assert_trip_png_goldens: no test active, skipping")
+            return
+
+        preservation_ids: set[CrdtId] = {CrdtId(0, 21)}
+        order = page_order or sorted(rm_files.keys())
+        saved: list[str] = []
+
+        for page_idx, uuid in enumerate(order):
+            if uuid not in rm_files:
+                continue
+            page_label = f"page{page_idx + 1}"
+
+            for mode, kwargs in [
+                ("all", {"include_hidden": True}),
+                ("hidden", {"layer_filter": preservation_ids}),
+            ]:
+                name = f"{page_label}_{mode}"
+                rendered = render_rm_pages({uuid: rm_files[uuid]}, **kwargs)
+                if not rendered:
+                    continue
+                _, image = rendered[0]
+                png_bytes = image_to_png_bytes(image)
+                path = self.testdata_store.save_trip_png_golden(
+                    self._current_test_id, trip_number, name, png_bytes
+                )
+                saved.append(name)
+                self.bench.ok(f"Trip {trip_number}: saved PNG golden '{name}' → {path.name}")
+
+        if saved:
+            self.bench.observe(
+                f"Trip {trip_number}: Saved {len(saved)} PNG golden(s). "
+                f"Inspect and commit to approve: {', '.join(saved)}"
+            )
+
     def compare_with_golden(
         self,
         doc_uuid: str,

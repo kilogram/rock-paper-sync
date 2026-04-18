@@ -1476,3 +1476,71 @@ class TestdataStore:
         phases_dir = test_dir / "recording_phases"
         if phases_dir.exists():
             shutil.rmtree(phases_dir)
+
+    # -------------------------------------------------------------------------
+    # PNG golden methods
+    # -------------------------------------------------------------------------
+
+    def save_trip_png_golden(
+        self,
+        test_id: str,
+        trip_number: int,
+        name: str,
+        png_bytes: bytes,
+    ) -> Path:
+        """Save a PNG golden image for a trip.
+
+        PNG goldens are committed to the repo and used for visual regression
+        testing. On recording runs the user inspects and approves them by
+        committing. On replay runs they are compared against.
+
+        Storage: trips/{trip_number}/png_goldens/{name}.png
+
+        Args:
+            test_id: Test identifier
+            trip_number: Trip number (1-indexed)
+            name: Image name, e.g. "page1_all" or "page1_hidden"
+            png_bytes: PNG file bytes
+
+        Returns:
+            Path to the saved file
+        """
+        golden_dir = self.base_dir / test_id / "trips" / str(trip_number) / "png_goldens"
+        golden_dir.mkdir(parents=True, exist_ok=True)
+        path = golden_dir / f"{name}.png"
+        path.write_bytes(png_bytes)
+        return path
+
+    def load_trip_png_golden(
+        self,
+        test_id: str,
+        trip_number: int,
+        name: str,
+    ) -> bytes | None:
+        """Load a PNG golden for a trip, or None if not yet recorded.
+
+        Args:
+            test_id: Test identifier
+            trip_number: Trip number (1-indexed)
+            name: Image name, e.g. "page1_all"
+
+        Returns:
+            PNG bytes, or None if golden does not exist
+        """
+        path = self.base_dir / test_id / "trips" / str(trip_number) / "png_goldens" / f"{name}.png"
+        return path.read_bytes() if path.exists() else None
+
+    def list_trip_png_goldens(self, test_id: str, trip_number: int) -> list[str]:
+        """List PNG golden names for a trip.
+
+        Args:
+            test_id: Test identifier
+            trip_number: Trip number (1-indexed)
+
+        Returns:
+            Sorted list of golden names (without .png extension)
+        """
+        golden_dir = self.base_dir / test_id / "trips" / str(trip_number) / "png_goldens"
+        if not golden_dir.exists():
+            return []
+        return sorted(p.stem for p in golden_dir.glob("*.png"))

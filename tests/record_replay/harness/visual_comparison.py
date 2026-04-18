@@ -327,6 +327,74 @@ def rm_to_png_image(
     return renderer.render_bytes(rm_data)
 
 
+def render_rm_pages(
+    rm_files: dict[str, bytes],
+    page_order: list[str] | None = None,
+    include_hidden: bool = False,
+    layer_filter: set | None = None,
+    width: int = RM_PAGE_WIDTH,
+    height: int = RM_PAGE_HEIGHT,
+) -> list[tuple[str, Image.Image]]:
+    """Render .rm pages to PIL Images, returning them in page order.
+
+    Args:
+        rm_files: Mapping of page_uuid -> .rm bytes
+        page_order: Page UUIDs in display order (default: sorted keys)
+        include_hidden: Render hidden layers (e.g. PRESERVATION layer).
+            Ignored when layer_filter is set.
+        layer_filter: Render only items on these layer node_ids.
+            E.g. {CrdtId(0, 21)} for preservation-only view.
+        width: Output width in pixels
+        height: Output height in pixels
+
+    Returns:
+        List of (page_uuid, PIL Image) in display order
+    """
+    renderer = RmRenderer(width=width, height=height)
+    order = page_order or sorted(rm_files.keys())
+    result = []
+    for uuid in order:
+        if uuid not in rm_files:
+            continue
+        image = renderer.render_bytes(
+            rm_files[uuid],
+            include_hidden=include_hidden,
+            layer_filter=layer_filter,
+        )
+        result.append((uuid, image))
+    return result
+
+
+def image_to_png_bytes(image: Image.Image) -> bytes:
+    """Encode PIL Image to PNG bytes."""
+    buf = io.BytesIO()
+    image.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def compare_png_bytes(
+    test_png: bytes,
+    golden_png: bytes,
+    max_hash_distance: int = 10,
+) -> tuple[bool, int]:
+    """Compare two PNG images using perceptual hashing.
+
+    Args:
+        test_png: PNG bytes to test
+        golden_png: Golden PNG bytes to compare against
+        max_hash_distance: Maximum allowed hamming distance (0=identical)
+
+    Returns:
+        (passed, hash_distance) tuple
+    """
+    test_image = Image.open(io.BytesIO(test_png)).convert("RGB")
+    golden_image = Image.open(io.BytesIO(golden_png)).convert("RGB")
+    test_hash = compute_phash(test_image)
+    golden_hash = compute_phash(golden_image)
+    distance = test_hash - golden_hash
+    return distance <= max_hash_distance, distance
+
+
 def extract_annotation_bboxes(rm_data: bytes) -> list[Rectangle]:
     """Extract bounding boxes from all annotations in .rm file bytes.
 

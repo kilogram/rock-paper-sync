@@ -131,10 +131,19 @@ class RmRenderer:
     It extracts strokes and highlights from .rm files and draws them
     to a PIL Image with the correct coordinate transformations.
 
+    Layer filtering:
+        By default only visible layers are rendered. Pass include_hidden=True
+        to include hidden layers (e.g. the PRESERVATION layer for orphaned
+        annotations). Pass layer_filter to render only specific layers.
+
     Example:
         renderer = RmRenderer()
         image = renderer.render(Path("page.rm"))
         image.save("output.png")
+
+        # Render only the preservation layer (CrdtId(0, 21))
+        from rmscene import CrdtId
+        image = renderer.render_bytes(data, layer_filter={CrdtId(0, 21)})
     """
 
     def __init__(
@@ -154,29 +163,50 @@ class RmRenderer:
         self.height = height
         self.background_color = background_color
 
-    def render(self, rm_path: Path) -> Image.Image:
+    def render(self, rm_path: Path, **kwargs) -> Image.Image:
         """Render .rm file to PIL Image.
 
         Args:
             rm_path: Path to .rm file
+            **kwargs: Forwarded to render_bytes (include_hidden, layer_filter)
 
         Returns:
             PIL Image with rendered content
         """
         with open(rm_path, "rb") as f:
-            return self.render_bytes(f.read())
+            return self.render_bytes(f.read(), **kwargs)
 
-    def render_bytes(self, rm_bytes: bytes) -> Image.Image:
+    def render_bytes(
+        self,
+        rm_bytes: bytes,
+        include_hidden: bool = False,
+        layer_filter: set[CrdtId] | None = None,
+    ) -> Image.Image:
         """Render .rm bytes to PIL Image.
 
         Args:
             rm_bytes: Raw bytes of .rm file
+            include_hidden: If True, render items on hidden layers too.
+                Ignored when layer_filter is set. Default False.
+            layer_filter: If set, render ONLY items on these layer node_ids.
+                E.g. {CrdtId(0, 21)} renders only the PRESERVATION layer.
 
         Returns:
             PIL Image with rendered content
         """
         # Parse blocks
         blocks = list(rmscene.read_blocks(io.BytesIO(rm_bytes)))
+
+        # Build layer membership info
+        layer_visibility, group_to_layer = self._build_layer_info(blocks)
+
+        # Compute allowed layer set for filtering
+        if layer_filter is not None:
+            allowed_layers: set[CrdtId] | None = layer_filter
+        elif not include_hidden:
+            allowed_layers = {nid for nid, vis in layer_visibility.items() if vis}
+        else:
+            allowed_layers = None  # no filtering
 
         # Extract text first (needed for text rendering and anchor positioning)
         text, text_origin_x, text_origin_y, text_width, paragraph_styles = (
@@ -193,30 +223,77 @@ class RmRenderer:
         image = Image.new("RGBA", (self.width, self.height), (*self.background_color, 255))
         draw = ImageDraw.Draw(image)
 
-        # Render text first (background layer)
+        # Render text first (background layer — always shown for context)
         self._render_text(draw, text, text_origin_x, text_origin_y, text_width, paragraph_styles)
 
-        # Extract and render strokes
-        strokes = self._extract_strokes(blocks)
+        # Extract and render strokes (filtered by layer)
+        strokes = self._extract_strokes(blocks, allowed_layers, group_to_layer, layer_visibility)
         for stroke in strokes:
             self._render_stroke(draw, image, stroke, anchor_map)
 
-        # Extract and render highlights
-        highlights = self._extract_highlights(blocks)
+        # Extract and render highlights (filtered by layer)
+        highlights = self._extract_highlights(blocks, allowed_layers)
         for highlight in highlights:
             self._render_highlight(image, highlight)
 
         # Convert to RGB for final output
         return image.convert("RGB")
 
-    def save_png(self, rm_path: Path, output_path: Path) -> None:
+    def _build_layer_info(
+        self, blocks: list
+    ) -> tuple[dict[CrdtId, bool], dict[CrdtId, CrdtId]]:
+        """Build layer visibility map and group-value-to-layer map.
+
+        Returns:
+            layer_visibility: maps layer_node_id -> visible (bool)
+            group_to_layer: maps SceneGroupItemBlock.item.value -> parent layer node_id
+        """
+        layer_visibility: dict[CrdtId, bool] = {}
+        group_to_layer: dict[CrdtId, CrdtId] = {}
+
+        for block in blocks:
+            bname = type(block).__name__
+            if bname == "TreeNodeBlock":
+                nid = block.group.node_id
+                vis = block.group.visible.value if hasattr(block.group.visible, "value") else True
+                layer_visibility[nid] = vis
+            elif bname == "SceneGroupItemBlock":
+                if hasattr(block, "item") and hasattr(block.item, "value"):
+                    group_to_layer[block.item.value] = block.parent_id
+
+        return layer_visibility, group_to_layer
+
+    def _stroke_layer(
+        self,
+        stroke,
+        layer_visibility: dict[CrdtId, bool],
+        group_to_layer: dict[CrdtId, CrdtId],
+    ) -> CrdtId | None:
+        """Return the layer node_id for a stroke, or None if unknown."""
+        pid = stroke.parent_id
+        # Direct parent is a known layer (e.g. unanchored strokes on content layer)
+        if pid in layer_visibility:
+            return pid
+        # Parent is a group item; look up its layer
+        parent = group_to_layer.get(pid)
+        if parent in layer_visibility:
+            return parent
+        # One more level for nested groups
+        if parent is not None:
+            grandparent = group_to_layer.get(parent)
+            if grandparent in layer_visibility:
+                return grandparent
+        return None
+
+    def save_png(self, rm_path: Path, output_path: Path, **kwargs) -> None:
         """Render .rm file and save as PNG.
 
         Args:
             rm_path: Path to .rm file
             output_path: Path for output PNG
+            **kwargs: Forwarded to render_bytes (include_hidden, layer_filter)
         """
-        image = self.render(rm_path)
+        image = self.render(rm_path, **kwargs)
         image.save(output_path, "PNG")
 
     def _build_anchor_map(
@@ -360,13 +437,35 @@ class RmRenderer:
 
         return anchor_map
 
-    def _extract_strokes(self, blocks: list) -> list[SceneLineItemBlock]:
-        """Extract all stroke blocks from the block list."""
-        return [b for b in blocks if isinstance(b, SceneLineItemBlock)]
+    def _extract_strokes(
+        self,
+        blocks: list,
+        allowed_layers: set[CrdtId] | None,
+        group_to_layer: dict[CrdtId, CrdtId],
+        layer_visibility: dict[CrdtId, bool] | None = None,
+    ) -> list[SceneLineItemBlock]:
+        """Extract stroke blocks, filtered to allowed layers."""
+        strokes = [b for b in blocks if isinstance(b, SceneLineItemBlock)]
+        if allowed_layers is None:
+            return strokes
+        lv = layer_visibility or {}
+        result = []
+        for s in strokes:
+            layer = self._stroke_layer(s, lv, group_to_layer)
+            if layer in allowed_layers:
+                result.append(s)
+        return result
 
-    def _extract_highlights(self, blocks: list) -> list[SceneGlyphItemBlock]:
-        """Extract all highlight blocks from the block list."""
-        return [b for b in blocks if isinstance(b, SceneGlyphItemBlock)]
+    def _extract_highlights(
+        self,
+        blocks: list,
+        allowed_layers: set[CrdtId] | None,
+    ) -> list[SceneGlyphItemBlock]:
+        """Extract highlight blocks, filtered to allowed layers."""
+        highlights = [b for b in blocks if isinstance(b, SceneGlyphItemBlock)]
+        if allowed_layers is None:
+            return highlights
+        return [h for h in highlights if h.parent_id in allowed_layers]
 
     def _extract_text_with_styles(
         self, blocks: list

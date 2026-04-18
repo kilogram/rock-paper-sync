@@ -17,12 +17,17 @@ import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from rmscene import CrdtId
+
 from .protocol import DeviceInteractionManager, DocumentState, derive_test_id
 from .testdata import PhaseData, TestdataStore, TripData
 
 if TYPE_CHECKING:
     from .logging import Bench
     from .workspace import WorkspaceManager
+
+# Layer node_ids for preservation (hidden orphan) layer — CrdtId(0, 21)
+_PRESERVATION_LAYER_IDS: set[CrdtId] = {CrdtId(0, 21)}
 
 
 class OfflineEmulator(DeviceInteractionManager):
@@ -960,3 +965,74 @@ class OfflineEmulator(DeviceInteractionManager):
             trip_b.annotations.rm_files,
             tolerance_px=tolerance_px,
         )
+
+    def assert_trip_png_goldens(
+        self,
+        rm_files: dict[str, bytes],
+        trip_number: int,
+        page_order: list[str] | None = None,
+    ) -> None:
+        """Compare rendered PNGs against committed goldens (offline/replay mode).
+
+        Renders all-layers and hidden-only views for each page and compares
+        against goldens stored in testdata using perceptual hashing.
+        If a golden does not exist yet, logs a warning and skips.
+
+        Args:
+            rm_files: page_uuid -> .rm bytes
+            trip_number: Trip number (1-indexed)
+            page_order: Page UUIDs in display order
+        """
+        from .visual_comparison import (
+            compare_png_bytes,
+            image_to_png_bytes,
+            render_rm_pages,
+        )
+
+        test_id = self._current_test_id
+        if not test_id:
+            self.bench.warn("assert_trip_png_goldens: no test active, skipping")
+            return
+
+        order = page_order or sorted(rm_files.keys())
+        failures: list[str] = []
+
+        for page_idx, uuid in enumerate(order):
+            if uuid not in rm_files:
+                continue
+            page_label = f"page{page_idx + 1}"
+
+            for mode, kwargs in [
+                ("all", {"include_hidden": True}),
+                ("hidden", {"layer_filter": _PRESERVATION_LAYER_IDS}),
+            ]:
+                name = f"{page_label}_{mode}"
+                rendered = render_rm_pages({uuid: rm_files[uuid]}, **kwargs)
+                if not rendered:
+                    continue
+                _, image = rendered[0]
+                png_bytes = image_to_png_bytes(image)
+
+                golden = self.testdata_store.load_trip_png_golden(test_id, trip_number, name)
+                if golden is None:
+                    self.bench.warn(
+                        f"PNG golden '{name}' not found for trip {trip_number} "
+                        f"of '{test_id}' — run with --online to record"
+                    )
+                    continue
+
+                passed, distance = compare_png_bytes(png_bytes, golden)
+                if passed:
+                    self.bench.ok(
+                        f"Trip {trip_number}: {name} PNG matches golden (dist={distance})"
+                    )
+                else:
+                    failures.append(
+                        f"Trip {trip_number} '{name}': hash distance {distance} exceeds threshold"
+                    )
+                    self.bench.warn(f"Trip {trip_number}: {name} PNG MISMATCH (dist={distance})")
+
+        if failures:
+            raise AssertionError(
+                "PNG golden comparison failed:\n" + "\n".join(f"  {f}" for f in failures)
+            )

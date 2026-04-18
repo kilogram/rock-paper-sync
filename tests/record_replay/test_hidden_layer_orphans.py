@@ -213,6 +213,13 @@ def test_hidden_layer_orphans(device, workspace, fixtures_dir):
         "control" in t for t in trip2_texts
     ), "Trip 2: 'control highlight' should still be anchored after Section 1 deletion"
 
+    # PNG golden comparison: content + preservation layer renders
+    device.assert_trip_png_goldens(
+        trip2_state.rm_files,
+        trip_number=2,
+        page_order=trip2_state.page_uuids,
+    )
+
     device.observe_result(
         "Trip 2: Section 1 deleted.\n"
         f"  Orphan comments in markdown: {trip2_orphans}\n"
@@ -272,6 +279,13 @@ def test_hidden_layer_orphans(device, workspace, fixtures_dir):
         "control" in t for t in trip3_texts
     ), "Trip 3: 'control highlight' should survive Sections 2 & 3 deletion"
 
+    # PNG golden comparison: preservation layer should be larger than trip 2
+    device.assert_trip_png_goldens(
+        trip3_state.rm_files,
+        trip_number=3,
+        page_order=trip3_state.page_uuids,
+    )
+
     device.observe_result(
         "Trip 3: Sections 2 & 3 deleted.\n"
         f"  Orphan comments in markdown: {trip3_orphans}\n"
@@ -323,6 +337,13 @@ def test_hidden_layer_orphans(device, workspace, fixtures_dir):
     assert any(
         "control" in t for t in trip4_texts
     ), "Trip 4: 'control highlight' must survive through recovery trip"
+
+    # PNG golden comparison: orphan recovery — "preserved forever" back on content layer
+    device.assert_trip_png_goldens(
+        trip4_state.rm_files,
+        trip_number=4,
+        page_order=trip4_state.page_uuids,
+    )
 
     device.observe_result(
         "Trip 4: 'preserved forever' restored in recovery zone.\n"
