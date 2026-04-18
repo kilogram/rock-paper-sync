@@ -256,6 +256,7 @@ class RemarkableGenerator:
         existing_page_uuids: list[str] | None = None,
         existing_rm_files: list[Path | None] | None = None,
         orphan_blobs: list[bytes] | None = None,
+        orphan_annotation_ids: set[str] | None = None,
     ) -> RemarkableDocument:
         """Convert markdown document to reMarkable format.
 
@@ -273,6 +274,9 @@ class RemarkableGenerator:
             orphan_blobs: Serialised rmscene blocks for orphaned annotations (M5.5).
                          When provided, a hidden PRESERVATION layer is added to the
                          first page of the generated document.
+            orphan_annotation_ids: Annotation IDs that are now orphaned. These are
+                         excluded from the content layer so they only appear in
+                         the hidden PRESERVATION layer (avoids DUPLICATE_TREE_NODE).
 
         Returns:
             RemarkableDocument ready to be written to disk
@@ -340,7 +344,9 @@ class RemarkableGenerator:
                 f"Page {projection.page_index}: projection.annotations has {len(projection.annotations) if projection.annotations else 0} items"
             )
             if projection.annotations:
-                self._apply_annotations_to_page(page, projection, uuid_to_rm_path)
+                self._apply_annotations_to_page(
+                    page, projection, uuid_to_rm_path, orphan_annotation_ids
+                )
 
             # Always set source_rm_path if available (for preserving unreplaced strokes)
             if projection.page_uuid in uuid_to_rm_path:
@@ -373,6 +379,7 @@ class RemarkableGenerator:
         page: RemarkablePage,
         projection: PageProjection,
         uuid_to_rm_path: dict[str, Path],
+        orphan_annotation_ids: set[str] | None = None,
     ) -> None:
         """Apply annotations from PageProjection to RemarkablePage.
 
@@ -392,14 +399,19 @@ class RemarkableGenerator:
         page_text = projection.page_text
         new_origin = (self.geometry.text_pos_x, self.geometry.text_pos_y)
 
-        # Collect annotation IDs that are being applied to this page
+        # Collect annotation IDs that are being applied to this page.
+        # Orphaned annotations are excluded — they go to the PRESERVATION layer only.
         projection_annotation_ids: set[CrdtId] = set()
         for doc_anno in projection.annotations:
+            if orphan_annotation_ids and doc_anno.annotation_id in orphan_annotation_ids:
+                continue
             block = doc_anno.original_rm_block
             if block and hasattr(block, "item") and hasattr(block.item, "item_id"):
                 projection_annotation_ids.add(block.item.item_id)
 
         for doc_anno in projection.annotations:
+            if orphan_annotation_ids and doc_anno.annotation_id in orphan_annotation_ids:
+                continue
             block = doc_anno.original_rm_block
             if block is None:
                 logger.warning(f"Annotation {doc_anno.annotation_id} has no original block")

@@ -459,6 +459,17 @@ class SyncEngine:
                 finally:
                     tmp_path.unlink()
 
+            # Detect orphans from content-only changes (pull was skipped)
+            # Must run before loading orphan_blobs so it can populate the DB first.
+            push_orphan_ids: set[str] = set()
+            if not annotations_also_changed and existing_rm_files and existing_uuid:
+                push_orphan_ids = self._detect_push_orphans(
+                    vault_name=vault.name,
+                    obsidian_path=relative_path,
+                    existing_rm_files=existing_rm_files,
+                    new_content=raw_content,
+                )
+
             # Create document with clean content (no markers)
             # Use clean_doc directly - parser strips markers before computing hash
             orphan_blobs = [
@@ -474,6 +485,7 @@ class SyncEngine:
                 existing_page_uuids,
                 existing_rm_files,
                 orphan_blobs=orphan_blobs or None,
+                orphan_annotation_ids=push_orphan_ids or None,
             )
 
             # Generate binary .rm files for each page
@@ -610,6 +622,78 @@ class SyncEngine:
             logger.error(f"Failed to delete {vault_name}:{relative_path}: {e}", exc_info=True)
             self.state.log_sync_action(vault_name, relative_path, "error", f"Delete failed: {e}")
             return False
+
+    def _detect_push_orphans(
+        self,
+        vault_name: str,
+        obsidian_path: str,
+        existing_rm_files: list[Path | None],
+        new_content: str,
+    ) -> set[str]:
+        """Detect orphaned annotations when markdown changed but device annotations didn't.
+
+        Called during push when only content changed (pull sync was skipped).
+        Builds a DocumentModel from the existing .rm files, re-anchors each annotation
+        against the new markdown, records orphans with serialised blocks in the DB,
+        and returns the set of orphaned annotation IDs for content-layer exclusion.
+        """
+        from .annotations.document_model import DocumentModel
+        from .annotations.services.hidden_layer import serialize_annotation_blocks
+        from .layout import DEFAULT_DEVICE
+        from .state import OrphanedAnnotation
+
+        valid_files = [p for p in existing_rm_files if p and p.exists()]
+        if not valid_files:
+            return set()
+
+        try:
+            document_model = DocumentModel.from_rm_files(valid_files, DEFAULT_DEVICE)
+        except Exception as e:
+            logger.warning(f"Push orphan detection: could not build document model: {e}")
+            return set()
+
+        if not document_model.annotations:
+            return set()
+
+        # Re-anchor every annotation against the updated markdown
+        orphaned: list = []
+        for annotation in document_model.annotations:
+            if not annotation.anchor_context:
+                orphaned.append(annotation)
+                continue
+            old_text = annotation.anchor_context.text_content
+            resolved = annotation.anchor_context.resolve(old_text, new_content)
+            if not resolved or resolved.confidence < 0.6:
+                orphaned.append(annotation)
+
+        # Replace stored orphan records for this file
+        self.state.delete_all_orphaned_annotations(vault_name, obsidian_path)
+
+        orphan_annotation_ids: set[str] = set()
+        for annotation in orphaned:
+            anchor_text = (
+                annotation.anchor_context.text_content if annotation.anchor_context else None
+            )
+            blocks_blob = serialize_annotation_blocks(annotation)
+            orphan_record = OrphanedAnnotation(
+                vault_name=vault_name,
+                obsidian_path=obsidian_path,
+                annotation_id=annotation.annotation_id,
+                annotation_type=annotation.annotation_type,
+                original_anchor_text=anchor_text,
+                orphaned_at=int(time.time()),
+                blocks_blob=blocks_blob,
+                source_page_idx=annotation.source_page_idx,
+            )
+            self.state.add_orphaned_annotation(orphan_record)
+            orphan_annotation_ids.add(annotation.annotation_id)
+
+        if orphan_annotation_ids:
+            logger.info(
+                f"Push orphan detection: {len(orphan_annotation_ids)} orphaned annotation(s) "
+                f"for {vault_name}:{obsidian_path}"
+            )
+        return orphan_annotation_ids
 
     def _retry_with_backoff(
         self,
