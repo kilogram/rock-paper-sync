@@ -65,6 +65,10 @@ DMP_MATCH_DISTANCE = 1000  # Max distance from expected position to search
 # Fuzzy matching thresholds
 DEFAULT_FUZZY_THRESHOLD = 0.8  # Minimum similarity for fuzzy match acceptance
 DISAMBIGUATION_THRESHOLD = 0.5  # Minimum score to accept disambiguated match
+# Single-match context threshold: a single occurrence with very different surrounding
+# text (e.g., annotation text deleted from its section but found in a footnote)
+# should be treated as orphaned rather than silently jumping to the wrong location.
+SINGLE_MATCH_CONTEXT_THRESHOLD = 0.15
 
 # Similarity score weights (must sum to 1.0)
 WEIGHT_TEXT_CONTENT = 0.5  # Primary: text hash/similarity
@@ -530,12 +534,15 @@ class AnchorContext:
         hash_matches = self._find_by_hash(new_text)
         if len(hash_matches) == 1:
             start, end = hash_matches[0]
-            return AnchorResolution(
-                start_offset=start,
-                end_offset=end,
-                confidence=1.0,
-                match_type="exact",
-            )
+            if self._context_plausible(start, end, new_text):
+                return AnchorResolution(
+                    start_offset=start,
+                    end_offset=end,
+                    confidence=1.0,
+                    match_type="exact",
+                )
+            # Context mismatch: the text exists once but in a completely different
+            # location — fall through so it becomes an orphan.
         elif len(hash_matches) > 1:
             # Multiple matches - use context to disambiguate
             best = self._disambiguate_by_context(hash_matches, new_text)
@@ -612,6 +619,30 @@ class AnchorContext:
 
         return -1
 
+    def _context_plausible(self, start: int, end: int, text: str) -> bool:
+        """Return True if the context around [start, end) in text matches stored context.
+
+        For single-match cases we must still verify the surrounding text is similar
+        to the original — otherwise an annotation deleted from one section can
+        silently jump to a coincidental occurrence in a completely different section.
+        If we have no stored context at all, we optimistically accept the match.
+        """
+        if not self.context_before and not self.context_after:
+            return True
+        before = text[max(0, start - CONTEXT_WINDOW_SIZE) : start]
+        after = text[end : end + CONTEXT_WINDOW_SIZE]
+        before_score = (
+            difflib.SequenceMatcher(None, self.context_before, before).ratio()
+            if self.context_before
+            else 1.0
+        )
+        after_score = (
+            difflib.SequenceMatcher(None, self.context_after, after).ratio()
+            if self.context_after
+            else 1.0
+        )
+        return (before_score + after_score) / 2 >= SINGLE_MATCH_CONTEXT_THRESHOLD
+
     def _find_by_hash(self, full_text: str) -> list[tuple[int, int]]:
         """Find all spans matching content hash."""
         matches = []
@@ -663,11 +694,15 @@ class AnchorContext:
             start = pos + 1
 
         if len(all_offsets) == 1:
-            # Single match - use it
             offset = all_offsets[0]
+            end = offset + len(self.text_content)
+            if not self._context_plausible(offset, end, new_text):
+                # Single occurrence but surrounding context is completely different —
+                # the text has moved to an unrelated location; treat as no match.
+                return None
             return AnchorResolution(
                 start_offset=offset,
-                end_offset=offset + len(self.text_content),
+                end_offset=end,
                 confidence=1.0,
                 match_type="fuzzy",
             )
