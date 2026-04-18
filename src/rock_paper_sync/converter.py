@@ -467,7 +467,7 @@ class SyncEngine:
                     vault_name=vault.name,
                     obsidian_path=relative_path,
                     existing_rm_files=existing_rm_files,
-                    new_content=raw_content,
+                    new_content=strip_annotation_markers(raw_content),
                 )
 
             # Create document with clean content (no markers)
