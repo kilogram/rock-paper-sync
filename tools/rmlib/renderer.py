@@ -31,6 +31,8 @@ from rmscene import CrdtId, RootTextBlock, SceneGlyphItemBlock, SceneLineItemBlo
 
 from src.rock_paper_sync.coordinates import (
     END_OF_DOC_MARKER as END_OF_DOC_ANCHOR_MARKER,
+)
+from src.rock_paper_sync.coordinates import (
     AnchorResolver as ParentAnchorResolver,
 )
 
@@ -269,12 +271,17 @@ class RmRenderer:
         layer_visibility: dict[CrdtId, bool],
         group_to_layer: dict[CrdtId, CrdtId],
     ) -> CrdtId | None:
-        """Return the layer node_id for a stroke, or None if unknown."""
+        """Return the layer node_id for a stroke, or None if unknown.
+
+        Stroke parent_id is the stroke's own TreeNodeBlock node_id, which
+        also appears in layer_visibility (the stroke bundle has its own
+        TreeNodeBlock). We must walk group_to_layer first to find the
+        actual containing layer, not the stroke's own node.
+        """
         pid = stroke.parent_id
-        # Direct parent is a known layer (e.g. unanchored strokes on content layer)
-        if pid in layer_visibility:
-            return pid
-        # Parent is a group item; look up its layer
+        # Walk group_to_layer to find the actual containing layer.
+        # This must be checked before layer_visibility because stroke bundle
+        # nodes also appear in layer_visibility (they have their own TreeNodeBlock).
         parent = group_to_layer.get(pid)
         if parent in layer_visibility:
             return parent
@@ -283,6 +290,9 @@ class RmRenderer:
             grandparent = group_to_layer.get(parent)
             if grandparent in layer_visibility:
                 return grandparent
+        # Direct parent is a layer (e.g. unanchored strokes without a SceneGroupItemBlock)
+        if pid in layer_visibility:
+            return pid
         return None
 
     def save_png(self, rm_path: Path, output_path: Path, **kwargs) -> None:

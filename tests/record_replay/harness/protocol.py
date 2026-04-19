@@ -316,8 +316,8 @@ class DeviceInteractionProtocol(Protocol):
 
         Renders two views per page and either saves them (online/record mode)
         or compares against previously saved goldens (offline/replay mode):
-          - ``page{N}_all.png``    — all layers, hidden layers included
-          - ``page{N}_hidden.png`` — hidden/preservation layer items only
+          - ``page{N}_visible.png`` — visible layers only (matches device display)
+          - ``page{N}_hidden.png``  — hidden/preservation layer items only
 
         In online (record) mode:
             Renders and saves to testdata as committed goldens.

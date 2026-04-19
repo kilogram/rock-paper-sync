@@ -120,6 +120,11 @@ def pytest_addoption(parser):
         default=False,
         help="List available recording phases for a test",
     )
+    parser.addoption(
+        "--device-host",
+        default=None,
+        help="reMarkable device IP for SSH thumbnail capture (e.g. 192.168.1.42; online mode only)",
+    )
 
 
 def pytest_configure(config):
@@ -511,7 +516,14 @@ def device(request, workspace, testdata_store, bench, rmfakecloud) -> "DeviceInt
     if online:
         OnlineDevice = _get_online_device()  # noqa: N806
         resume_from_phase = request.config.getoption("--resume-from-phase")
-        dev = OnlineDevice(workspace, testdata_store, bench, resume_from_phase=resume_from_phase)
+        device_host = request.config.getoption("--device-host")
+        dev = OnlineDevice(
+            workspace,
+            testdata_store,
+            bench,
+            resume_from_phase=resume_from_phase,
+            device_host=device_host,
+        )
     else:
         OfflineEmulator = _get_offline_emulator()  # noqa: N806
         # cloud_url comes from workspace (set during workspace setup)

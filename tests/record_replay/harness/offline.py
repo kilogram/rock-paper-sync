@@ -974,7 +974,7 @@ class OfflineEmulator(DeviceInteractionManager):
     ) -> None:
         """Compare rendered PNGs against committed goldens (offline/replay mode).
 
-        Renders all-layers and hidden-only views for each page and compares
+        Renders visible-only and hidden-only views for each page and compares
         against goldens stored in testdata using perceptual hashing.
         If a golden does not exist yet, logs a warning and skips.
 
@@ -1003,7 +1003,7 @@ class OfflineEmulator(DeviceInteractionManager):
             page_label = f"page{page_idx + 1}"
 
             for mode, kwargs in [
-                ("all", {"include_hidden": True}),
+                ("visible", {"include_hidden": False}),
                 ("hidden", {"layer_filter": _PRESERVATION_LAYER_IDS}),
             ]:
                 name = f"{page_label}_{mode}"

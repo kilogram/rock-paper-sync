@@ -95,6 +95,7 @@ class OnlineDevice(DeviceInteractionManager):
         testdata_store: TestdataStore,
         bench: "Bench",
         resume_from_phase: int | None = None,
+        device_host: str | None = None,
     ) -> None:
         """Initialize online device recorder.
 
@@ -103,10 +104,12 @@ class OnlineDevice(DeviceInteractionManager):
             testdata_store: Store for saving testdata artifacts
             bench: Bench utilities for logging
             resume_from_phase: Phase number to resume from (None = fresh start)
+            device_host: reMarkable device IP for SSH thumbnail capture (optional)
         """
         self.workspace = workspace
         self.testdata_store = testdata_store
         self.bench = bench
+        self._device_host = device_host
 
         # Recording state (trip-based)
         self._current_test_id: str | None = None
@@ -599,8 +602,9 @@ class OnlineDevice(DeviceInteractionManager):
 
         Saves two views per page to testdata for the user to inspect and
         commit as approved goldens:
-          - page{N}_all.png    — all layers, hidden layers included
-          - page{N}_hidden.png — preservation layer items only
+          - page{N}_visible.png     — visible layers only (matches device display)
+          - page{N}_hidden.png      — preservation layer items only
+          - page{N}_device_thumb.png — device thumbnail via SSH (if --device-host set)
 
         Args:
             rm_files: page_uuid -> .rm bytes
@@ -628,7 +632,7 @@ class OnlineDevice(DeviceInteractionManager):
             page_label = f"page{page_idx + 1}"
 
             for mode, kwargs in [
-                ("all", {"include_hidden": True}),
+                ("visible", {"include_hidden": False}),
                 ("hidden", {"layer_filter": preservation_ids}),
             ]:
                 name = f"{page_label}_{mode}"
@@ -643,11 +647,72 @@ class OnlineDevice(DeviceInteractionManager):
                 saved.append(name)
                 self.bench.ok(f"Trip {trip_number}: saved PNG golden '{name}' → {path.name}")
 
+        # Optionally capture device thumbnails via SSH for ground-truth comparison
+        if self._device_host and self._doc_uuid:
+            device_thumbs = self._capture_device_thumbnails(self._doc_uuid)
+            for page_idx, uuid in enumerate(order):
+                if uuid in device_thumbs:
+                    name = f"page{page_idx + 1}_device_thumb"
+                    path = self.testdata_store.save_trip_png_golden(
+                        self._current_test_id, trip_number, name, device_thumbs[uuid]
+                    )
+                    saved.append(name)
+                    self.bench.ok(
+                        f"Trip {trip_number}: saved device thumbnail '{name}' → {path.name}"
+                    )
+
         if saved:
             self.bench.observe(
                 f"Trip {trip_number}: Saved {len(saved)} PNG golden(s). "
                 f"Inspect and commit to approve: {', '.join(saved)}"
             )
+
+    def _capture_device_thumbnails(self, doc_uuid: str) -> dict[str, bytes]:
+        """Capture device thumbnails from reMarkable device via SSH.
+
+        Returns:
+            Mapping of page_uuid -> PNG bytes
+        """
+        import subprocess
+
+        thumbnails: dict[str, bytes] = {}
+        thumb_dir = f"/home/root/.local/share/remarkable/xochitl/{doc_uuid}.thumbnails"
+
+        try:
+            list_result = subprocess.run(
+                ["ssh", f"root@{self._device_host}", f"ls {thumb_dir}/*.png 2>/dev/null"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            if list_result.returncode != 0:
+                self.bench.warn(f"No device thumbnails found at {thumb_dir}")
+                return thumbnails
+
+            for thumb_path in list_result.stdout.splitlines():
+                thumb_path = thumb_path.strip()
+                if not thumb_path:
+                    continue
+                page_uuid = Path(thumb_path).stem
+                cat_result = subprocess.run(
+                    ["ssh", f"root@{self._device_host}", f"cat {thumb_path}"],
+                    capture_output=True,
+                    timeout=15,
+                )
+                if cat_result.returncode == 0:
+                    thumbnails[page_uuid] = cat_result.stdout
+                    self.bench.ok(
+                        f"  Downloaded device thumbnail: {page_uuid} ({len(cat_result.stdout)} bytes)"
+                    )
+                else:
+                    self.bench.warn(f"  Failed to download thumbnail: {page_uuid}")
+
+        except subprocess.TimeoutExpired:
+            self.bench.warn("SSH thumbnail capture timed out")
+        except Exception as e:
+            self.bench.warn(f"SSH thumbnail capture failed: {e}")
+
+        return thumbnails
 
     def compare_with_golden(
         self,
