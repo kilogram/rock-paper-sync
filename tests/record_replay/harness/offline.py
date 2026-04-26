@@ -67,6 +67,7 @@ class OfflineEmulator(DeviceInteractionManager):
         workspace: "WorkspaceManager",
         testdata_store: TestdataStore,
         bench: "Bench",
+        update_goldens: bool = False,
     ) -> None:
         """Initialize offline emulator.
 
@@ -74,10 +75,12 @@ class OfflineEmulator(DeviceInteractionManager):
             workspace: Workspace manager for sync operations (provides cloud_url)
             testdata_store: Store for loading testdata
             bench: Bench utilities for logging
+            update_goldens: When True, save rendered PNGs as goldens instead of comparing
         """
         self.workspace = workspace
         self.testdata_store = testdata_store
         self.bench = bench
+        self._update_goldens = update_goldens
         self._current_test_id: str | None = None
         self._doc_uuid: str | None = None
         self._cached_page_order: list[str] = []
@@ -1012,6 +1015,13 @@ class OfflineEmulator(DeviceInteractionManager):
                     continue
                 _, image = rendered[0]
                 png_bytes = image_to_png_bytes(image)
+
+                if self._update_goldens:
+                    path = self.testdata_store.save_trip_png_golden(
+                        test_id, trip_number, name, png_bytes
+                    )
+                    self.bench.ok(f"Trip {trip_number}: saved PNG golden '{name}' → {path.name}")
+                    continue
 
                 golden = self.testdata_store.load_trip_png_golden(test_id, trip_number, name)
                 if golden is None:

@@ -604,8 +604,6 @@ class OnlineDevice(DeviceInteractionManager):
         commit as approved goldens:
           - page{N}_visible.png     — visible layers only (matches device display)
           - page{N}_hidden.png      — preservation layer items only
-          - page{N}_device_thumb.png — device thumbnail via SSH (if --device-host set)
-
         Args:
             rm_files: page_uuid -> .rm bytes
             trip_number: Trip number (1-indexed)
@@ -646,20 +644,6 @@ class OnlineDevice(DeviceInteractionManager):
                 )
                 saved.append(name)
                 self.bench.ok(f"Trip {trip_number}: saved PNG golden '{name}' → {path.name}")
-
-        # Optionally capture device thumbnails via SSH for ground-truth comparison
-        if self._device_host and self._doc_uuid:
-            device_thumbs = self._capture_device_thumbnails(self._doc_uuid)
-            for page_idx, uuid in enumerate(order):
-                if uuid in device_thumbs:
-                    name = f"page{page_idx + 1}_device_thumb"
-                    path = self.testdata_store.save_trip_png_golden(
-                        self._current_test_id, trip_number, name, device_thumbs[uuid]
-                    )
-                    saved.append(name)
-                    self.bench.ok(
-                        f"Trip {trip_number}: saved device thumbnail '{name}' → {path.name}"
-                    )
 
         if saved:
             self.bench.observe(

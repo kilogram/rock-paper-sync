@@ -125,6 +125,12 @@ def pytest_addoption(parser):
         default=None,
         help="reMarkable device IP for SSH thumbnail capture (e.g. 192.168.1.42; online mode only)",
     )
+    parser.addoption(
+        "--update-goldens",
+        action="store_true",
+        default=False,
+        help="Offline mode: re-render and overwrite PNG goldens from current pipeline output",
+    )
 
 
 def pytest_configure(config):
@@ -526,8 +532,9 @@ def device(request, workspace, testdata_store, bench, rmfakecloud) -> "DeviceInt
         )
     else:
         OfflineEmulator = _get_offline_emulator()  # noqa: N806
+        update_goldens = request.config.getoption("--update-goldens")
         # cloud_url comes from workspace (set during workspace setup)
-        dev = OfflineEmulator(workspace, testdata_store, bench)
+        dev = OfflineEmulator(workspace, testdata_store, bench, update_goldens=update_goldens)
 
         # Load specific test artifact if provided
         if test_artifact:

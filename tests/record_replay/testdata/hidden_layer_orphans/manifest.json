@@ -1,0 +1,11 @@
+{
+  "test_id": "hidden_layer_orphans",
+  "format": "trips",
+  "created_at": "2026-04-25T20:52:00.784442",
+  "description": "Hidden layer orphan preservation (M5.5, 4 trips)",
+  "doc_uuid": "d6c5c5fe-26b0-469d-9f6e-08d7c0ffa7b7",
+  "trips_recorded": [
+    1
+  ],
+  "has_golden": false
+}

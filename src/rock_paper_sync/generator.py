@@ -10,6 +10,10 @@ import time
 import uuid as uuid_module
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from rock_paper_sync.annotations.services.orphan_triage import OrphanLedger, OrphanRecord
 
 import rmscene
 from rmscene.crdt_sequence import CrdtId
@@ -128,6 +132,7 @@ class RemarkableDocument:
     parent_uuid: str
     pages: list[RemarkablePage]
     modified_time: int
+    recovered_annotation_ids: frozenset[str] = field(default_factory=frozenset)
 
 
 class RemarkableGenerator:
@@ -255,8 +260,7 @@ class RemarkableGenerator:
         doc_uuid: str | None = None,
         existing_page_uuids: list[str] | None = None,
         existing_rm_files: list[Path | None] | None = None,
-        orphan_blobs: list[bytes] | None = None,
-        orphan_annotation_ids: set[str] | None = None,
+        orphan_ledger: "OrphanLedger | None" = None,
     ) -> RemarkableDocument:
         """Convert markdown document to reMarkable format.
 
@@ -271,21 +275,23 @@ class RemarkableGenerator:
             existing_rm_files: List of paths to existing .rm files for annotation preservation.
                               List should match existing_page_uuids in length and order.
                               None entries indicate no existing file for that page.
-            orphan_blobs: Serialised rmscene blocks for orphaned annotations (M5.5).
-                         When provided, a hidden PRESERVATION layer is added to the
-                         first page of the generated document.
-            orphan_annotation_ids: Annotation IDs that are now orphaned. These are
-                         excluded from the content layer so they only appear in
-                         the hidden PRESERVATION layer (avoids DUPLICATE_TREE_NODE).
+            orphan_ledger: All orphan state for this document. OrphanTriage partitions records
+                          into recovered (visible layer) and preserved (hidden PRESERVATION
+                          layer). push_orphan_ids within the ledger are excluded from the
+                          content layer to avoid DUPLICATE_TREE_NODE.
 
         Returns:
-            RemarkableDocument ready to be written to disk
+            RemarkableDocument ready to be written to disk. recovered_annotation_ids
+            lists IDs that were promoted from the hidden layer back to the content
+            layer; the caller should delete those records from the DB after success.
 
         Note:
             When existing_rm_files is provided, annotations (strokes and highlights) from
             those files will be extracted and preserved in the new document, repositioned
             to match the updated content based on text proximity.
         """
+        from rock_paper_sync.annotations.services.orphan_triage import OrphanLedger, OrphanTriage
+
         # Reuse existing UUID for updates, or generate new one for new documents
         doc_uuid = doc_uuid or str(uuid_module.uuid4())
         timestamp = int(time.time() * 1000)
@@ -297,6 +303,10 @@ class RemarkableGenerator:
             self.geometry,
             allow_paragraph_splitting=self.layout.allow_paragraph_splitting,
         )
+
+        # Triage orphan records: partition into recovered (visible) vs preserved (hidden).
+        ledger = orphan_ledger or OrphanLedger(records=())
+        decision = OrphanTriage(self._fuzzy_threshold).triage(ledger, new_model)
 
         # If we have existing .rm files, load old model and migrate annotations
         if existing_rm_files:
@@ -316,6 +326,32 @@ class RemarkableGenerator:
                         f"Migrated {len(report.migrations)} annotations, "
                         f"{len(report.orphans)} orphaned (success rate: {report.success_rate:.1%})"
                     )
+
+        # Inject recovered orphans into the visible layer.
+        # Done after the merge so they don't go through the merger a second time.
+        if decision.recovered:
+            recovered_doc_annos = [r.annotation for r in decision.recovered]
+            all_annotations = list(new_model.annotations) + recovered_doc_annos
+            from rock_paper_sync.annotations.model import AnnotationStore
+
+            annotation_store = AnnotationStore.from_annotations(
+                annotations=all_annotations,
+                full_text=new_model.full_text,
+                cluster_strokes=True,
+            )
+            new_model = DocumentModel(
+                paragraphs=new_model.paragraphs,
+                content_blocks=new_model.content_blocks,
+                full_text=new_model.full_text,
+                annotations=all_annotations,
+                annotation_store=annotation_store,
+                geometry=new_model.geometry,
+                lines_per_page=new_model.lines_per_page,
+                allow_paragraph_splitting=new_model.allow_paragraph_splitting,
+            )
+            logger.info(
+                f"Injected {len(recovered_doc_annos)} recovered orphan(s) into visible layer"
+            )
 
         # Project to pages - DocumentModel is authoritative for pagination
         projections = new_model.project_to_pages(existing_page_uuids, self.layout_engine)
@@ -345,7 +381,7 @@ class RemarkableGenerator:
             )
             if projection.annotations:
                 self._apply_annotations_to_page(
-                    page, projection, uuid_to_rm_path, orphan_annotation_ids
+                    page, projection, uuid_to_rm_path, decision.excluded_ids or None
                 )
 
             # Always set source_rm_path if available (for preserving unreplaced strokes)
@@ -357,9 +393,8 @@ class RemarkableGenerator:
 
             pages.append(page)
 
-        # M5.5: attach orphan blobs to page 0 for hidden-layer preservation
-        if orphan_blobs and pages:
-            pages[0].orphan_blobs = orphan_blobs
+        # M5.5: attach preserved orphan blobs to the correct page (per source_page_idx).
+        self._attach_preservation_layers(pages, decision.preserved)
 
         logger.debug(
             f"Generated document {doc_uuid} with {len(pages)} page(s) "
@@ -372,6 +407,7 @@ class RemarkableGenerator:
             parent_uuid=parent_uuid,
             pages=pages,
             modified_time=timestamp,
+            recovered_annotation_ids=frozenset(r.record.annotation_id for r in decision.recovered),
         )
 
     def _apply_annotations_to_page(
@@ -379,7 +415,7 @@ class RemarkableGenerator:
         page: RemarkablePage,
         projection: PageProjection,
         uuid_to_rm_path: dict[str, Path],
-        orphan_annotation_ids: set[str] | None = None,
+        orphan_annotation_ids: "set[str] | frozenset[str] | None" = None,
     ) -> None:
         """Apply annotations from PageProjection to RemarkablePage.
 
@@ -601,6 +637,28 @@ class RemarkableGenerator:
         except Exception as e:
             logger.warning(f"Failed to extract text blocks from {rm_file_path}: {e}")
             return [], self.geometry.text_pos_y, ""
+
+    def _attach_preservation_layers(
+        self,
+        pages: list[RemarkablePage],
+        preserved: "tuple[OrphanRecord, ...]",
+    ) -> None:
+        """Route preserved orphan blobs to the correct page's hidden layer.
+
+        Uses source_page_idx to put each blob on the page where the annotation
+        originally lived. Falls back to page 0 when the index is absent or
+        out of range (e.g. the document shrank).
+        """
+        if not preserved or not pages:
+            return
+        page_blobs: dict[int, list[bytes]] = {}
+        for record in preserved:
+            idx = 0
+            if record.source_page_idx is not None and record.source_page_idx < len(pages):
+                idx = record.source_page_idx
+            page_blobs.setdefault(idx, []).append(record.blocks_blob)
+        for idx, blobs in page_blobs.items():
+            pages[idx].orphan_blobs = blobs
 
     def paginate_content(self, blocks: list[ContentBlock]) -> list[list[ContentBlock]]:
         """Split content blocks into pages based on line count.

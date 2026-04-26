@@ -459,8 +459,14 @@ class SyncEngine:
                 finally:
                     tmp_path.unlink()
 
-            # Detect orphans from content-only changes (pull was skipped)
-            # Must run before loading orphan_blobs so it can populate the DB first.
+            from rock_paper_sync.annotations.services.orphan_triage import OrphanLedger
+
+            # Snapshot records BEFORE detection: _detect_push_orphans calls
+            # delete_all_orphaned_annotations, which would destroy the blobs needed
+            # to recover annotations whose text reappears (e.g. trip 4 re-anchoring).
+            pre_detection_records = self.state.get_orphaned_annotations(vault.name, relative_path)
+
+            # Detect orphans from content-only changes (pull was skipped).
             push_orphan_ids: set[str] = set()
             if not annotations_also_changed and existing_rm_files and existing_uuid:
                 push_orphan_ids = self._detect_push_orphans(
@@ -470,23 +476,35 @@ class SyncEngine:
                     new_content=strip_annotation_markers(raw_content),
                 )
 
-            # Create document with clean content (no markers)
-            # Use clean_doc directly - parser strips markers before computing hash
-            orphan_blobs = [
-                blob
-                for _, _, blob in self.state.get_orphan_blobs_for_document(
+            # Merge pre- and post-detection records:
+            # - Post-detection records: current orphans to preserve on hidden layer.
+            # - Pre-detection records absent from post-detection: deleted by _detect_push_orphans
+            #   because their anchor text returned → candidates for recovery on visible layer.
+            if push_orphan_ids:
+                post_detection_records = self.state.get_orphaned_annotations(
                     vault.name, relative_path
                 )
-            ]
+                post_ids = {r.annotation_id for r in post_detection_records}
+                recoverable = [r for r in pre_detection_records if r.annotation_id not in post_ids]
+                combined_records = post_detection_records + recoverable
+            else:
+                combined_records = pre_detection_records
+
+            ledger = OrphanLedger.build(
+                records=combined_records,
+                push_orphan_ids=push_orphan_ids,
+            )
             rm_doc = self.generator.generate_document(
                 clean_doc,
                 parent_uuid,
                 existing_uuid,
                 existing_page_uuids,
                 existing_rm_files,
-                orphan_blobs=orphan_blobs or None,
-                orphan_annotation_ids=push_orphan_ids or None,
+                orphan_ledger=ledger,
             )
+            # Commit DB cleanup only after generation succeeded (no exception above).
+            for _aid in rm_doc.recovered_annotation_ids:
+                self.state.delete_orphaned_annotation(vault.name, relative_path, _aid)
 
             # Generate binary .rm files for each page
             pages_with_data = [

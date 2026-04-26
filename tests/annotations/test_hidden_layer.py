@@ -595,6 +595,21 @@ class TestGeneratorOrphanBlobsIntegration:
 
         return RemarkableGenerator(LayoutConfig())
 
+    def _make_ledger(self, blobs: list[bytes], source_page_idx: int | None = None):
+        from rock_paper_sync.annotations.services.orphan_triage import OrphanLedger, OrphanRecord
+
+        records = tuple(
+            OrphanRecord(
+                annotation_id=str(i),
+                annotation_type="highlight",
+                original_anchor_text=None,  # no anchor text → triage always preserves
+                source_page_idx=source_page_idx,
+                blocks_blob=b,
+            )
+            for i, b in enumerate(blobs)
+        )
+        return OrphanLedger(records=records)
+
     def _make_md_doc(self, title="Test", content="Hello world"):
         import tempfile
         from pathlib import Path
@@ -615,7 +630,7 @@ class TestGeneratorOrphanBlobsIntegration:
         blob = _minimal_preservation_blob()
         gen = self._make_generator()
 
-        rm_doc = gen.generate_document(self._make_md_doc(), orphan_blobs=[blob])
+        rm_doc = gen.generate_document(self._make_md_doc(), orphan_ledger=self._make_ledger([blob]))
 
         assert rm_doc.pages[0].orphan_blobs == [blob]
 
@@ -629,7 +644,7 @@ class TestGeneratorOrphanBlobsIntegration:
     def test_generate_rm_file_with_blobs_produces_preservation_layer(self):
         blob = _minimal_preservation_blob()
         gen = self._make_generator()
-        rm_doc = gen.generate_document(self._make_md_doc(), orphan_blobs=[blob])
+        rm_doc = gen.generate_document(self._make_md_doc(), orphan_ledger=self._make_ledger([blob]))
         rm_bytes = gen.generate_rm_file(rm_doc.pages[0])
 
         blocks = list(rmscene.read_blocks(io.BytesIO(rm_bytes)))
@@ -641,7 +656,7 @@ class TestGeneratorOrphanBlobsIntegration:
     def test_generate_rm_file_preservation_layer_is_invisible(self):
         blob = _minimal_preservation_blob()
         gen = self._make_generator()
-        rm_doc = gen.generate_document(self._make_md_doc(), orphan_blobs=[blob])
+        rm_doc = gen.generate_document(self._make_md_doc(), orphan_ledger=self._make_ledger([blob]))
         rm_bytes = gen.generate_rm_file(rm_doc.pages[0])
 
         blocks = list(rmscene.read_blocks(io.BytesIO(rm_bytes)))
@@ -668,7 +683,7 @@ class TestGeneratorOrphanBlobsIntegration:
 
         blob = _minimal_preservation_blob()
         gen = self._make_generator()
-        rm_doc = gen.generate_document(md_doc, orphan_blobs=[blob])
+        rm_doc = gen.generate_document(md_doc, orphan_ledger=self._make_ledger([blob]))
 
         assert len(rm_doc.pages) >= 2, "Expected multiple pages for this test to be meaningful"
         assert rm_doc.pages[0].orphan_blobs == [blob]

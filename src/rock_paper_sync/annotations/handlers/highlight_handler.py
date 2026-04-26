@@ -941,19 +941,12 @@ class HighlightHandler:
 
         logger.debug(f"Highlight '{actual_text[:30]}...': new_offset={new_offset}")
 
-        # Step 4: Choose positioning strategy
-        # Delta-based: Preserves device's pixel-perfect positions, just applies shift
-        # Layout-based: Recalculates from scratch using our font metrics
-        #
-        # Use delta-based when:
-        # - old_text is available (same page scenario)
-        # - highlight text can be found in old_text
-        # - rect count doesn't change (no reflow)
-        #
-        # Fall back to layout-based when:
-        # - Cross-page movement (no old_text)
-        # - Text reflows to different number of lines
-        # - Can't find highlight in old_text
+        # Step 4: Place rectangles using layout-based positioning.
+        # We always recompute rects from the layout engine so that highlight
+        # positions are consistent with where the renderer draws text.
+        # Delta-based positioning (applying device rect offsets via engine delta)
+        # causes highlights to appear ~1 line off because our PIL font metrics
+        # differ from the device's Qt metrics in their original placement.
 
         new_end_offset = new_offset + len(actual_text)
         new_rects = layout_engine.calculate_highlight_rectangles(
@@ -964,69 +957,11 @@ class HighlightHandler:
             logger.warning(f"Layout engine returned no rectangles for '{highlight_text[:30]}...'")
             return AbsolutePosition(block=block)
 
-        use_delta_positioning = False
-        old_offset = None
+        original_height = rectangles[0].h if rectangles else geometry.line_height
+        new_rectangles = [si.Rectangle(x, y, w, original_height) for x, y, w, h in new_rects]
 
-        # Check if delta-based positioning is applicable
-        if old_text and old_origin and rectangles:
-            # Try to find highlight text in old_text using anchor_context for disambiguation
-            # This ensures we find the SAME occurrence that was highlighted, not just
-            # the first occurrence (which could be a different "target" in a sentence like
-            # 'Highlight the word "target" here: The target word')
-            old_find_result = self._find_best_text_offset(highlight_text, old_text, anchor_context)
-            old_offset = old_find_result[0] if old_find_result else -1
-            if old_offset != -1:
-                # Check if rect count changed (reflow)
-                old_rect_count = len(rectangles)
-                new_rect_count = len(new_rects)
-
-                if old_rect_count == new_rect_count:
-                    use_delta_positioning = True
-                    logger.debug(
-                        f"  Using delta-based positioning (old_offset={old_offset}, "
-                        f"new_offset={new_offset}, rects={old_rect_count})"
-                    )
-                else:
-                    logger.debug(
-                        f"  Reflow detected ({old_rect_count} -> {new_rect_count} rects), "
-                        f"using layout-based positioning"
-                    )
-            else:
-                logger.debug(
-                    f"  Could not find '{highlight_text[:20]}...' in old_text, "
-                    f"using layout-based positioning"
-                )
-
-        if use_delta_positioning and old_offset is not None:
-            # Delta-based: Calculate delta and apply to original device rectangles
-            delta = calculate_position_delta(
-                old_offset=old_offset,
-                new_offset=new_offset,
-                old_text=old_text,
-                new_text=page_text,
-                old_origin=old_origin,
-                new_origin=new_origin,
-                layout_engine=layout_engine,
-                text_width=geometry.text_width,
-            )
-
-            if delta:
-                # Apply delta to original rectangles (preserves device precision)
-                apply_delta_to_rmscene_rectangles(rectangles, delta)
-                logger.debug(f"  Applied delta: dx={delta.dx:.1f}, dy={delta.dy:.1f}")
-            else:
-                # Fall back to layout-based if delta calculation fails
-                logger.warning("Delta calculation failed, falling back to layout-based")
-                use_delta_positioning = False
-
-        if not use_delta_positioning:
-            # Layout-based: Rebuild rectangles from scratch using our layout engine
-            # This is less accurate but handles cross-page and reflow cases
-            original_height = rectangles[0].h if rectangles else geometry.line_height
-            new_rectangles = [si.Rectangle(x, y, w, original_height) for x, y, w, h in new_rects]
-
-            glyph_value.rectangles.clear()
-            glyph_value.rectangles.extend(new_rectangles)
+        glyph_value.rectangles.clear()
+        glyph_value.rectangles.extend(new_rectangles)
 
         # Step 6: Update glyph metadata
         glyph_value.start = new_offset
