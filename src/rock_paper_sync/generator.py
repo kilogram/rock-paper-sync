@@ -308,6 +308,10 @@ class RemarkableGenerator:
         ledger = orphan_ledger or OrphanLedger(records=())
         decision = OrphanTriage(self._fuzzy_threshold).triage(ledger, new_model)
 
+        # Spatial-only merger migrations: excluded from visible layer, routed to preservation.
+        spatial_orphan_ids: set[str] = set()
+        spatial_orphan_blobs: dict[int, list[bytes]] = {}
+
         # If we have existing .rm files, load old model and migrate annotations
         if existing_rm_files:
             valid_rm_files = [p for p in existing_rm_files if p and p.exists()]
@@ -326,6 +330,29 @@ class RemarkableGenerator:
                         f"Migrated {len(report.migrations)} annotations, "
                         f"{len(report.orphans)} orphaned (success rate: {report.success_rate:.1%})"
                     )
+
+                    # Spatial-only migrations (confidence=0.4) are unreliable: the
+                    # stroke's anchor text is gone but the y-position happened to land
+                    # on some other text. Route them to the hidden preservation layer
+                    # instead of the visible layer.
+                    from rock_paper_sync.annotations.services.hidden_layer import (
+                        serialize_annotation_blocks,
+                    )
+
+                    for old_anno, _, resolution in report.migrations:
+                        if resolution.match_type == "spatial":
+                            spatial_orphan_ids.add(old_anno.annotation_id)
+                            # Only add blob if not already in decision.preserved
+                            # (push detection may have already stored it in DB).
+                            if old_anno.annotation_id not in decision.excluded_ids:
+                                blob = serialize_annotation_blocks(old_anno)
+                                if blob:
+                                    page_idx = old_anno.source_page_idx or 0
+                                    spatial_orphan_blobs.setdefault(page_idx, []).append(blob)
+                            logger.info(
+                                f"Routing spatial-only migration "
+                                f"{old_anno.annotation_id[:8]} to preservation layer"
+                            )
 
         # Inject recovered orphans into the visible layer.
         # Done after the merge so they don't go through the merger a second time.
@@ -380,8 +407,9 @@ class RemarkableGenerator:
                 f"Page {projection.page_index}: projection.annotations has {len(projection.annotations) if projection.annotations else 0} items"
             )
             if projection.annotations:
+                all_excluded = decision.excluded_ids | spatial_orphan_ids
                 self._apply_annotations_to_page(
-                    page, projection, uuid_to_rm_path, decision.excluded_ids or None
+                    page, projection, uuid_to_rm_path, all_excluded or None
                 )
 
             # Always set source_rm_path if available (for preserving unreplaced strokes)
@@ -393,8 +421,8 @@ class RemarkableGenerator:
 
             pages.append(page)
 
-        # M5.5: attach preserved orphan blobs to the correct page (per source_page_idx).
-        self._attach_preservation_layers(pages, decision.preserved)
+        # M5.5: attach preserved orphan blobs + spatial-orphan blobs to the correct pages.
+        self._attach_preservation_layers(pages, decision.preserved, spatial_orphan_blobs)
 
         logger.debug(
             f"Generated document {doc_uuid} with {len(pages)} page(s) "
@@ -642,14 +670,21 @@ class RemarkableGenerator:
         self,
         pages: list[RemarkablePage],
         preserved: "tuple[OrphanRecord, ...]",
+        extra_blobs_by_page: "dict[int, list[bytes]] | None" = None,
     ) -> None:
         """Route preserved orphan blobs to the correct page's hidden layer.
 
         Uses source_page_idx to put each blob on the page where the annotation
         originally lived. Falls back to page 0 when the index is absent or
         out of range (e.g. the document shrank).
+
+        Args:
+            pages: Pages to attach blobs to.
+            preserved: DB-backed orphan records.
+            extra_blobs_by_page: Additional blobs (e.g. spatial-orphan migrations)
+                keyed by page index.
         """
-        if not preserved or not pages:
+        if not pages:
             return
         page_blobs: dict[int, list[bytes]] = {}
         for record in preserved:
@@ -657,6 +692,10 @@ class RemarkableGenerator:
             if record.source_page_idx is not None and record.source_page_idx < len(pages):
                 idx = record.source_page_idx
             page_blobs.setdefault(idx, []).append(record.blocks_blob)
+        if extra_blobs_by_page:
+            for idx, blobs in extra_blobs_by_page.items():
+                clamped = min(idx, len(pages) - 1)
+                page_blobs.setdefault(clamped, []).extend(blobs)
         for idx, blobs in page_blobs.items():
             pages[idx].orphan_blobs = blobs
 

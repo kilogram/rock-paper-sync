@@ -689,3 +689,84 @@ class TestGeneratorOrphanBlobsIntegration:
         assert rm_doc.pages[0].orphan_blobs == [blob]
         for page in rm_doc.pages[1:]:
             assert page.orphan_blobs == []
+
+    def test_spatial_orphan_not_on_visible_layer(self):
+        """Spatial-only merger migrations must not appear on the content layer.
+
+        When `annotations_also_changed=True` (pull sync), the merger may spatially
+        re-anchor a stroke whose section was deleted. This creates a spatial-only
+        match (confidence=0.4). The generator must route it to the preservation
+        layer rather than placing it on the visible content layer.
+        """
+        from unittest.mock import MagicMock, patch
+
+        from rock_paper_sync.annotations.document_model import (
+            AnchorContext,
+            AnchorResolution,
+            DocumentAnnotation,
+            MigrationReport,
+        )
+        from rock_paper_sync.annotations.services.merger import MergeResult
+
+        gen = self._make_generator()
+        md_doc = self._make_md_doc(content="Remaining text only.")
+        blob = _minimal_preservation_blob()
+
+        # Build a fake DocumentAnnotation representing a stroke in a deleted section.
+        fake_anchor = AnchorContext.from_text_span("deleted section text", 0, 15)
+        fake_anno = DocumentAnnotation(
+            annotation_id="stroke-spatial-001",
+            annotation_type="stroke",
+            anchor_context=fake_anchor,
+            original_rm_block=None,
+            source_page_idx=0,
+        )
+        fake_resolution = AnchorResolution(
+            start_offset=0, end_offset=10, confidence=0.4, match_type="spatial"
+        )
+        report = MigrationReport()
+        report.add_migration(fake_anno, fake_anno, fake_resolution)
+
+        from rock_paper_sync.annotations.document_model import DocumentModel
+        from rock_paper_sync.layout.device import DEFAULT_DEVICE
+
+        empty_model = DocumentModel.from_content_blocks(md_doc.content, DEFAULT_DEVICE)
+        merged_model = empty_model  # no migrated annotations in visible layer
+        fake_merge_result = MergeResult(merged_model=merged_model, report=report)
+
+        with (
+            patch(
+                "rock_paper_sync.generator.DocumentModel.from_rm_files",
+                return_value=MagicMock(annotations=[fake_anno]),
+            ),
+            patch(
+                "rock_paper_sync.generator.AnnotationMerger.merge",
+                return_value=fake_merge_result,
+            ),
+            patch(
+                "rock_paper_sync.annotations.services.hidden_layer.serialize_annotation_blocks",
+                return_value=blob,
+            ),
+        ):
+            import os
+            import tempfile
+            from pathlib import Path
+
+            with tempfile.NamedTemporaryFile(suffix=".rm", delete=False) as f:
+                f.write(blob)
+                rm_path = Path(f.name)
+
+            try:
+                rm_doc = gen.generate_document(
+                    md_doc,
+                    existing_rm_files=[rm_path],  # triggers merger path
+                )
+            finally:
+                os.unlink(rm_path)
+
+        # Spatial-only migration should be routed to preservation, not visible layer.
+        # The fake_anno has no original_rm_block so it won't be in any StrokePlacement.
+        # The blob should be on the preservation layer.
+        assert rm_doc.pages[0].orphan_blobs == [
+            blob
+        ], "Spatial-only migration must appear on preservation layer"
