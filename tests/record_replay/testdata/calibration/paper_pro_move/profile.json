@@ -23,36 +23,61 @@
     },
     "documents": {
       "01_wrapped_paragraphs": [
-        "139771892246832",
-        "139771892246864"
+        "139815695460656",
+        "139815695460688"
       ],
       "02_headings": [
-        "139771892246832",
-        "139771892246864"
+        "139815695460656",
+        "139815695460688"
       ],
       "03_lists": [
-        "139771892246832"
+        "139815695460656"
       ],
       "04_code_blocks": [
-        "139771892246832"
+        "139815695460656"
       ],
       "05_spacing_ladder": [
-        "139771892246832"
+        "139815695460656"
       ],
       "06_multipage": [
-        "139771892246832",
-        "139771892246864",
-        "139771892246896"
+        "139815695460656",
+        "139815695460688",
+        "139815695460720"
       ],
       "07_t5_probe": [
-        "139771892246832",
-        "139771892246864"
+        "139815695460656",
+        "139815695460688"
       ]
     }
   },
   "sentinel_count_source": 41,
-  "sentinel_count_matched": 40,
+  "sentinel_count_matched": 41,
   "sentinels": [
+    {
+      "sentinel": "T5BASE",
+      "doc": "07_t5_probe",
+      "block_type": "body",
+      "heading_level": null,
+      "list_level": null,
+      "char_offset": 0,
+      "char_length": 6,
+      "plain_line": "T5BASE _________________________________",
+      "n_rects": 1,
+      "rect": {
+        "x": -378.4,
+        "y": 230.6,
+        "width": 132.19,
+        "height": 44.39
+      },
+      "rects": [
+        {
+          "x": -378.4,
+          "y": 230.6,
+          "width": 132.19,
+          "height": 44.39
+        }
+      ]
+    },
     {
       "sentinel": "ZEBRA01",
       "doc": "01_wrapped_paragraphs",
@@ -1098,10 +1123,12 @@
     ],
     "t5_baseline_offset": {
       "value": null,
-      "reason": "T5BASE highlight not found in corpus"
+      "reason": "raw values recorded; resolve 20-vs-25 in Phase 3 (strokes are anchor-relative per C4, so this needs the anchor to be absolute)",
+      "highlight_top_y": 230.6,
+      "highlight_height": 44.39,
+      "stroke_min_y_native": 6.55,
+      "stroke_max_y_native": 39.8
     }
   },
-  "warnings": [
-    "MISSING highlight for sentinel T5BASE (source doc 07_t5_probe) \u2014 was it highlighted on device?"
-  ]
+  "warnings": []
 }
