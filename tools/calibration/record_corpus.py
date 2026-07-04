@@ -40,6 +40,7 @@ Requires:
 from __future__ import annotations
 
 import argparse
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -132,6 +133,17 @@ def push_corpus(device: str, device_folder: str, user_config: Path) -> None:
     cloud_base_url = load_config(user_config).cloud.base_url
 
     workspace = REPO_ROOT / ".calibration_push" / device
+
+    # Start every push from a clean slate: tear down anything a previous session
+    # left tracked (best-effort — the folder may already be gone), then wipe the
+    # local sync state so the docs are re-uploaded and the folder is recreated.
+    if (workspace / "config.toml").exists():
+        try:
+            unsync_corpus(device, user_config)
+        except SystemExit:
+            print_warn("Prior teardown reported nothing to remove; continuing.")
+    shutil.rmtree(workspace, ignore_errors=True)
+
     workspace.mkdir(parents=True, exist_ok=True)
     config_file = workspace / "config.toml"
     write_push_config(config_file, device, device_folder, cloud_base_url)
