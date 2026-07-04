@@ -21,6 +21,10 @@ from .device import DEFAULT_DEVICE
 if TYPE_CHECKING:
     from .device import DeviceGeometry
 
+# Tolerance for the position->offset boundary comparison. Absorbs floating-point
+# error from center-relative x arithmetic (well below any glyph advance width).
+_POSITION_EPSILON = 1e-6
+
 
 class WordWrapLayoutEngine:
     """Word-wrapping layout engine with optional proportional font metrics.
@@ -352,11 +356,14 @@ class WordWrapLayoutEngine:
         if x_relative <= 0:
             return line_start
 
-        # Binary search for the character position
-        # We find the offset where text width just exceeds x_relative
+        # Scan for the character position: the first offset whose cumulative
+        # advance reaches x_relative. A small epsilon absorbs floating-point
+        # error from center-relative x arithmetic (origin is added then
+        # subtracted), which would otherwise push exact glyph boundaries to the
+        # next character and break the E1 round-trip invariant.
         for offset in range(line_start, line_end + 1):
             text_width = self._get_text_width(text[line_start:offset])
-            if text_width >= x_relative:
+            if text_width >= x_relative - _POSITION_EPSILON:
                 return offset
 
         return line_end
