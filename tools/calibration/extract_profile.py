@@ -21,6 +21,7 @@ The tool analyzes highlight positions from the calibration documents to measure:
 from __future__ import annotations
 
 import json
+import re
 import sys
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -482,14 +483,24 @@ def build_sentinel_records(
     sources: dict[str, SentinelSource],
     highlights: list[GlyphHighlight],
 ) -> tuple[list[dict], list[str]]:
-    """Correlate device highlights to source sentinels by exact text match.
+    """Correlate device highlights to source sentinels by sentinel token.
+
+    Matching keys on the sentinel token (``ZEBRA\\d\\d`` / ``T5BASE``) extracted
+    from the highlight text rather than the exact string, so a highlight that
+    incidentally grabs an adjacent character — e.g. the leading quote in
+    ``"ZEBRA30`` from a code line — still matches. Highlights with no sentinel
+    token fall back to their stripped text (and simply won't match anything).
 
     Returns (records, warnings). Each record joins the source location, char
     range, and the device rectangle(s) for one sentinel.
     """
+    token_re = re.compile(r"ZEBRA\d{2}|T5BASE")
+
     by_text: dict[str, list[GlyphHighlight]] = {}
     for h in highlights:
-        by_text.setdefault(h.text.strip(), []).append(h)
+        m = token_re.search(h.text)
+        key = m.group(0) if m else h.text.strip()
+        by_text.setdefault(key, []).append(h)
 
     records: list[dict] = []
     warnings: list[str] = []
