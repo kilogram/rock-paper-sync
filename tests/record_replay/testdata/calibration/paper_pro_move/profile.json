@@ -8,10 +8,1100 @@
   "line_height": 57.0,
   "calibration_date": "2025-12-12",
   "golden_files": [
-    "calibration_wrap.rm",
-    "calibration_geometry.rm",
-    "calibration_font_sizes.rm",
-    "calibration_chars.rm",
-    "calibration_structure.rm"
+    "rm_files/01_wrapped_paragraphs",
+    "rm_files/02_headings",
+    "rm_files/03_lists",
+    "rm_files/04_code_blocks",
+    "rm_files/05_spacing_ladder",
+    "rm_files/06_multipage",
+    "rm_files/07_t5_probe"
+  ],
+  "recording": {
+    "recorded_date": "2026-07-04",
+    "firmware": {
+      "os_version": "20260310084634"
+    },
+    "documents": {
+      "01_wrapped_paragraphs": [
+        "139771892246832",
+        "139771892246864"
+      ],
+      "02_headings": [
+        "139771892246832",
+        "139771892246864"
+      ],
+      "03_lists": [
+        "139771892246832"
+      ],
+      "04_code_blocks": [
+        "139771892246832"
+      ],
+      "05_spacing_ladder": [
+        "139771892246832"
+      ],
+      "06_multipage": [
+        "139771892246832",
+        "139771892246864",
+        "139771892246896"
+      ],
+      "07_t5_probe": [
+        "139771892246832",
+        "139771892246864"
+      ]
+    }
+  },
+  "sentinel_count_source": 41,
+  "sentinel_count_matched": 40,
+  "sentinels": [
+    {
+      "sentinel": "ZEBRA01",
+      "doc": "01_wrapped_paragraphs",
+      "block_type": "body",
+      "heading_level": null,
+      "list_level": null,
+      "char_offset": 0,
+      "char_length": 7,
+      "plain_line": "ZEBRA01 begins this normal prose paragraph, which is deliberately long enough to",
+      "n_rects": 1,
+      "rect": {
+        "x": -378.4,
+        "y": 300.15,
+        "width": 147.78,
+        "height": 44.39
+      },
+      "rects": [
+        {
+          "x": -378.4,
+          "y": 300.15,
+          "width": 147.78,
+          "height": 44.39
+        }
+      ]
+    },
+    {
+      "sentinel": "ZEBRA02",
+      "doc": "01_wrapped_paragraphs",
+      "block_type": "body",
+      "heading_level": null,
+      "list_level": null,
+      "char_offset": 67,
+      "char_length": 7,
+      "plain_line": "measured from the highlight rectangles, and it ends with the token ZEBRA02 that",
+      "n_rects": 1,
+      "rect": {
+        "x": 170.9,
+        "y": 482.34,
+        "width": 152.7,
+        "height": 44.39
+      },
+      "rects": [
+        {
+          "x": 170.9,
+          "y": 482.34,
+          "width": 152.7,
+          "height": 44.39
+        }
+      ]
+    },
+    {
+      "sentinel": "ZEBRA03",
+      "doc": "01_wrapped_paragraphs",
+      "block_type": "body",
+      "heading_level": null,
+      "list_level": null,
+      "char_offset": 64,
+      "char_length": 7,
+      "plain_line": "iii iii iii iii iii iii iii iii iii iii iii iii iii iii iii iii ZEBRA03 iii iii",
+      "n_rects": 1,
+      "rect": {
+        "x": 124.1,
+        "y": 642.98,
+        "width": 152.58,
+        "height": 44.39
+      },
+      "rects": [
+        {
+          "x": 124.1,
+          "y": 642.98,
+          "width": 152.58,
+          "height": 44.39
+        }
+      ]
+    },
+    {
+      "sentinel": "ZEBRA04",
+      "doc": "01_wrapped_paragraphs",
+      "block_type": "body",
+      "heading_level": null,
+      "list_level": null,
+      "char_offset": 72,
+      "char_length": 7,
+      "plain_line": "iii iii iii iii iii iii iii iii iii iii iii iii iii iii iii iii iii iii ZEBRA04",
+      "n_rects": 1,
+      "rect": {
+        "x": 155.51,
+        "y": 688.52,
+        "width": 152.73,
+        "height": 44.39
+      },
+      "rects": [
+        {
+          "x": 155.51,
+          "y": 688.52,
+          "width": 152.73,
+          "height": 44.39
+        }
+      ]
+    },
+    {
+      "sentinel": "ZEBRA05",
+      "doc": "01_wrapped_paragraphs",
+      "block_type": "body",
+      "heading_level": null,
+      "list_level": null,
+      "char_offset": 32,
+      "char_length": 7,
+      "plain_line": "mmm mmm mmm mmm mmm mmm mmm mmm ZEBRA05 mmm mmm mmm mmm mmm mmm mmm mmm mmm mmm",
+      "n_rects": 1,
+      "rect": {
+        "x": -378.4,
+        "y": 849.16,
+        "width": 152.67,
+        "height": 44.39
+      },
+      "rects": [
+        {
+          "x": -378.4,
+          "y": 849.16,
+          "width": 152.67,
+          "height": 44.39
+        }
+      ]
+    },
+    {
+      "sentinel": "ZEBRA06",
+      "doc": "01_wrapped_paragraphs",
+      "block_type": "body",
+      "heading_level": null,
+      "list_level": null,
+      "char_offset": 24,
+      "char_length": 7,
+      "plain_line": "mmm mmm mmm mmm mmm mmm ZEBRA06 mmm mmm mmm mmm mmm mmm mmm mmm mmm mmm mmm mmm.",
+      "n_rects": 1,
+      "rect": {
+        "x": -197.84,
+        "y": 940.26,
+        "width": 153.06,
+        "height": 44.39
+      },
+      "rects": [
+        {
+          "x": -197.84,
+          "y": 940.26,
+          "width": 153.06,
+          "height": 44.39
+        }
+      ]
+    },
+    {
+      "sentinel": "ZEBRA07",
+      "doc": "01_wrapped_paragraphs",
+      "block_type": "body",
+      "heading_level": null,
+      "list_level": null,
+      "char_offset": 0,
+      "char_length": 7,
+      "plain_line": "ZEBRA07 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789",
+      "n_rects": 1,
+      "rect": {
+        "x": -378.4,
+        "y": 1055.35,
+        "width": 150.12,
+        "height": 44.39
+      },
+      "rects": [
+        {
+          "x": -378.4,
+          "y": 1055.35,
+          "width": 150.12,
+          "height": 44.39
+        }
+      ]
+    },
+    {
+      "sentinel": "ZEBRA08",
+      "doc": "01_wrapped_paragraphs",
+      "block_type": "body",
+      "heading_level": null,
+      "list_level": null,
+      "char_offset": 55,
+      "char_length": 7,
+      "plain_line": "0123456789 0123456789 0123456789 0123456789 0123456789 ZEBRA08 0123456789 0123.",
+      "n_rects": 1,
+      "rect": {
+        "x": -378.4,
+        "y": 1191.99,
+        "width": 153.34,
+        "height": 44.39
+      },
+      "rects": [
+        {
+          "x": -378.4,
+          "y": 1191.99,
+          "width": 153.34,
+          "height": 44.39
+        }
+      ]
+    },
+    {
+      "sentinel": "ZEBRA09",
+      "doc": "01_wrapped_paragraphs",
+      "block_type": "body",
+      "heading_level": null,
+      "list_level": null,
+      "char_offset": 8,
+      "char_length": 7,
+      "plain_line": "course, ZEBRA09 lots... of? ellipses\u2014dashes\u2014and parentheses (nested (deeply))",
+      "n_rects": 1,
+      "rect": {
+        "x": 133.54,
+        "y": 276.15,
+        "width": 153.06,
+        "height": 44.39
+      },
+      "rects": [
+        {
+          "x": 133.54,
+          "y": 276.15,
+          "width": 153.06,
+          "height": 44.39
+        }
+      ]
+    },
+    {
+      "sentinel": "ZEBRA10",
+      "doc": "01_wrapped_paragraphs",
+      "block_type": "body",
+      "heading_level": null,
+      "list_level": null,
+      "char_offset": 15,
+      "char_length": 7,
+      "plain_line": "to see whether ZEBRA10 the wrap engine treats punctuation advances correctly.",
+      "n_rects": 1,
+      "rect": {
+        "x": -21.27,
+        "y": 367.24,
+        "width": 147.78,
+        "height": 44.39
+      },
+      "rects": [
+        {
+          "x": -21.27,
+          "y": 367.24,
+          "width": 147.78,
+          "height": 44.39
+        }
+      ]
+    },
+    {
+      "sentinel": "ZEBRA11",
+      "doc": "02_headings",
+      "block_type": "heading",
+      "heading_level": 1,
+      "list_level": null,
+      "char_offset": 0,
+      "char_length": 7,
+      "plain_line": "ZEBRA11 Heading one",
+      "n_rects": 1,
+      "rect": {
+        "x": -378.4,
+        "y": 230.6,
+        "width": 141.77,
+        "height": 44.39
+      },
+      "rects": [
+        {
+          "x": -378.4,
+          "y": 230.6,
+          "width": 141.77,
+          "height": 44.39
+        }
+      ]
+    },
+    {
+      "sentinel": "ZEBRA12",
+      "doc": "02_headings",
+      "block_type": "heading",
+      "heading_level": 2,
+      "list_level": null,
+      "char_offset": 0,
+      "char_length": 7,
+      "plain_line": "ZEBRA12 Heading two",
+      "n_rects": 1,
+      "rect": {
+        "x": -378.4,
+        "y": 506.34,
+        "width": 146.69,
+        "height": 44.39
+      },
+      "rects": [
+        {
+          "x": -378.4,
+          "y": 506.34,
+          "width": 146.69,
+          "height": 44.39
+        }
+      ]
+    },
+    {
+      "sentinel": "ZEBRA13",
+      "doc": "02_headings",
+      "block_type": "heading",
+      "heading_level": 3,
+      "list_level": null,
+      "char_offset": 0,
+      "char_length": 7,
+      "plain_line": "ZEBRA13 Heading three",
+      "n_rects": 1,
+      "rect": {
+        "x": -378.4,
+        "y": 645.43,
+        "width": 146.56,
+        "height": 44.39
+      },
+      "rects": [
+        {
+          "x": -378.4,
+          "y": 645.43,
+          "width": 146.56,
+          "height": 44.39
+        }
+      ]
+    },
+    {
+      "sentinel": "ZEBRA14",
+      "doc": "02_headings",
+      "block_type": "heading",
+      "heading_level": 4,
+      "list_level": null,
+      "char_offset": 0,
+      "char_length": 7,
+      "plain_line": "ZEBRA14 Heading four",
+      "n_rects": 1,
+      "rect": {
+        "x": -378.4,
+        "y": 784.52,
+        "width": 146.72,
+        "height": 44.39
+      },
+      "rects": [
+        {
+          "x": -378.4,
+          "y": 784.52,
+          "width": 146.72,
+          "height": 44.39
+        }
+      ]
+    },
+    {
+      "sentinel": "ZEBRA15",
+      "doc": "02_headings",
+      "block_type": "heading",
+      "heading_level": 5,
+      "list_level": null,
+      "char_offset": 0,
+      "char_length": 7,
+      "plain_line": "ZEBRA15 Heading five",
+      "n_rects": 1,
+      "rect": {
+        "x": -378.4,
+        "y": 923.62,
+        "width": 146.66,
+        "height": 44.39
+      },
+      "rects": [
+        {
+          "x": -378.4,
+          "y": 923.62,
+          "width": 146.66,
+          "height": 44.39
+        }
+      ]
+    },
+    {
+      "sentinel": "ZEBRA16",
+      "doc": "02_headings",
+      "block_type": "heading",
+      "heading_level": 6,
+      "list_level": null,
+      "char_offset": 0,
+      "char_length": 7,
+      "plain_line": "ZEBRA16 Heading six",
+      "n_rects": 1,
+      "rect": {
+        "x": -378.4,
+        "y": 230.6,
+        "width": 147.05,
+        "height": 44.39
+      },
+      "rects": [
+        {
+          "x": -378.4,
+          "y": 230.6,
+          "width": 147.05,
+          "height": 44.39
+        }
+      ]
+    },
+    {
+      "sentinel": "ZEBRA17",
+      "doc": "02_headings",
+      "block_type": "body",
+      "heading_level": null,
+      "list_level": null,
+      "char_offset": 14,
+      "char_length": 7,
+      "plain_line": "with sentinel ZEBRA17 on this body line as the body-height reference.",
+      "n_rects": 1,
+      "rect": {
+        "x": -378.4,
+        "y": 391.24,
+        "width": 144.42,
+        "height": 44.39
+      },
+      "rects": [
+        {
+          "x": -378.4,
+          "y": 391.24,
+          "width": 144.42,
+          "height": 44.39
+        }
+      ]
+    },
+    {
+      "sentinel": "ZEBRA18",
+      "doc": "03_lists",
+      "block_type": "list",
+      "heading_level": null,
+      "list_level": 0,
+      "char_offset": 0,
+      "char_length": 7,
+      "plain_line": "ZEBRA18 first-level bullet",
+      "n_rects": 1,
+      "rect": {
+        "x": -359.21,
+        "y": 369.7,
+        "width": 147.33,
+        "height": 44.39
+      },
+      "rects": [
+        {
+          "x": -359.21,
+          "y": 369.7,
+          "width": 147.33,
+          "height": 44.39
+        }
+      ]
+    },
+    {
+      "sentinel": "ZEBRA19",
+      "doc": "03_lists",
+      "block_type": "list",
+      "heading_level": null,
+      "list_level": 1,
+      "char_offset": 0,
+      "char_length": 7,
+      "plain_line": "ZEBRA19 second-level bullet",
+      "n_rects": 1,
+      "rect": {
+        "x": -359.21,
+        "y": 439.24,
+        "width": 147.05,
+        "height": 44.39
+      },
+      "rects": [
+        {
+          "x": -359.21,
+          "y": 439.24,
+          "width": 147.05,
+          "height": 44.39
+        }
+      ]
+    },
+    {
+      "sentinel": "ZEBRA20",
+      "doc": "03_lists",
+      "block_type": "list",
+      "heading_level": null,
+      "list_level": 2,
+      "char_offset": 0,
+      "char_length": 7,
+      "plain_line": "ZEBRA20 third-level bullet",
+      "n_rects": 1,
+      "rect": {
+        "x": -359.21,
+        "y": 508.79,
+        "width": 152.7,
+        "height": 44.39
+      },
+      "rects": [
+        {
+          "x": -359.21,
+          "y": 508.79,
+          "width": 152.7,
+          "height": 44.39
+        }
+      ]
+    },
+    {
+      "sentinel": "ZEBRA21",
+      "doc": "03_lists",
+      "block_type": "list",
+      "heading_level": null,
+      "list_level": 1,
+      "char_offset": 0,
+      "char_length": 7,
+      "plain_line": "ZEBRA21 back to second level",
+      "n_rects": 1,
+      "rect": {
+        "x": -359.21,
+        "y": 578.34,
+        "width": 146.69,
+        "height": 44.39
+      },
+      "rects": [
+        {
+          "x": -359.21,
+          "y": 578.34,
+          "width": 146.69,
+          "height": 44.39
+        }
+      ]
+    },
+    {
+      "sentinel": "ZEBRA22",
+      "doc": "03_lists",
+      "block_type": "list",
+      "heading_level": null,
+      "list_level": 0,
+      "char_offset": 0,
+      "char_length": 7,
+      "plain_line": "ZEBRA22 back to first level",
+      "n_rects": 1,
+      "rect": {
+        "x": -359.21,
+        "y": 647.88,
+        "width": 151.61,
+        "height": 44.39
+      },
+      "rects": [
+        {
+          "x": -359.21,
+          "y": 647.88,
+          "width": 151.61,
+          "height": 44.39
+        }
+      ]
+    },
+    {
+      "sentinel": "ZEBRA23",
+      "doc": "03_lists",
+      "block_type": "list",
+      "heading_level": null,
+      "list_level": 0,
+      "char_offset": 0,
+      "char_length": 7,
+      "plain_line": "ZEBRA23 first-level item",
+      "n_rects": 1,
+      "rect": {
+        "x": -359.21,
+        "y": 786.98,
+        "width": 151.48,
+        "height": 44.39
+      },
+      "rects": [
+        {
+          "x": -359.21,
+          "y": 786.98,
+          "width": 151.48,
+          "height": 44.39
+        }
+      ]
+    },
+    {
+      "sentinel": "ZEBRA24",
+      "doc": "03_lists",
+      "block_type": "list",
+      "heading_level": null,
+      "list_level": 1,
+      "char_offset": 0,
+      "char_length": 7,
+      "plain_line": "ZEBRA24 second-level item",
+      "n_rects": 1,
+      "rect": {
+        "x": -359.21,
+        "y": 856.52,
+        "width": 151.64,
+        "height": 44.39
+      },
+      "rects": [
+        {
+          "x": -359.21,
+          "y": 856.52,
+          "width": 151.64,
+          "height": 44.39
+        }
+      ]
+    },
+    {
+      "sentinel": "ZEBRA25",
+      "doc": "03_lists",
+      "block_type": "list",
+      "heading_level": null,
+      "list_level": 2,
+      "char_offset": 0,
+      "char_length": 7,
+      "plain_line": "ZEBRA25 third-level item",
+      "n_rects": 1,
+      "rect": {
+        "x": -359.21,
+        "y": 926.07,
+        "width": 151.58,
+        "height": 44.39
+      },
+      "rects": [
+        {
+          "x": -359.21,
+          "y": 926.07,
+          "width": 151.58,
+          "height": 44.39
+        }
+      ]
+    },
+    {
+      "sentinel": "ZEBRA26",
+      "doc": "03_lists",
+      "block_type": "list",
+      "heading_level": null,
+      "list_level": 0,
+      "char_offset": 0,
+      "char_length": 7,
+      "plain_line": "ZEBRA26 second first-level item",
+      "n_rects": 1,
+      "rect": {
+        "x": -359.21,
+        "y": 995.62,
+        "width": 151.97,
+        "height": 44.39
+      },
+      "rects": [
+        {
+          "x": -359.21,
+          "y": 995.62,
+          "width": 151.97,
+          "height": 44.39
+        }
+      ]
+    },
+    {
+      "sentinel": "ZEBRA27",
+      "doc": "04_code_blocks",
+      "block_type": "body",
+      "heading_level": null,
+      "list_level": null,
+      "char_offset": 42,
+      "char_length": 7,
+      "plain_line": "Body text before the code block, sentinel ZEBRA27 on this line.",
+      "n_rects": 1,
+      "rect": {
+        "x": 219.45,
+        "y": 300.15,
+        "width": 149.34,
+        "height": 44.39
+      },
+      "rects": [
+        {
+          "x": 219.45,
+          "y": 300.15,
+          "width": 149.34,
+          "height": 44.39
+        }
+      ]
+    },
+    {
+      "sentinel": "ZEBRA28",
+      "doc": "04_code_blocks",
+      "block_type": "code",
+      "heading_level": null,
+      "list_level": null,
+      "char_offset": 0,
+      "char_length": 7,
+      "plain_line": "ZEBRA28 = \"first code line\"",
+      "n_rects": 1,
+      "rect": {
+        "x": -378.4,
+        "y": 484.79,
+        "width": 152.25,
+        "height": 44.39
+      },
+      "rects": [
+        {
+          "x": -378.4,
+          "y": 484.79,
+          "width": 152.25,
+          "height": 44.39
+        }
+      ]
+    },
+    {
+      "sentinel": "ZEBRA29",
+      "doc": "04_code_blocks",
+      "block_type": "code",
+      "heading_level": null,
+      "list_level": null,
+      "char_offset": 0,
+      "char_length": 7,
+      "plain_line": "ZEBRA29 = \"indented code line\"",
+      "n_rects": 1,
+      "rect": {
+        "x": -348.21,
+        "y": 554.34,
+        "width": 151.97,
+        "height": 44.39
+      },
+      "rects": [
+        {
+          "x": -348.21,
+          "y": 554.34,
+          "width": 151.97,
+          "height": 44.39
+        }
+      ]
+    },
+    {
+      "sentinel": "ZEBRA30",
+      "doc": "04_code_blocks",
+      "block_type": "code",
+      "heading_level": null,
+      "list_level": null,
+      "char_offset": 8,
+      "char_length": 7,
+      "plain_line": "last = \"ZEBRA30 code line\"",
+      "n_rects": 1,
+      "rect": {
+        "x": -291.9,
+        "y": 623.88,
+        "width": 163.7,
+        "height": 44.39
+      },
+      "rects": [
+        {
+          "x": -291.9,
+          "y": 623.88,
+          "width": 163.7,
+          "height": 44.39
+        }
+      ]
+    },
+    {
+      "sentinel": "ZEBRA31",
+      "doc": "05_spacing_ladder",
+      "block_type": "body",
+      "heading_level": null,
+      "list_level": null,
+      "char_offset": 0,
+      "char_length": 7,
+      "plain_line": "ZEBRA31 paragraph separated by one blank line above.",
+      "n_rects": 1,
+      "rect": {
+        "x": -378.4,
+        "y": 597.43,
+        "width": 146.56,
+        "height": 44.39
+      },
+      "rects": [
+        {
+          "x": -378.4,
+          "y": 597.43,
+          "width": 146.56,
+          "height": 44.39
+        }
+      ]
+    },
+    {
+      "sentinel": "ZEBRA32",
+      "doc": "05_spacing_ladder",
+      "block_type": "body",
+      "heading_level": null,
+      "list_level": null,
+      "char_offset": 0,
+      "char_length": 7,
+      "plain_line": "ZEBRA32 paragraph separated by one blank line above.",
+      "n_rects": 1,
+      "rect": {
+        "x": -378.4,
+        "y": 712.52,
+        "width": 151.48,
+        "height": 44.39
+      },
+      "rects": [
+        {
+          "x": -378.4,
+          "y": 712.52,
+          "width": 151.48,
+          "height": 44.39
+        }
+      ]
+    },
+    {
+      "sentinel": "ZEBRA33",
+      "doc": "05_spacing_ladder",
+      "block_type": "body",
+      "heading_level": null,
+      "list_level": null,
+      "char_offset": 0,
+      "char_length": 7,
+      "plain_line": "ZEBRA33 paragraph separated by two blank lines above.",
+      "n_rects": 1,
+      "rect": {
+        "x": -378.4,
+        "y": 827.62,
+        "width": 151.36,
+        "height": 44.39
+      },
+      "rects": [
+        {
+          "x": -378.4,
+          "y": 827.62,
+          "width": 151.36,
+          "height": 44.39
+        }
+      ]
+    },
+    {
+      "sentinel": "ZEBRA34",
+      "doc": "05_spacing_ladder",
+      "block_type": "body",
+      "heading_level": null,
+      "list_level": null,
+      "char_offset": 0,
+      "char_length": 7,
+      "plain_line": "ZEBRA34 paragraph separated by three blank lines above.",
+      "n_rects": 1,
+      "rect": {
+        "x": -378.4,
+        "y": 942.71,
+        "width": 151.52,
+        "height": 44.39
+      },
+      "rects": [
+        {
+          "x": -378.4,
+          "y": 942.71,
+          "width": 151.52,
+          "height": 44.39
+        }
+      ]
+    },
+    {
+      "sentinel": "ZEBRA35",
+      "doc": "05_spacing_ladder",
+      "block_type": "body",
+      "heading_level": null,
+      "list_level": null,
+      "char_offset": 0,
+      "char_length": 7,
+      "plain_line": "ZEBRA35 paragraph separated by four blank lines above.",
+      "n_rects": 1,
+      "rect": {
+        "x": -378.4,
+        "y": 1057.8,
+        "width": 151.45,
+        "height": 44.39
+      },
+      "rects": [
+        {
+          "x": -378.4,
+          "y": 1057.8,
+          "width": 151.45,
+          "height": 44.39
+        }
+      ]
+    },
+    {
+      "sentinel": "ZEBRA36",
+      "doc": "06_multipage",
+      "block_type": "body",
+      "heading_level": null,
+      "list_level": null,
+      "char_offset": 0,
+      "char_length": 7,
+      "plain_line": "ZEBRA36 marks the first body line on page one; its Y should equal the text",
+      "n_rects": 1,
+      "rect": {
+        "x": -378.4,
+        "y": 300.15,
+        "width": 151.84,
+        "height": 44.39
+      },
+      "rects": [
+        {
+          "x": -378.4,
+          "y": 300.15,
+          "width": 151.84,
+          "height": 44.39
+        }
+      ]
+    },
+    {
+      "sentinel": "ZEBRA37",
+      "doc": "06_multipage",
+      "block_type": "body",
+      "heading_level": null,
+      "list_level": null,
+      "char_offset": 23,
+      "char_length": 7,
+      "plain_line": "Line 23 filler content ZEBRA37 approaching the bottom of page one.",
+      "n_rects": 1,
+      "rect": {
+        "x": -378.4,
+        "y": 549.43,
+        "width": 149.22,
+        "height": 44.39
+      },
+      "rects": [
+        {
+          "x": -378.4,
+          "y": 549.43,
+          "width": 149.22,
+          "height": 44.39
+        }
+      ]
+    },
+    {
+      "sentinel": "ZEBRA38",
+      "doc": "06_multipage",
+      "block_type": "body",
+      "heading_level": null,
+      "list_level": null,
+      "char_offset": 23,
+      "char_length": 7,
+      "plain_line": "Line 25 filler content ZEBRA38 near the very bottom of page one.",
+      "n_rects": 1,
+      "rect": {
+        "x": -378.4,
+        "y": 686.07,
+        "width": 152.12,
+        "height": 44.39
+      },
+      "rects": [
+        {
+          "x": -378.4,
+          "y": 686.07,
+          "width": 152.12,
+          "height": 44.39
+        }
+      ]
+    },
+    {
+      "sentinel": "ZEBRA39",
+      "doc": "06_multipage",
+      "block_type": "body",
+      "heading_level": null,
+      "list_level": null,
+      "char_offset": 23,
+      "char_length": 7,
+      "plain_line": "Line 28 filler content ZEBRA39 which should straddle onto page two.",
+      "n_rects": 1,
+      "rect": {
+        "x": -259.15,
+        "y": 868.26,
+        "width": 151.84,
+        "height": 44.39
+      },
+      "rects": [
+        {
+          "x": -259.15,
+          "y": 868.26,
+          "width": 151.84,
+          "height": 44.39
+        }
+      ]
+    },
+    {
+      "sentinel": "ZEBRA40",
+      "doc": "06_multipage",
+      "block_type": "body",
+      "heading_level": null,
+      "list_level": null,
+      "char_offset": 23,
+      "char_length": 7,
+      "plain_line": "Line 30 filler content ZEBRA40 which should sit near the top of page two.",
+      "n_rects": 1,
+      "rect": {
+        "x": -378.4,
+        "y": 1004.9,
+        "width": 152.73,
+        "height": 44.39
+      },
+      "rects": [
+        {
+          "x": -378.4,
+          "y": 1004.9,
+          "width": 152.73,
+          "height": 44.39
+        }
+      ]
+    }
+  ],
+  "measurements": {
+    "line_height_px": {
+      "body": 44.39,
+      "heading": 44.39,
+      "list": 44.39,
+      "code": 44.39
+    },
+    "heading_line_height_px": {
+      "h1": 44.39,
+      "h2": 44.39,
+      "h3": 44.39,
+      "h4": 44.39,
+      "h5": 44.39,
+      "h6": 44.39
+    },
+    "wrap": {
+      "body_left_x": -378.4,
+      "body_right_edge_x": 368.79,
+      "implied_layout_width": 747.19,
+      "note": "implied width is a lower bound (nearest sentinel to margin)"
+    },
+    "paragraph_gap_px": {
+      "deltas": [
+        115.09,
+        115.1,
+        115.09,
+        115.09
+      ],
+      "min": 115.09,
+      "note": "each delta is the Y gap between successive ladder paragraphs; constant deltas \u21d2 extra blank lines collapse (B1)"
+    },
+    "list_indent_x_by_level": {
+      "level0": -359.21,
+      "level1": -359.21,
+      "level2": -359.21
+    },
+    "heading_gap_px": [
+      {
+        "after_level": 6,
+        "gap_px": 160.64
+      }
+    ],
+    "t5_baseline_offset": {
+      "value": null,
+      "reason": "T5BASE highlight not found in corpus"
+    }
+  },
+  "warnings": [
+    "MISSING highlight for sentinel T5BASE (source doc 07_t5_probe) \u2014 was it highlighted on device?"
   ]
 }
