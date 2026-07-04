@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 try:
     import rmscene  # noqa: F401  (availability probe)
     from rmscene import read_blocks
-    from rmscene.scene_items import SceneLineItemBlock
+    from rmscene.scene_stream import SceneLineItemBlock
 
     RMSCENE_AVAILABLE = True
 except ImportError:
