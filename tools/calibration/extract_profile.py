@@ -30,15 +30,9 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     pass
 
-# Try to import rmscene for parsing .rm files
-try:
-    import rmscene  # noqa: F401  (availability probe)
-    from rmscene import read_blocks
-    from rmscene.scene_stream import SceneLineItemBlock
-
-    RMSCENE_AVAILABLE = True
-except ImportError:
-    RMSCENE_AVAILABLE = False
+# rmscene is a hard project dependency (see pyproject.toml).
+from rmscene import read_blocks
+from rmscene.scene_stream import SceneGlyphItemBlock, SceneLineItemBlock
 
 
 @dataclass
@@ -114,9 +108,6 @@ def extract_highlights_from_rm(rm_path: Path) -> list[HighlightRect]:
     Returns:
         List of HighlightRect objects
     """
-    if not RMSCENE_AVAILABLE:
-        raise ImportError("rmscene is required. Install with: uv pip install rmscene")
-
     highlights = []
 
     with open(rm_path, "rb") as f:
@@ -392,11 +383,6 @@ class SentinelSource:
 
 def read_glyph_highlights(rm_path: Path, doc: str) -> list[GlyphHighlight]:
     """Read GlyphRange highlights from an .rm file (SceneGlyphItemBlock)."""
-    if not RMSCENE_AVAILABLE:
-        raise ImportError("rmscene is required. Install with: uv pip install rmscene")
-
-    from rmscene.scene_stream import SceneGlyphItemBlock
-
     out: list[GlyphHighlight] = []
     with open(rm_path, "rb") as f:
         for block in read_blocks(f):
@@ -419,11 +405,6 @@ def read_stroke_bounds(rm_path: Path) -> dict[str, float] | None:
     anchor-relative; the T5 analysis compares these against the highlight
     rectangle to estimate the baseline offset and flags the result for review.
     """
-    if not RMSCENE_AVAILABLE:
-        raise ImportError("rmscene is required.")
-
-    from rmscene.scene_stream import SceneLineItemBlock
-
     ys: list[float] = []
     with open(rm_path, "rb") as f:
         for block in read_blocks(f):
