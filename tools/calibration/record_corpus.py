@@ -28,6 +28,9 @@ Usage:
     # Push only, then stop (annotate later, pull in a second invocation):
     uv run python tools/calibration/record_corpus.py --push-only
 
+    # Teardown: remove the pushed calibration docs from the device/cloud:
+    uv run python tools/calibration/record_corpus.py --unsync
+
 Requires:
     - Configured cloud credentials (``rock-paper-sync init`` / ``register``).
     - SSH access to the device (root@<device-host>) for thumbnails + firmware.
@@ -147,6 +150,44 @@ def push_corpus(device: str, device_folder: str, user_config: Path) -> None:
 
     docs = corpus_documents(device)
     print_ok(f"Pushed {len(docs)} calibration documents into folder '{device_folder}'")
+
+
+def unsync_corpus(device: str, user_config: Path) -> None:
+    """Delete the pushed calibration documents from the device / cloud.
+
+    Reuses the same generated push config (and its sync-state database), so the
+    production ``unsync`` command knows exactly which documents this tool pushed
+    and removes only those — leaving the operator's real vaults untouched.
+    """
+    from rock_paper_sync.config import load_config
+
+    print_step("Unsyncing calibration corpus from device")
+
+    config_file = REPO_ROOT / ".calibration_push" / device / "config.toml"
+    if not config_file.exists():
+        # Regenerate so the vault name / folder match a prior push.
+        if not user_config.exists():
+            print_error(f"No push config found and user config missing: {user_config}")
+            sys.exit(1)
+        cloud_base_url = load_config(user_config).cloud.base_url
+        config_file.parent.mkdir(parents=True, exist_ok=True)
+        write_push_config(config_file, device, DEFAULT_DEVICE_FOLDER, cloud_base_url)
+
+    # --config is a group-level option, so it must precede the `unsync` subcommand.
+    cmd = [
+        "uv", "run", "rock-paper-sync",
+        "--config", str(config_file),
+        "unsync",
+        "--vault", "layout-calibration",
+        "--delete-from-cloud",
+        "--yes",
+    ]
+    print(f"  $ {' '.join(cmd)}")
+    result = subprocess.run(cmd, cwd=REPO_ROOT)
+    if result.returncode != 0:
+        print_error("Unsync failed. See sync log for details.")
+        sys.exit(1)
+    print_ok(f"Removed the calibration corpus from folder '{DEFAULT_DEVICE_FOLDER}'")
 
 
 # --- Step 2: operator checklist -------------------------------------------
@@ -321,11 +362,18 @@ def main() -> None:
                         help="Push and print checklist, then stop (pull later)")
     parser.add_argument("--pull-only", action="store_true",
                         help="Skip push and checklist; only pull recorded files")
+    parser.add_argument("--unsync", action="store_true",
+                        help="Teardown: delete the pushed calibration docs from "
+                             "the device/cloud and exit (nothing else)")
     args = parser.parse_args()
 
     if not src_dir(args.device).exists():
         print_error(f"Corpus source not found: {src_dir(args.device)}")
         sys.exit(1)
+
+    if args.unsync:
+        unsync_corpus(args.device, args.user_config)
+        return
 
     if args.pull_only:
         pull_corpus(args.device, args.device_host, args.device_folder)
