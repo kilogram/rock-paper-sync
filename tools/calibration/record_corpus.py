@@ -290,6 +290,10 @@ def pull_corpus(device: str, device_host: str, device_folder: str, user_config: 
 
     out_root = corpus_dir(device)
     rm_root = out_root / "rm_files"
+    # Clear any prior recording: files are named by page-UUID, which changes
+    # between sessions, so stale .rm files would otherwise accumulate and make
+    # every sentinel match twice (once per session's copy of each document).
+    shutil.rmtree(rm_root, ignore_errors=True)
     rm_root.mkdir(parents=True, exist_ok=True)
 
     recorded: dict[str, list[str]] = {}
