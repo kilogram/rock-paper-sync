@@ -46,8 +46,11 @@ Pure property tests of `WordWrapLayoutEngine` for spec items E1–E6.
 - [x] T5 probe: a fixture line of underscores with an on-device handwritten
       descender stroke, to settle the 20-vs-25 baseline contradiction
       (`src/07_t5_probe.md`).
-- [ ] **Run the session once** (device required); commit corpus + `profile.json`.
-      See "Running the device session" below.
+- [x] **Run the session once** (device required); commit corpus + `profile.json`.
+      Recorded on firmware `20260310084634`; 41/41 sentinels captured. T5BASE
+      raw values (highlight top/height + stroke bounds) are stored but the
+      20-vs-25 baseline resolution is deferred to Phase 3 per C4 (strokes are
+      anchor-relative). See "Running the device session" below.
 
 **Exit criteria:** corpus checked in; `profile.json` contains measured values
 (or explicit nulls) for every OPEN/ASSERTED spec item it can address.
