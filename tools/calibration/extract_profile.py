@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 
 # Try to import rmscene for parsing .rm files
 try:
-    import rmscene
+    import rmscene  # noqa: F401  (availability probe)
     from rmscene import read_blocks
     from rmscene.scene_items import SceneLineItemBlock
 
@@ -338,15 +338,393 @@ def create_profile(
     return profile
 
 
+# ===========================================================================
+# Corpus mode (Phase 2): sentinel-based extraction
+#
+# The corpus layout (see docs/LAYOUT_TESTBENCH_PLAN.md Phase 2) is:
+#   <input>/src/*.md                 source markdown with ZEBRAnn sentinels
+#   <input>/rm_files/<doc>/*.rm      device .rm files pulled after highlighting
+#   <input>/profile.json             recording metadata + derived measurements
+#
+# On-device highlights are stored as SceneGlyphItemBlock -> GlyphRange, whose
+# `.text` is the highlighted string itself. That lets us map a highlight back
+# to its sentinel by exact text match — no positional guessing (principle P2).
+# ===========================================================================
+
+
+@dataclass
+class GlyphHighlight:
+    """A device-recorded highlight: the highlighted text and its rectangles."""
+
+    text: str
+    rects: list[HighlightRect]
+    doc: str
+
+    @property
+    def top(self) -> float:
+        return min(r.y for r in self.rects)
+
+    @property
+    def height(self) -> float:
+        return max(r.height for r in self.rects)
+
+    @property
+    def left(self) -> float:
+        return min(r.x for r in self.rects)
+
+    @property
+    def right(self) -> float:
+        return max(r.x + r.width for r in self.rects)
+
+
+@dataclass
+class SentinelSource:
+    """Where a sentinel lives in the source markdown."""
+
+    sentinel: str
+    doc: str
+    block_type: str  # body | heading | list | code
+    heading_level: int | None = None
+    list_level: int | None = None
+    char_offset: int | None = None  # offset within the plain-text line
+    plain_line: str = ""
+
+
+def read_glyph_highlights(rm_path: Path, doc: str) -> list[GlyphHighlight]:
+    """Read GlyphRange highlights from an .rm file (SceneGlyphItemBlock)."""
+    if not RMSCENE_AVAILABLE:
+        raise ImportError("rmscene is required. Install with: uv pip install rmscene")
+
+    from rmscene.scene_stream import SceneGlyphItemBlock
+
+    out: list[GlyphHighlight] = []
+    with open(rm_path, "rb") as f:
+        for block in read_blocks(f):
+            if isinstance(block, SceneGlyphItemBlock) and block.item.value is not None:
+                gr = block.item.value
+                rects = [
+                    HighlightRect(x=r.x, y=r.y, width=r.w, height=r.h)
+                    for r in gr.rectangles
+                ]
+                if rects:
+                    out.append(GlyphHighlight(text=gr.text, rects=rects, doc=doc))
+    return out
+
+
+def read_stroke_bounds(rm_path: Path) -> dict[str, float] | None:
+    """Read the Y-bounds of handwritten strokes in an .rm file (for T5 probe).
+
+    Returns min/max Y of all stroke points in the file's native coordinate
+    space, or None if there are no strokes. Note (C4): stroke points are
+    anchor-relative; the T5 analysis compares these against the highlight
+    rectangle to estimate the baseline offset and flags the result for review.
+    """
+    if not RMSCENE_AVAILABLE:
+        raise ImportError("rmscene is required.")
+
+    from rmscene.scene_stream import SceneLineItemBlock
+
+    ys: list[float] = []
+    with open(rm_path, "rb") as f:
+        for block in read_blocks(f):
+            if isinstance(block, SceneLineItemBlock) and block.item.value is not None:
+                item = block.item.value
+                for p in getattr(item, "points", []):
+                    ys.append(p.y)
+    if not ys:
+        return None
+    return {"stroke_min_y": min(ys), "stroke_max_y": max(ys), "n_points": len(ys)}
+
+
+def parse_sentinel_sources(src_dir: Path) -> dict[str, SentinelSource]:
+    """Scan source markdown for ZEBRAnn / T5BASE sentinels and classify them."""
+    import re
+
+    token_re = re.compile(r"(ZEBRA\d{2}|T5BASE)")
+    sources: dict[str, SentinelSource] = {}
+
+    for md in sorted(src_dir.glob("*.md")):
+        if md.name == "README.md":
+            continue
+        doc = md.stem
+        in_code = False
+        for raw in md.read_text().splitlines():
+            stripped = raw.strip()
+            if stripped.startswith("```"):
+                in_code = not in_code
+                continue
+
+            if in_code:
+                block_type, heading_level, list_level = "code", None, None
+                plain = raw
+            elif stripped.startswith("#"):
+                block_type = "heading"
+                heading_level = len(raw) - len(raw.lstrip("#"))
+                list_level = None
+                plain = raw.lstrip("#").strip()
+            elif re.match(r"^\s*([-*]|\d+\.)\s", raw):
+                block_type = "list"
+                heading_level = None
+                indent = len(raw) - len(raw.lstrip(" "))
+                list_level = indent // 4
+                plain = re.sub(r"^\s*([-*]|\d+\.)\s+", "", raw)
+            else:
+                block_type, heading_level, list_level = "body", None, None
+                plain = raw
+
+            plain_stored = plain.strip()
+            for m in token_re.finditer(raw):
+                token = m.group(1)
+                offset = plain_stored.find(token)
+                sources[token] = SentinelSource(
+                    sentinel=token,
+                    doc=doc,
+                    block_type=block_type,
+                    heading_level=heading_level,
+                    list_level=list_level,
+                    char_offset=offset if offset >= 0 else None,
+                    plain_line=plain_stored,
+                )
+    return sources
+
+
+def _median(values: list[float]) -> float | None:
+    if not values:
+        return None
+    s = sorted(values)
+    n = len(s)
+    mid = n // 2
+    return s[mid] if n % 2 else (s[mid - 1] + s[mid]) / 2.0
+
+
+def build_sentinel_records(
+    sources: dict[str, SentinelSource],
+    highlights: list[GlyphHighlight],
+) -> tuple[list[dict], list[str]]:
+    """Correlate device highlights to source sentinels by exact text match.
+
+    Returns (records, warnings). Each record joins the source location, char
+    range, and the device rectangle(s) for one sentinel.
+    """
+    by_text: dict[str, list[GlyphHighlight]] = {}
+    for h in highlights:
+        by_text.setdefault(h.text.strip(), []).append(h)
+
+    records: list[dict] = []
+    warnings: list[str] = []
+
+    for sentinel, src in sorted(sources.items()):
+        matches = by_text.get(sentinel, [])
+        if not matches:
+            warnings.append(f"MISSING highlight for sentinel {sentinel} "
+                            f"(source doc {src.doc}) — was it highlighted on device?")
+            continue
+        if len(matches) > 1:
+            warnings.append(f"AMBIGUOUS: {len(matches)} highlights match {sentinel}; "
+                            "using the first in reading order.")
+            matches.sort(key=lambda h: (h.top, h.left))
+        h = matches[0]
+        records.append({
+            "sentinel": sentinel,
+            "doc": src.doc,
+            "block_type": src.block_type,
+            "heading_level": src.heading_level,
+            "list_level": src.list_level,
+            "char_offset": src.char_offset,
+            "char_length": len(sentinel),
+            "plain_line": src.plain_line,
+            "n_rects": len(h.rects),
+            "rect": {
+                "x": round(h.left, 2),
+                "y": round(h.top, 2),
+                "width": round(h.right - h.left, 2),
+                "height": round(h.height, 2),
+            },
+            "rects": [
+                {"x": round(r.x, 2), "y": round(r.y, 2),
+                 "width": round(r.width, 2), "height": round(r.height, 2)}
+                for r in h.rects
+            ],
+        })
+    return records, warnings
+
+
+def derive_measurements(records: list[dict], input_dir: Path) -> dict:
+    """Derive layout measurements from correlated sentinel records.
+
+    Every value is either a measured number or an explicit null with a reason,
+    so the corpus can report exactly which OPEN/ASSERTED spec items it settled.
+    """
+    m: dict = {}
+
+    # Line height by block type (rect height == line height for that block; E5).
+    heights: dict[str, list[float]] = {}
+    for r in records:
+        heights.setdefault(r["block_type"], []).append(r["rect"]["height"])
+    m["line_height_px"] = {bt: _median(v) for bt, v in heights.items()}
+
+    # Per-heading-level line height (T3): doc 02 has one sentinel per H1..H6.
+    heading_levels: dict[int, list[float]] = {}
+    for r in records:
+        if r["block_type"] == "heading" and r["heading_level"]:
+            heading_levels.setdefault(r["heading_level"], []).append(r["rect"]["height"])
+    m["heading_line_height_px"] = {
+        f"h{lvl}": _median(v) for lvl, v in sorted(heading_levels.items())
+    }
+
+    # Word-wrap width (W1): rightmost body glyph edge; left frame edge is x_min.
+    body = [r for r in records if r["block_type"] == "body"]
+    if body:
+        left = min(r["rect"]["x"] for r in body)
+        right = max(r["rect"]["x"] + r["rect"]["width"] for r in body)
+        m["wrap"] = {
+            "body_left_x": round(left, 2),
+            "body_right_edge_x": round(right, 2),
+            "implied_layout_width": round(right - left, 2),
+            "note": "implied width is a lower bound (nearest sentinel to margin)",
+        }
+    else:
+        m["wrap"] = None
+
+    # Paragraph gap (B1): spacing-ladder doc deltas between consecutive sentinels.
+    ladder = sorted(
+        (r for r in records if r["doc"].endswith("spacing_ladder")),
+        key=lambda r: r["rect"]["y"],
+    )
+    if len(ladder) >= 2:
+        deltas = [
+            round(ladder[i]["rect"]["y"] - ladder[i - 1]["rect"]["y"], 2)
+            for i in range(1, len(ladder))
+        ]
+        m["paragraph_gap_px"] = {
+            "deltas": deltas,
+            "min": min(deltas),
+            "note": "each delta is the Y gap between successive ladder paragraphs; "
+                    "constant deltas ⇒ extra blank lines collapse (B1)",
+        }
+    else:
+        m["paragraph_gap_px"] = None
+
+    # List indentation (B3): rect.x per list level from the lists doc.
+    list_levels: dict[int, list[float]] = {}
+    for r in records:
+        if r["block_type"] == "list" and r["list_level"] is not None:
+            list_levels.setdefault(r["list_level"], []).append(r["rect"]["x"])
+    m["list_indent_x_by_level"] = {
+        f"level{lvl}": _median(v) for lvl, v in sorted(list_levels.items())
+    }
+
+    # Heading spacing (B2): first body sentinel Y minus heading sentinel Y, per doc.
+    headings_doc = [r for r in records if r["doc"].endswith("headings")]
+    heading_gaps = []
+    hs = sorted(headings_doc, key=lambda r: r["rect"]["y"])
+    for i in range(1, len(hs)):
+        if hs[i - 1]["block_type"] == "heading" and hs[i]["block_type"] == "body":
+            heading_gaps.append({
+                "after_level": hs[i - 1]["heading_level"],
+                "gap_px": round(hs[i]["rect"]["y"] - hs[i - 1]["rect"]["y"], 2),
+            })
+    m["heading_gap_px"] = heading_gaps or None
+
+    # T5 baseline probe: compare T5BASE highlight top against stroke bounds.
+    t5 = _derive_t5(records, input_dir)
+    m["t5_baseline_offset"] = t5
+
+    return m
+
+
+def _derive_t5(records: list[dict], input_dir: Path) -> dict | None:
+    """Estimate baseline offset from the T5 probe (highlight vs descender)."""
+    t5_rec = next((r for r in records if r["sentinel"] == "T5BASE"), None)
+    if t5_rec is None:
+        return {"value": None, "reason": "T5BASE highlight not found in corpus"}
+
+    probe_doc = t5_rec["doc"]
+    stroke_bounds = None
+    doc_dir = input_dir / "rm_files" / probe_doc
+    if doc_dir.exists():
+        for rm in doc_dir.glob("*.rm"):
+            b = read_stroke_bounds(rm)
+            if b:
+                stroke_bounds = b
+                break
+
+    if stroke_bounds is None:
+        return {
+            "value": None,
+            "reason": "no handwritten stroke found in T5 probe document",
+            "highlight_top_y": t5_rec["rect"]["y"],
+        }
+
+    return {
+        "value": None,
+        "reason": "raw values recorded; resolve 20-vs-25 in Phase 3 (strokes are "
+                  "anchor-relative per C4, so this needs the anchor to be absolute)",
+        "highlight_top_y": t5_rec["rect"]["y"],
+        "highlight_height": t5_rec["rect"]["height"],
+        "stroke_min_y_native": round(stroke_bounds["stroke_min_y"], 2),
+        "stroke_max_y_native": round(stroke_bounds["stroke_max_y"], 2),
+    }
+
+
+def create_corpus_profile(device: str, input_dir: Path, output_path: Path | None) -> dict:
+    """Build the full corpus profile from src/ + rm_files/<doc>/ layout."""
+    src = input_dir / "src"
+    rm_root = input_dir / "rm_files"
+    if not src.exists():
+        raise FileNotFoundError(f"No src/ directory under {input_dir}; not a corpus.")
+
+    sources = parse_sentinel_sources(src)
+
+    highlights: list[GlyphHighlight] = []
+    if rm_root.exists():
+        for doc_dir in sorted(p for p in rm_root.iterdir() if p.is_dir()):
+            for rm in sorted(doc_dir.glob("*.rm")):
+                highlights.extend(read_glyph_highlights(rm, doc=doc_dir.name))
+
+    records, warnings = build_sentinel_records(sources, highlights)
+    measurements = derive_measurements(records, input_dir)
+
+    # Merge with any existing profile.json (recording metadata from record_corpus).
+    profile: dict = {}
+    default_out = input_dir / "profile.json"
+    existing = output_path if (output_path and output_path.exists()) else default_out
+    if existing.exists():
+        try:
+            profile = json.loads(existing.read_text())
+        except Exception:  # noqa: BLE001
+            profile = {}
+
+    profile["device_name"] = device
+    profile["sentinel_count_source"] = len(sources)
+    profile["sentinel_count_matched"] = len(records)
+    profile["sentinels"] = records
+    profile["measurements"] = measurements
+    profile["warnings"] = warnings
+
+    if output_path:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(json.dumps(profile, indent=2) + "\n")
+        print(f"Wrote corpus profile to: {output_path}")
+
+    print(f"Sentinels: {len(records)}/{len(sources)} matched to device highlights")
+    for w in warnings:
+        print(f"  WARN: {w}")
+    return profile
+
+
 def main():
     """Main entry point."""
     import argparse
 
     parser = argparse.ArgumentParser(description="Extract device calibration profile")
     parser.add_argument("--device", required=True, help="Device name (e.g., paper_pro_move)")
-    parser.add_argument("--input", required=True, help="Directory with golden .rm files")
+    parser.add_argument("--input", required=True, help="Corpus dir (with src/ + rm_files/) "
+                                                       "or legacy dir of golden .rm files")
     parser.add_argument("--output", help="Output path for profile.json")
     parser.add_argument("--print", action="store_true", help="Print profile to stdout")
+    parser.add_argument("--legacy", action="store_true",
+                        help="Force legacy flat calibration_*.rm mode")
 
     args = parser.parse_args()
 
@@ -356,6 +734,14 @@ def main():
         sys.exit(1)
 
     output_path = Path(args.output) if args.output else None
+
+    # Prefer corpus mode when a src/ directory is present.
+    if not args.legacy and (input_dir / "src").exists():
+        profile = create_corpus_profile(args.device, input_dir, output_path)
+        if args.print or not output_path:
+            print("\n=== Corpus Profile ===")
+            print(json.dumps(profile, indent=2))
+        return
 
     profile = create_profile(args.device, input_dir, output_path)
 
