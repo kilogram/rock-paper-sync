@@ -44,34 +44,61 @@ P2)
 `width = 750.0` (from `RootTextBlock`; always read from the file, never
 assume). — `ASSERTED`
 
-**T2.** Body line height is **57.0 px** in document coordinates. 68 px is the
-264/226-scaled thumbnail value and must never appear in coordinate math. —
-`ASSERTED` (2025-12-29)
+**T2.** Body visual line pitch is **45.55 px** in document coordinates —
+`VERIFIED(corpus)` (`test_corpus_differential::test_body_line_pitch_is_measured_value`,
+firmware 20260310084634). Every same-paragraph adjacent-line highlight y-delta
+in the corpus is an integer multiple of 45.55 to <0.05 px, and the highlight box
+height is 44.4 px (≈ pitch). This **falsifies the prior 57.0 px value** carried
+in `DeviceGeometry.line_height` (Δ=11.45 px/line;
+`test_engine_line_height_matches_device` is `xfail(strict)`). Changing the
+constant is a production-affecting refit (pagination + annotation anchoring are
+calibrated around 57 and round-trip symmetrically today) — tracked as a Phase 4
+follow-up, not a silent edit. 68 px is the 264/226-scaled thumbnail value and
+must never appear in coordinate math.
 
-**T3.** Heading line height is 87 px (≈1.53× body). Per-heading-level values
-for H1–H6 are not individually calibrated. — `OPEN` (corpus must measure each
-level)
+**T3.** Heading blocks pitch at **139.1 px** (heading + trailing body + gaps;
+`03`/`02` corpus). The highlight box height is a constant 44.4 px for **every**
+block type, so the per-level *glyph* height for H1–H6 is not distinguishable
+from highlight rectangles alone — the corpus cannot measure per-level line
+height with the current instrumentation. — `OPEN` (needs a probe that captures
+line-top-to-line-top within a multi-line heading, or `RootTextBlock` glyph
+metrics)
 
 **T4.** Body font is Noto Sans at typographic 10.0 pt ⇒ 31.4 px at 226 DPI.
 Character advance widths follow the Noto Sans font metrics
 (`font_metrics.py`); 15.0 px is an *average* permitted only as documented
-fallback inside `layout/`. — `ASSERTED` (2025-12-12)
+fallback inside `layout/`. — `OPEN` (our advances **diverge from the device**:
+corpus shows `iii` runs too wide, ~+20 px x-drift per line of narrow glyphs,
+and `mmm` too narrow — the device wraps `mmm` a line earlier than our engine.
+Measured per-token deltas in `test_corpus_differential::test_d1_rect_x`
+(`xfail(strict)`). The free pixel-size fit is Phase 5's W3 job.)
 
 **T5.** Baseline offset (line top → text baseline): `DeviceGeometry` says
 **25.0**; `tools/rmlib/renderer.py` / `RENDERER_COORDINATE_MODEL.md` say
-**20**. These cannot both be right. — `OPEN` (contradiction; corpus test must
-decide; see P4 corollary)
+**20**. — `OPEN` (still unresolved). The T5 probe recorded the descender
+stroke's native y-bounds (6.55–39.8) and the underscore highlight top (230.6)
+but **not** the stroke's anchor; strokes are anchor-relative (C4), so native
+bounds cannot be converted to a page baseline without the absolute anchor. The
+probe is insufficient — re-record with anchor capture (corpus refresh) before
+resolving. Corpus-measured highlight top pad is ~3.4 px (first line top 230.6
+vs frame `pos_y` 234.0).
 
 ## W. Word wrapping
 
-**W1.** The device wraps using the effective layout width
-`layout_text_width = 758.0` (≈8 px wider than the stored `text_width` of
-750). — `ASSERTED` (2025-12-08)
+**W1.** The device wraps using an effective layout width near
+`layout_text_width = 758.0`. Corpus implies a lower bound of ~747 px (nearest
+line-start sentinel to the right margin). — `ASSERTED` (2025-12-08; corpus
+consistent but does not tighten the value — no sentinel sits exactly on the
+wrap boundary)
 
 **W2.** Wrapping is greedy word wrap on whitespace with proportional Noto
 Sans advances; a word longer than the line width is broken at character
-granularity. — `ASSERTED` / partially `OPEN` (long-word breaking behavior
-unverified)
+granularity. — partially `OPEN`. Wrap *structure* matches on prose, numerals,
+and `iii` (`test_corpus_differential::test_d2_relative_line_deltas`,
+`test_d2_line_start_alignment`), but **fails on `mmm`**: the device breaks a
+line earlier than our engine because our `m` advance is too narrow (see T4).
+Long-word character-granularity breaking (ZEBRA-longword fixture) remains
+unverified.
 
 **W3.** (Oracle expectation) Qt `QTextLayout` with Noto Sans at the correct
 **pixel** size reproduces device line breaks exactly for corpus inputs. The
@@ -85,15 +112,34 @@ invariant of our engine; must match device behavior on corpus.
 
 ## B. Block layout (structural)
 
-Values to be measured by the corpus (`tools/calibration/extract_profile.py`
-skeleton exists); all `OPEN` until then:
+Measured from the corpus (`profile.json`, firmware 20260310084634). Values are
+highlight-box coordinates; add the ~3.4 px box left/top pad to recover glyph
+positions.
 
-**B1.** Vertical spacing between paragraphs (blank-line gap).
-**B2.** Vertical spacing before/after headings, per level.
-**B3.** List item spacing and per-level indentation (bullets and ordered).
-**B4.** Code block line height, indentation, and spacing.
-**B5.** First rendered line starts at `pos_y` (234.0) — i.e. top margin is
-part of the text frame, not an extra offset.
+**B1.** Paragraph pitch (single-line paragraphs, blank-line separated) is
+**115.1 px** (spacing-ladder doc; deltas constant to 0.01 px ⇒ extra blank
+lines collapse). — `VERIFIED(corpus)` (`profile.json:paragraph_gap_px`)
+
+**B2.** Heading block pitch (heading + trailing body + surrounding gaps) is
+**139.1 px** per level (H2→H5, constant). Per-level heading *line* height is
+not separable from highlights (see T3). — partially `OPEN`
+
+**B3.** List items pitch at **69.55 px**; a blank line between list groups adds
+one extra 69.55 gap. Per-level indentation is **not** observed — every
+sentinel across nesting levels 0–2 sits at x=-359.2 (the device does not indent
+the highlighted token text, only the bullet marker). — `VERIFIED(corpus)`
+(`profile.json:list_indent_x_by_level`, `paragraph_gap_px`); indentation of the
+marker itself is `OPEN` (no marker sentinel).
+
+**B4.** Code block lines pitch at **69.55 px** (same as list items). First code
+line x=-378.4 (line start); subsequent lines carry source leading whitespace
+(ZEBRA29 -348.2, ZEBRA30 -291.9). — `VERIFIED(corpus)` for pitch; indentation
+detail `OPEN`.
+
+**B5.** First rendered line starts at `pos_y` (234.0): the first-line highlight
+top is 230.6 = 234.0 − 3.4 (box top pad), so the glyph top is at the frame
+`pos_y` with no extra offset. — `VERIFIED(corpus)`
+(`test_corpus_differential`; first-line sentinels ZEBRA11/ZEBRA16/T5BASE)
 
 ## G. Pagination
 
@@ -129,12 +175,23 @@ state (locale, environment) may influence layout.
 
 ## D. Differential expectations (corpus tests)
 
-**D1.** For every device-recorded highlight in the corpus, the engine's
-predicted rectangle matches within ε = 2.0 px in x, y, width (height per
-T2/T3).
+Highlight-box model (corpus-measured, needed to compare an engine glyph rect
+to a device highlight rect): box left edge = glyph x − **3.4 px** (left pad),
+box top = glyph top − ~3.4 px, box height = **44.4 px** (constant), box width =
+glyph advance + ~16–22 px (per-token, not yet modelled tightly).
 
-**D2.** For every corpus paragraph, engine line-break offsets equal
-device-observed line breaks exactly (derived from highlight y-jumps).
+**D1.** For every device-recorded highlight, the engine's predicted rectangle
+(mapped through the box left pad) matches within ε = 2.0 px in x. — partially
+`VERIFIED(corpus)` (`test_corpus_differential::test_d1_rect_x`): holds for
+line-start glyphs (ZEBRA01/07/08); **fails** for narrow-glyph and mmm runs by
+the T4/W2 metric divergence (each failing token `xfail(strict)` with its
+measured Δx). Absolute y and width are not yet asserted — y needs the T2 refit
+and full block stacking; width needs a highlight-box width model.
+
+**D2.** Engine line breaks equal device-observed line breaks. — partially
+`VERIFIED(corpus)` (`test_corpus_differential::test_d2_relative_line_deltas`,
+`test_d2_line_start_alignment`): prose, numerals, and `iii` match; `mmm` fails
+(ZEBRA05 line-start mismatch, `xfail(strict)`).
 
 **D3.** Renderer output uses the production engine (P3): given identical
 inputs, renderer glyph positions equal engine predictions exactly (0 px —
