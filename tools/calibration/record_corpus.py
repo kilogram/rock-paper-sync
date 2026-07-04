@@ -132,9 +132,11 @@ def push_corpus(device: str, device_folder: str, user_config: Path) -> None:
     config_file = workspace / "config.toml"
     write_push_config(config_file, device, device_folder, cloud_base_url)
 
+    # --config is a group-level option, so it must precede the `sync` subcommand.
     cmd = [
-        "uv", "run", "rock-paper-sync", "sync",
+        "uv", "run", "rock-paper-sync",
         "--config", str(config_file),
+        "sync",
         "--direction", "push",
     ]
     print(f"  $ {' '.join(cmd)}")
