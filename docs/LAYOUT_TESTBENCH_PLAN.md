@@ -19,7 +19,11 @@ Pure property tests of `WordWrapLayoutEngine` for spec items E1–E6.
 
 ## Phase 2 — Ground-truth corpus (one scripted device session)
 
+<<<<<<< HEAD
 - [ ] Author calibration markdown suite under
+=======
+- [x] Author calibration markdown suite under
+>>>>>>> 1a51604 (feat: layout Phase 2 corpus fixtures + record/extract tooling)
       `tests/record_replay/testdata/calibration/paper_pro_move/src/`:
       1. wrapped paragraphs (normal prose, narrow `iii…`, wide `mmm…`,
          numerals, punctuation-heavy, one word > line width);
@@ -28,6 +32,7 @@ Pure property tests of `WordWrapLayoutEngine` for spec items E1–E6.
       4. code blocks (B4);
       5. blank-line spacing ladder (B1);
       6. multi-page document with content straddling the page break (P1g);
+<<<<<<< HEAD
       7. sentinel words (unique, greppable, e.g. `ZEBRA01`…`ZEBRA40`)
          distributed across all of the above — these get highlighted
          on-device.
@@ -42,10 +47,53 @@ Pure property tests of `WordWrapLayoutEngine` for spec items E1–E6.
 - [ ] T5 probe: a fixture line of underscores with an on-device handwritten
       descender stroke, to settle the 20-vs-25 baseline contradiction.
 - [ ] Run the session once; commit corpus + `profile.json`.
+=======
+      7. sentinel words (unique, greppable, `ZEBRA01`…`ZEBRA40`)
+         distributed across all of the above — these get highlighted
+         on-device.
+      → `src/01_wrapped_paragraphs.md`…`06_multipage.md`; `src/README.md`
+      holds the sentinel→spec-item map.
+- [x] `tools/calibration/record_corpus.py`: sync suite to device via existing
+      cloud sync (production `sync` CLI); print an operator checklist
+      ("highlight every ZEBRAnn token"); pull resulting `.rm` files via
+      existing SSH capture (`tools/analysis/device_capture.py` helpers); stamp
+      firmware/xochitl version into `profile.json`.
+- [x] Extend `tools/calibration/extract_profile.py` to emit per-highlight
+      records: sentinel id → char range → device rect(s) (matched by exact
+      `GlyphRange.text`), plus derived measurements (line height per block
+      type, wrap width, spacing values for B1–B5, baseline offset via T5
+      probe). Offline logic covered by `tests/layout/test_corpus_extract.py`.
+- [x] T5 probe: a fixture line of underscores with an on-device handwritten
+      descender stroke, to settle the 20-vs-25 baseline contradiction
+      (`src/07_t5_probe.md`).
+- [ ] **Run the session once** (device required); commit corpus + `profile.json`.
+      See "Running the device session" below.
+>>>>>>> 1a51604 (feat: layout Phase 2 corpus fixtures + record/extract tooling)
 
 **Exit criteria:** corpus checked in; `profile.json` contains measured values
 (or explicit nulls) for every OPEN/ASSERTED spec item it can address.
 
+<<<<<<< HEAD
+=======
+### Running the device session
+
+Everything except the device round-trip is built and tested. To record:
+
+```bash
+# 1. Push corpus, print the operator checklist, wait, then pull + stamp:
+uv run python tools/calibration/record_corpus.py --device-host <ssh-host>
+#    (or split it: --push-only now, --pull-only after highlighting)
+
+# 2. Highlight every ZEBRAnn token + draw the T5 descender (checklist guides you).
+
+# 3. Derive measurements into profile.json:
+uv run python tools/calibration/extract_profile.py \
+    --device paper_pro_move \
+    --input tests/record_replay/testdata/calibration/paper_pro_move \
+    --output tests/record_replay/testdata/calibration/paper_pro_move/profile.json
+```
+
+>>>>>>> 1a51604 (feat: layout Phase 2 corpus fixtures + record/extract tooling)
 ## Phase 3 — Differential test suite (offline, CI)
 
 - [ ] `tests/layout/test_corpus_differential.py`: D1 (rect match within
