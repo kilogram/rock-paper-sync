@@ -4,16 +4,21 @@ Spec item T5 is an unresolved contradiction: `DeviceGeometry.baseline_offset`
 says 25.0, the renderer says 20. This probe settles it with a device-signed
 measurement instead of a guess (principle P4).
 
-Procedure (see the operator checklist in `record_corpus.py`):
+The single short line below is the target. It does NOT wrap — keep it on one
+visual line. `T5BASE` names the line; the underscores draw the baseline the
+glyphs sit on.
 
-1. The row of underscores below is a single body line. Its glyph rectangle
-   (highlight it — sentinel `T5BASE`) fixes the line's top edge and height.
-2. With the pen, draw a short vertical descender stroke starting exactly on the
-   visible baseline of the underscores (the underscores sit *on* the baseline)
-   and going downward, crossing the `T5BASE` marker so the stroke's anchor is
-   unambiguous.
-3. `extract_profile.py` compares the stroke's top Y (the baseline) against the
-   highlight rectangle's top Y (the line top). The difference is the true
-   baseline offset, resolving 20 vs 25.
+What to do on the device (see the operator checklist in `record_corpus.py`):
 
-T5BASE ________________________________________________________________________
+1. Highlight the token `T5BASE`. Its glyph rectangle fixes this line's TOP edge
+   and height.
+2. With the pen, put the tip down right on the underscores (that visible
+   underline IS the baseline) and drag straight DOWN about 1 cm, making one
+   short vertical stroke. Anywhere along the underscores is fine — you only need
+   one stroke, and only its starting (top) point matters.
+
+`extract_profile.py` takes the stroke's top Y (the baseline) minus the
+highlight rectangle's top Y (the line top); that difference is the true baseline
+offset, resolving 20 vs 25.
+
+T5BASE _________________________________
