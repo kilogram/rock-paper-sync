@@ -11,8 +11,9 @@ only has to highlight sentinel words and draw one probe stroke:
     2. ANNOTATE - print an operator checklist ("highlight every ZEBRAnn token,
                 draw the T5 descender stroke") and wait.
     3. PULL   - download the resulting ``.rm`` files from the cloud and the page
-                thumbnails via SSH, then stamp firmware / xochitl version and
-                recording date into ``profile.json``.
+                thumbnails via SSH, stamp firmware / xochitl version and
+                recording date into ``profile.json``, then automatically unsync
+                (the corpus is never left on the device).
 
 After this runs, ``extract_profile.py`` turns the pulled ``.rm`` files into
 measured layout values. The device is a data source, not a test loop (P1): run
@@ -264,8 +265,13 @@ def read_firmware_info(device_host: str) -> dict[str, str]:
     return info
 
 
-def pull_corpus(device: str, device_host: str, device_folder: str) -> None:
-    """Download recorded .rm files + thumbnails and stamp profile.json."""
+def pull_corpus(device: str, device_host: str, device_folder: str, user_config: Path) -> None:
+    """Download recorded .rm files + thumbnails, stamp profile.json, and clean up.
+
+    The calibration corpus is a transient data source, never a resident of the
+    device — like the record/replay harness, this always tears down the pushed
+    documents once the recording has been captured locally.
+    """
     print_step("Pulling recorded corpus from device")
 
     _client, sync = get_cloud_client()
@@ -301,6 +307,9 @@ def pull_corpus(device: str, device_host: str, device_folder: str) -> None:
 
     firmware = read_firmware_info(device_host)
     stamp_profile(device, firmware, recorded)
+
+    # Always tear down: the corpus is never left on the device.
+    unsync_corpus(device, user_config)
 
 
 def stamp_profile(device: str, firmware: dict[str, str], recorded: dict[str, list[str]]) -> None:
@@ -363,8 +372,9 @@ def main() -> None:
     parser.add_argument("--pull-only", action="store_true",
                         help="Skip push and checklist; only pull recorded files")
     parser.add_argument("--unsync", action="store_true",
-                        help="Teardown: delete the pushed calibration docs from "
-                             "the device/cloud and exit (nothing else)")
+                        help="Teardown only: delete the pushed calibration docs "
+                             "from the device/cloud and exit (nothing else). "
+                             "Normally unnecessary — every pull auto-cleans.")
     args = parser.parse_args()
 
     if not src_dir(args.device).exists():
@@ -376,7 +386,7 @@ def main() -> None:
         return
 
     if args.pull_only:
-        pull_corpus(args.device, args.device_host, args.device_folder)
+        pull_corpus(args.device, args.device_host, args.device_folder, args.user_config)
         return
 
     if not args.skip_push:
@@ -391,7 +401,7 @@ def main() -> None:
     input(f"\n{Colors.YELLOW}Press Enter once all sentinels are highlighted and "
           f"synced to the cloud...{Colors.END}")
 
-    pull_corpus(args.device, args.device_host, args.device_folder)
+    pull_corpus(args.device, args.device_host, args.device_folder, args.user_config)
     print_step("Done. Next: uv run python tools/calibration/extract_profile.py "
                f"--device {args.device} "
                f"--input {corpus_dir(args.device)} "
