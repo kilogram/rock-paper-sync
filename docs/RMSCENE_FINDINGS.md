@@ -436,6 +436,12 @@ From delta:  (436.2 - 205.8) / 4 = 57.6px
 Average: ~57px per line
 ```
 
+> **Superseded (2026-07-04, Phase 4a):** the ~57 px figure above is the
+> known-wrong value from this early hand-calibration. The 41-sentinel corpus
+> (firmware 20260310084634) measures the body line pitch at **45.55 px** to
+> <0.05 px; `DeviceGeometry.line_height` is now 45.55. See `docs/LAYOUT_SPEC.md`
+> T2 and `tests/layout/test_corpus_differential.py`.
+
 **Calibrated Values**:
 
 | Parameter | Old Value | New Value | Source |

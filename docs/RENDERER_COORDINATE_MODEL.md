@@ -1,5 +1,11 @@
 # Renderer Coordinate Model
 
+> **Superseded in part (2026-07-04, Phase 4a):** any 57.0 px body line-height in
+> this document is the known-wrong value. The device line pitch is **45.55 px**
+> (`DeviceGeometry.line_height`; see `docs/LAYOUT_SPEC.md` T2). The renderer
+> itself still carries 57.0 and is refit to consume the engine in Phase 4b; this
+> note will be replaced when that lands.
+
 This document describes how `tools/rmlib/renderer.py` transforms reMarkable .rm file coordinates to rendered PNG images. Understanding these transformations is critical for validating annotation positioning.
 
 ## Overview

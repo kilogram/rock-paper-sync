@@ -48,13 +48,16 @@ assume). — `ASSERTED`
 `VERIFIED(corpus)` (`test_corpus_differential::test_body_line_pitch_is_measured_value`,
 firmware 20260310084634). Every same-paragraph adjacent-line highlight y-delta
 in the corpus is an integer multiple of 45.55 to <0.05 px, and the highlight box
-height is 44.4 px (≈ pitch). This **falsifies the prior 57.0 px value** carried
-in `DeviceGeometry.line_height` (Δ=11.45 px/line;
-`test_engine_line_height_matches_device` is `xfail(strict)`). Changing the
-constant is a production-affecting refit (pagination + annotation anchoring are
-calibrated around 57 and round-trip symmetrically today) — tracked as a Phase 4
-follow-up, not a silent edit. 68 px is the 264/226-scaled thumbnail value and
-must never appear in coordinate math.
+height is 44.4 px (≈ pitch). This **falsified the prior 57.0 px value** that
+`DeviceGeometry.line_height` carried (Δ=11.45 px/line). **Resolved in Phase 4a
+(2026-07-04):** `line_height` is now 45.55, `test_engine_line_height_matches_device`
+asserts equality (was `xfail(strict)`), `NEGATIVE_Y_OFFSET` became 70.55 (45.55
++ 25.0), pagination capacity moved 25→32 lines/page (goldens re-approved with the
+predicted arithmetic), and `test_corpus_differential::test_d1_rect_y` now asserts
+paragraph-relative y. The `int(y/pitch)` inverse gained a boundary epsilon
+(45.55 is not a terminating binary fraction). 68 px is the 264/226-scaled
+thumbnail value and must never appear in coordinate math; 57.0 is the known-wrong
+attractor and is banned from coordinate math going forward (Phase 4b D4 guard).
 
 **T3.** Heading blocks pitch at **139.1 px** (heading + trailing body + gaps;
 `03`/`02` corpus). The highlight box height is a constant 44.4 px for **every**

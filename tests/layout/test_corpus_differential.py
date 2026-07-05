@@ -159,14 +159,31 @@ def test_highlight_box_height_is_constant():
     assert heights == {HL_HEIGHT}, heights
 
 
+def test_engine_line_height_matches_device():
+    """T2 (resolved 2026-07-04, Phase 4a refit): engine line pitch now equals
+    the corpus-measured 45.55 px. Was strict-xfail on the old 57.0 value."""
+    assert abs(GEOMETRY.line_height - DEVICE_BODY_LINE_HEIGHT) < EPS_PX
+
+
+# T5 baseline offset (line top -> text baseline) is still OPEN: DeviceGeometry
+# (the engine) uses 25.0, tools/rmlib/renderer.py + RENDERER_COORDINATE_MODEL.md
+# use 20. The corpus T5 probe was insufficient (recorded the descender stroke's
+# native bounds but not its anchor, so no page baseline can be derived). One
+# named constant carries the engine's choice (GEOMETRY.baseline_offset); this
+# strict-xfail pins the disagreement so the Phase 8 anchor-capture re-record
+# (08_t5_anchor_probe) fails loudly on exactly this test when it resolves.
+T5_RENDERER_BASELINE_OFFSET = 20.0  # the OPEN alternative; see docs/LAYOUT_SPEC.md T5
+
+
 @pytest.mark.xfail(
     strict=True,
-    reason="T2: engine line_height is 57.0 but the corpus measures 45.55 px "
-    "(Δ=11.45 px/line). Resolving this is a production-affecting refit; "
-    "tracked as a follow-up, not a silent constant change.",
+    reason="T5 OPEN: engine baseline_offset=25.0 disagrees with the renderer's "
+    "20.0 and the corpus probe cannot resolve it (no stroke anchor captured). "
+    "Phase 8 08_t5_anchor_probe re-records with anchor capture; when the two "
+    "agree this XPASSes and forces the constant to be pinned to the measurement.",
 )
-def test_engine_line_height_matches_device():
-    assert abs(GEOMETRY.line_height - DEVICE_BODY_LINE_HEIGHT) < EPS_PX
+def test_t5_baseline_offset_resolved():
+    assert abs(GEOMETRY.baseline_offset - T5_RENDERER_BASELINE_OFFSET) < EPS_PX
 
 
 # =============================================================================
@@ -194,7 +211,11 @@ def test_d2_relative_line_deltas():
 
 @pytest.mark.parametrize(
     "token",
-    [t for t, *_ in _doc01_predictions() if abs(_sentinel_rects()[t]["rect"]["x"] - DEVICE_LINE_START_X) < EPS_PX],
+    [
+        t
+        for t, *_ in _doc01_predictions()
+        if abs(_sentinel_rects()[t]["rect"]["x"] - DEVICE_LINE_START_X) < EPS_PX
+    ],
 )
 def test_d2_line_start_alignment(token, request):
     """D2: a sentinel the device placed at a visual line start (device
@@ -233,3 +254,46 @@ def test_d1_rect_x(token, request):
             f"{token}: predicted box x={predicted_box_x:.1f}, device x={rect['x']:.1f}, "
             f"Δ={delta:+.1f} px ({delta / DEVICE_BODY_LINE_HEIGHT:+.2f} line-heights)"
         )
+
+
+def _paragraph_anchor(token):
+    """Return (para_text, anchor_token) — the first sentinel in the same
+    reconstructed paragraph as ``token``. The harness reconstructs paragraphs
+    in isolation, so engine y is paragraph-relative while device y is absolute
+    on the page; anchoring at the paragraph's first sentinel removes the
+    (unmodelled) page offset while still checking every other token's y against
+    the device through the engine's line assignment and the 45.55 px pitch.
+    """
+    for para in _reconstruct_body_paragraphs(DOC01):
+        present = [t for t in DOC01_TOKENS if t in para]
+        if token in present:
+            return para, present[0]
+    return None, None
+
+
+@pytest.mark.parametrize("token", [t for t, *_ in _doc01_predictions()])
+def test_d1_rect_y(token):
+    """D1 (paragraph-relative y): the device y-gap from a paragraph's first
+    sentinel to ``token`` equals the engine's line-count gap times the 45.55 px
+    pitch, within 2 px. This is the strongest offline y check the harness
+    supports — it reconstructs paragraphs in isolation, so absolute page flow
+    (heading heights, inter-paragraph spacing, pagination) is not modelled and
+    the per-paragraph anchor removes it. Unblocked by the Phase 4a line-pitch
+    refit: on the old 57.0 value every multi-line token diverged by whole
+    Δ=11.45 px/line steps. Absolute per-sentinel y is a Phase 8 device probe.
+    """
+    rects = _sentinel_rects()
+    engine = _engine()
+    para, anchor = _paragraph_anchor(token)
+    assert anchor is not None, f"{token} not found in any reconstructed paragraph"
+    line_gap = _line_index(engine, para, para.find(token)) - _line_index(
+        engine, para, para.find(anchor)
+    )
+    predicted_dy = line_gap * DEVICE_BODY_LINE_HEIGHT
+    device_dy = rects[token]["rect"]["y"] - rects[anchor]["rect"]["y"]
+    delta = predicted_dy - device_dy
+    assert abs(delta) < EPS_PX, (
+        f"{token}: from anchor {anchor}, predicted Δy={predicted_dy:.1f}, "
+        f"device Δy={device_dy:.1f}, Δ={delta:+.1f} px "
+        f"({delta / DEVICE_BODY_LINE_HEIGHT:+.2f} line-heights)"
+    )

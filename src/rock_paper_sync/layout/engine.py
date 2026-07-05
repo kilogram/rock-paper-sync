@@ -25,6 +25,12 @@ if TYPE_CHECKING:
 # error from center-relative x arithmetic (well below any glyph advance width).
 _POSITION_EPSILON = 1e-6
 
+# Tolerance (in line-pitch units) for the y->line-index floor. Absorbs binary
+# floating-point error at exact line boundaries when the pitch is not a
+# terminating binary fraction (e.g. 45.55). Far smaller than any real click
+# offset within a line, so mid-line y values are unaffected.
+_LINE_INDEX_EPSILON = 1e-6
+
 
 class WordWrapLayoutEngine:
     """Word-wrapping layout engine with optional proportional font metrics.
@@ -344,8 +350,11 @@ class WordWrapLayoutEngine:
 
         line_breaks = self.calculate_line_breaks(text, width)
 
-        # Find which line based on Y coordinate
-        line_num = int((y - origin[1]) / self.line_height)
+        # Find which line based on Y coordinate. The epsilon absorbs binary
+        # floating-point error at exact line boundaries: with a non-terminating
+        # pitch (45.55) a whole-line y like origin_y + 3*45.55 can evaluate to
+        # 2.9999… and floor to the wrong line, breaking the E1 round-trip.
+        line_num = int((y - origin[1]) / self.line_height + _LINE_INDEX_EPSILON)
         line_num = max(0, min(line_num, len(line_breaks) - 1))
 
         line_start = line_breaks[line_num]
@@ -380,7 +389,7 @@ class WordWrapLayoutEngine:
         """
         if y < origin_y:
             return 0
-        return int((y - origin_y) / self.line_height)
+        return int((y - origin_y) / self.line_height + _LINE_INDEX_EPSILON)
 
     def get_line_height(self) -> float:
         """Return line height in pixels."""

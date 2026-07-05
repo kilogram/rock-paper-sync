@@ -36,6 +36,7 @@ from rock_paper_sync.annotations.common.spatial import find_nearest_paragraph_by
 from rock_paper_sync.annotations.common.text_extraction import extract_text_blocks_from_rm
 from rock_paper_sync.annotations.core.data_types import ExtractedAnnotation, RenderConfig
 from rock_paper_sync.annotations.document_model import AnchorContext
+from rock_paper_sync.layout.device import DEFAULT_DEVICE
 from rock_paper_sync.transform import (
     PositionDelta,
     Rectangle,
@@ -143,7 +144,7 @@ def find_and_resolve_anchor(
         for candidate in candidates:
             # Rough estimate: count newlines before this position
             lines_before = old_text[:candidate].count("\n")
-            estimated_y = lines_before * 57.0  # Approximate line height
+            estimated_y = lines_before * DEFAULT_DEVICE.line_height  # Approximate line pitch
             y_diff = abs(estimated_y - old_position[1])
 
             if y_diff < best_y_diff:

@@ -255,7 +255,7 @@ class TestAnchorRelativePoint:
         relative = AnchorRelativePoint(x=10.0, y=-5.0)
         doc = relative.to_document(anchor)
         assert doc.x == 110.0
-        # With negative Y, apply NEGATIVE_Y_OFFSET (82px)
+        # With negative Y, apply NEGATIVE_Y_OFFSET (70.55px)
         assert doc.y == 500.0 + NEGATIVE_Y_OFFSET - 5.0
 
     def test_to_document_zero_y(self):
@@ -266,8 +266,8 @@ class TestAnchorRelativePoint:
         assert doc.y == 500.0  # No offset for y=0
 
     def test_negative_y_offset_value(self):
-        # Verify the offset value is correct (82 = line_height + baseline_offset)
-        assert NEGATIVE_Y_OFFSET == 82.0
+        # Verify the offset value is correct (70.55 = line_height 45.55 + baseline_offset 25.0)
+        assert NEGATIVE_Y_OFFSET == 70.55
 
 
 class TestIsRootLayer:
@@ -320,7 +320,7 @@ class TestBoundaryConditions:
         assert point.page_index() == 0
 
     def test_anchor_relative_negative_y_applies_offset(self):
-        # AnchorRelativePoint(0, -1).to_document() applies 82px offset
+        # AnchorRelativePoint(0, -1).to_document() applies 70.55px offset
         anchor = AnchorPoint(x=100.0, y=500.0)
         relative = AnchorRelativePoint(x=0.0, y=-1.0)
         doc = relative.to_document(anchor)

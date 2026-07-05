@@ -134,7 +134,7 @@ def estimate_line_delta(
     new_offset: int,
     old_text: str,
     new_text: str,
-    line_height: float = 57.0,
+    line_height: float = 45.55,
 ) -> float:
     """Estimate Y delta based on line count change.
 

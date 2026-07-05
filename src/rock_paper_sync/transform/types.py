@@ -13,7 +13,7 @@ Usage:
     from rock_paper_sync.transform import Position, PositionDelta, Rectangle
 
     pos = Position(100.0, 200.0)
-    delta = PositionDelta(0.0, 57.0)  # One line down
+    delta = PositionDelta(0.0, 45.55)  # One line down
     new_pos = pos.offset_by(delta)
 
     rect = Rectangle(100.0, 200.0, 150.0, 20.0)

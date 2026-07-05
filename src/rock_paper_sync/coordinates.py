@@ -47,7 +47,7 @@ PAGE_HEIGHT = 1872
 PAGE_CENTER_X = 702.0
 DEFAULT_TEXT_POS_X = -375.0
 DEFAULT_TEXT_POS_Y = 234.0
-NEGATIVE_Y_OFFSET = 82.0  # line_height + baseline_offset for dual-anchor Y
+NEGATIVE_Y_OFFSET = 70.55  # line_height (45.55) + baseline_offset (25.0); Phase 4a refit
 
 # Special markers
 END_OF_DOC_MARKER = 281474976710655  # 0xFFFFFFFFFFFF - anchor at end of document

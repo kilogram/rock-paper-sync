@@ -99,6 +99,15 @@ def count_preservation_blocks(rm_files: dict[str, bytes]) -> int:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="Phase 4a refit (line pitch 57.0 -> 45.55) shifts generated content "
+    "vertically, so the PNG goldens (device thumbnails of the 57-era .rm) no "
+    "longer match (Trip 2 hash distance 12 > threshold). These are device-pulled "
+    "thumbnails and the local renderer is still 57-based; re-record on current "
+    "firmware in Phase 8 (after the Phase 4b renderer unification). Non-PNG "
+    "assertions in this test still hold.",
+)
 @pytest.mark.device
 def test_hidden_layer_orphans(device, workspace, fixtures_dir):
     """Verify that orphaned annotations are preserved in a hidden .rm layer.

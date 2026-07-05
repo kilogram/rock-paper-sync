@@ -246,8 +246,9 @@ class DeviceGeometry:
 #:   Use document_ppi (226) for all coordinate calculations
 #:   Example: 10mm = 10 / 25.4 × 226 ≈ 89 doc pixels
 #:
-#: Calibration notes (2025-11-30):
-#: - LINE_HEIGHT of 57px matches actual device highlight positioning
+#: Calibration notes (2025-11-30; LINE_HEIGHT superseded 2026-07-04, Phase 4a):
+#: - LINE_HEIGHT is 45.55px (visual line pitch), refit from the 41-sentinel
+#:   corpus; the prior 57px was wrong by Δ=11.45 px/line (see line_height below)
 #: - CHAR_WIDTH of 15px is average for Noto Sans at the default text size
 #: - TEXT_WIDTH of 750px gives 1.0x display zoom on Paper Pro Move
 #: - LAYOUT_TEXT_WIDTH of 758px matches device word-wrap behavior
@@ -266,7 +267,13 @@ PAPER_PRO_MOVE: Final[DeviceGeometry] = DeviceGeometry(
     # Device allows lines ~8px wider than text_width before wrapping
     layout_text_width=758.0,
     # Typography (calibrated from device highlight analysis)
-    line_height=57.0,
+    # line_height is the visual LINE PITCH (top-of-line to top-of-next-line),
+    # not the highlight box height. Refit 2026-07-04 (Phase 4a): the 41-sentinel
+    # corpus proves same-paragraph adjacent-line highlight y-deltas are clean
+    # integer multiples of 45.55 px (tests/layout/test_corpus_differential.py::
+    # test_body_line_pitch_is_measured_value). The prior 57.0 was wrong by
+    # Δ=11.45 px/line. Provenance: profile.json firmware 20260310084634.
+    line_height=45.55,
     char_width=15.0,  # Average for Noto Sans at default size
     baseline_offset=25.0,  # From top of line to text baseline
     # Margins
