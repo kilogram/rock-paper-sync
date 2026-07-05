@@ -29,6 +29,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from ..layout.device import DEFAULT_DEVICE
 from .types import Position, PositionDelta, TextSpan
 
 if TYPE_CHECKING:
@@ -134,7 +135,7 @@ def estimate_line_delta(
     new_offset: int,
     old_text: str,
     new_text: str,
-    line_height: float = 45.55,
+    line_height: float = DEFAULT_DEVICE.line_height,
 ) -> float:
     """Estimate Y delta based on line count change.
 

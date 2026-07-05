@@ -224,6 +224,8 @@ level = "debug"
 - `docs/LAYOUT_PRINCIPLES.md` - Principles governing all layout work (read first)
 - `docs/LAYOUT_SPEC.md` - Layout invariants and expectations (falsifiable)
 - `docs/LAYOUT_TESTBENCH_PLAN.md` - Plan for local layout iteration without device round trips
+- `docs/LAYOUT_VERIFICATION_PLAN.md` - Device-grounded layout & annotation verification system plan
+- `docs/LAYOUT_COVERAGE.md` - Which layout constructs are device-measured vs engine-modelled only
 - `docs/SYNC_PROTOCOL.md` - reMarkable Sync v3 protocol (reverse engineered)
 - `docs/RMSCENE_FINDINGS.md` - rmscene library integration notes
 - `docs/STROKE_ANCHORING.md` - Coordinate transformation and stroke anchoring

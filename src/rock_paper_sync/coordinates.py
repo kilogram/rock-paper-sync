@@ -32,6 +32,8 @@ from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from .layout.device import DEFAULT_DEVICE
+
 if TYPE_CHECKING:
     from rmscene.tagged_block_common import CrdtId
 
@@ -42,12 +44,12 @@ if TYPE_CHECKING:
 # Page Constants (from DeviceGeometry - single source of truth)
 # =============================================================================
 
-PAGE_WIDTH = 1404
-PAGE_HEIGHT = 1872
-PAGE_CENTER_X = 702.0
-DEFAULT_TEXT_POS_X = -375.0
-DEFAULT_TEXT_POS_Y = 234.0
-NEGATIVE_Y_OFFSET = 70.55  # line_height (45.55) + baseline_offset (25.0); Phase 4a refit
+PAGE_WIDTH = DEFAULT_DEVICE.page_width
+PAGE_HEIGHT = float(DEFAULT_DEVICE.page_height)
+PAGE_CENTER_X = DEFAULT_DEVICE.page_width / 2.0
+DEFAULT_TEXT_POS_X = DEFAULT_DEVICE.text_pos_x
+DEFAULT_TEXT_POS_Y = DEFAULT_DEVICE.text_pos_y
+NEGATIVE_Y_OFFSET = DEFAULT_DEVICE.negative_y_offset
 
 # Special markers
 END_OF_DOC_MARKER = 281474976710655  # 0xFFFFFFFFFFFF - anchor at end of document
@@ -142,7 +144,7 @@ class TextOrigin:
 
     x: float = DEFAULT_TEXT_POS_X
     y: float = DEFAULT_TEXT_POS_Y
-    width: float = 750.0
+    width: float = DEFAULT_DEVICE.text_width
 
 
 @dataclass(frozen=True)

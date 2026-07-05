@@ -30,7 +30,9 @@ Example:
     )
 """
 
-from dataclasses import dataclass
+import json
+from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Final
 
 
@@ -195,6 +197,43 @@ class DeviceGeometry:
     def origin(self) -> tuple[float, float]:
         """Text origin as (x, y) tuple."""
         return (self.text_pos_x, self.text_pos_y)
+
+    @classmethod
+    def from_profile(
+        cls, profile_path: Path, base: "DeviceGeometry | None" = None
+    ) -> "DeviceGeometry":
+        """Build geometry from a device calibration profile (provenance by construction).
+
+        The profile.json produced by tools/calibration/record_corpus.py is the
+        device-measured ground truth. Every field the profile measures overrides
+        the corresponding geometry field, so a geometry constructed this way
+        cannot drift from the calibration data.
+
+        Fields NOT taken from the profile (with reasons):
+        - text_pos_x: derived as -text_width / 2 (device centers the text frame).
+        - font_point_size: the profile records the device UI font size (29.5),
+          not the typographic point size the engine uses (10.0 pt @ 226 DPI);
+          the mapping is documented in docs/RMSCENE_FINDINGS.md.
+        - baseline_offset, text_pos_y, bottom_margin, char_width,
+          rm_text_block_line_height, physical_*: not yet measured by the
+          profile (T5 et al.; Phase 8 probes) — inherited from ``base``.
+
+        Args:
+            profile_path: Path to a calibration profile.json
+            base: Geometry supplying the unmeasured fields (default PAPER_PRO_MOVE)
+        """
+        profile = json.loads(Path(profile_path).read_text())
+        base = base if base is not None else PAPER_PRO_MOVE
+        text_width = float(profile["text_width"])
+        return replace(
+            base,
+            page_width=int(profile["page_width"]),
+            page_height=int(profile["page_height"]),
+            text_width=text_width,
+            text_pos_x=-text_width / 2.0,
+            layout_text_width=float(profile["layout_text_width"]),
+            line_height=float(profile["line_height"]),
+        )
 
     def mm_to_doc_pixels(self, mm: float) -> float:
         """Convert millimeters to document pixels.

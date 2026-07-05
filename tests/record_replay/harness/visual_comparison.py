@@ -77,6 +77,7 @@ class StrokeCluster:
     stroke_indices: list[int]  # Indices into original bbox list
     bboxes: list[Rectangle]  # Individual stroke bboxes
     combined_bbox: Rectangle  # Combined bounding box for the cluster
+    page_uuid: str | None = None  # Page the cluster's strokes belong to
 
     @property
     def stroke_count(self) -> int:
@@ -633,27 +634,42 @@ def compare_rm_files_visually(
     """
     result = VisualComparisonResult()
 
-    # Collect strokes from ALL pages (don't match pages individually)
-    # This handles page reordering and different page counts between test/golden
-    all_golden_bboxes: list[Rectangle] = []
-    all_test_bboxes: list[Rectangle] = []
+    # Cluster strokes per page (so each cluster knows which page image to
+    # crop from), then match clusters across the union of pages. This still
+    # handles page reordering / different page counts between test/golden.
+    def _page_clusters(rm_files: dict[str, bytes]) -> list[StrokeCluster]:
+        clusters: list[StrokeCluster] = []
+        for page_uuid, rm_data in rm_files.items():
+            for cluster in cluster_strokes(extract_stroke_bboxes(rm_data), cluster_distance):
+                cluster.page_uuid = page_uuid
+                clusters.append(cluster)
+        return clusters
 
-    for page_uuid, rm_data in golden_rm_files.items():
-        all_golden_bboxes.extend(extract_stroke_bboxes(rm_data))
-
-    for page_uuid, rm_data in test_rm_files.items():
-        all_test_bboxes.extend(extract_stroke_bboxes(rm_data))
-
-    golden_clusters = cluster_strokes(all_golden_bboxes, cluster_distance)
-    test_clusters = cluster_strokes(all_test_bboxes, cluster_distance)
+    golden_clusters = _page_clusters(golden_rm_files)
+    test_clusters = _page_clusters(test_rm_files)
 
     if not golden_clusters:
         return result  # No valid clusters to compare
 
+    # Lazily rendered page images for pHash verdicts
+    page_images: dict[tuple[str, str], Image.Image] = {}
+
+    def _page_image(side: str, rm_files: dict[str, bytes], page_uuid: str) -> Image.Image | None:
+        key = (side, page_uuid)
+        if key not in page_images:
+            try:
+                page_images[key] = rm_to_png_image(rm_files[page_uuid])
+            except Exception as e:
+                result.render_errors.append(f"{side} page {page_uuid}: {e}")
+                page_images[key] = None
+        return page_images[key]
+
     # Track which test clusters have been matched
     matched_test_clusters: set[int] = set()
 
-    # Compare each golden cluster by position (skip visual rendering for now)
+    # Position matching is the PAIRING step; the pHash distance of the two
+    # cluster regions is the VERDICT step (previously hardcoded to 0, which
+    # made the visual check vacuous — see LAYOUT_VERIFICATION_PLAN.md Phase 5).
     for golden_cluster in golden_clusters:
         # Compute fixed region bounds based on golden cluster position
         region_bounds = compute_region_bounds(golden_cluster.combined_bbox, padding)
@@ -679,13 +695,33 @@ def compare_rm_files_visually(
         # Track that this test cluster was matched
         matched_test_clusters.add(id(test_cluster))
 
-        # Record match without visual hash comparison (position-based only)
+        golden_hash = test_hash = hash_distance = None
+        golden_img = _page_image("golden", golden_rm_files, golden_cluster.page_uuid)
+        test_img = _page_image("test", test_rm_files, test_cluster.page_uuid)
+        if golden_img is not None and test_img is not None:
+            # Crop each side around its own cluster with identical region
+            # size, so a paired-but-visually-different cluster is detected
+            # while a small pairing offset is not penalised.
+            _, _, rw, rh = region_bounds
+            test_bounds = compute_region_bounds(test_cluster.combined_bbox, padding)
+            if test_bounds is not None:
+                tx, ty, _, _ = test_bounds
+                golden_hash = compute_phash(
+                    crop_region(golden_img, region_bounds), hash_size=hash_size
+                )
+                test_hash = compute_phash(
+                    crop_region(test_img, (tx, ty, rw, rh)), hash_size=hash_size
+                )
+                hash_distance = golden_hash - test_hash
+
         result.matches.append(
             ClusterMatch(
                 golden_cluster=golden_cluster,
                 test_cluster=test_cluster,
                 region_bounds=region_bounds,
-                hash_distance=0,  # Position matched, no visual comparison
+                golden_hash=golden_hash,
+                test_hash=test_hash,
+                hash_distance=hash_distance,
             )
         )
 

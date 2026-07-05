@@ -39,6 +39,8 @@ from typing import TYPE_CHECKING, Any
 
 import rmscene
 
+from .layout.device import DEFAULT_DEVICE
+
 if TYPE_CHECKING:
     from rmscene.tagged_block_common import CrdtId
 
@@ -86,7 +88,11 @@ class RmFileExtractor:
     blocks: list[Any]
     text_content: str = ""
     text_origin: TextOriginInfo = field(
-        default_factory=lambda: TextOriginInfo(pos_x=234.0, pos_y=94.0, width=750.0)
+        default_factory=lambda: TextOriginInfo(
+            pos_x=DEFAULT_DEVICE.text_pos_x,
+            pos_y=DEFAULT_DEVICE.text_pos_y,
+            width=DEFAULT_DEVICE.text_width,
+        )
     )
     crdt_to_char: dict[CrdtId, int] = field(default_factory=dict)
 
@@ -164,9 +170,12 @@ class RmFileExtractor:
         from rmscene.tagged_block_common import CrdtId
 
         text_content = ""
-        pos_x = 234.0  # Default from geometry
-        pos_y = 94.0
-        width = 750.0
+        # Fallbacks for files with no RootTextBlock; the historical hardcoded
+        # values here had x/y confused — geometry is the single source of
+        # truth now.
+        pos_x = DEFAULT_DEVICE.text_pos_x
+        pos_y = DEFAULT_DEVICE.text_pos_y
+        width = DEFAULT_DEVICE.text_width
         crdt_to_char: dict[CrdtId, int] = {}
 
         # Find RootTextBlock and extract text

@@ -12,8 +12,8 @@ Calibration data comes from actual device measurements:
 """
 
 from rock_paper_sync.font_metrics import (
-    DEVICE_FONT_SIZE_PT,
     DEFAULT_DOCUMENT_PPI,
+    DEVICE_FONT_SIZE_PT,
     char_width,
     get_font_info,
     text_width,
