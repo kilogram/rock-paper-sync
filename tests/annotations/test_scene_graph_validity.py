@@ -92,10 +92,6 @@ class TestSceneGraphStructure:
 
             assert result.is_valid, f"Input file {rm_file.name} has invalid scene graph:\n{result}"
 
-    @pytest.mark.xfail(
-        reason="Known issue: cross-page migration missing TreeNodeBlock for some strokes. "
-        "See SceneGroupItemBlock.value=2:299 in test output. Tracked for StrokeBundle refactor."
-    )
     def test_generated_files_have_valid_scene_graph(self, cross_page_testdata):
         """Test that generated .rm files have valid scene graph structure.
 
@@ -197,10 +193,6 @@ class TestSceneGraphStructure:
         # Verify we actually tested something
         assert total_user_tree_nodes > 0, "No user TreeNodeBlocks found - test data issue"
 
-    @pytest.mark.xfail(
-        reason="Known issue: same as test_generated_files_have_valid_scene_graph. "
-        "Cross-page migration creates orphaned SceneGroupItemBlocks."
-    )
     def test_scene_group_items_reference_existing_nodes(self, cross_page_testdata):
         """Test that SceneGroupItemBlocks reference existing TreeNodeBlocks.
 

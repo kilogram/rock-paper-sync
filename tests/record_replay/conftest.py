@@ -181,7 +181,7 @@ def pytest_sessionstart(session):
             session.config.option.capture = "no"
 
 
-@pytest.hookimpl(hookwrapper=True)
+@pytest.hookimpl(wrapper=True)
 def pytest_runtest_call(item):
     """Handle TestdataExistsError by skipping the test.
 
@@ -192,8 +192,7 @@ def pytest_runtest_call(item):
     from tests.record_replay.harness import TestdataExistsError
 
     try:
-        outcome = yield
-        outcome.get_result()
+        return (yield)
     except TestdataExistsError as e:
         pytest.skip(f"Reusing testdata recorded earlier this session: {e.test_id}")
 

@@ -112,6 +112,32 @@ def deserialize_annotation_blocks(blob: bytes) -> list[Any]:
     return list(rmscene.read_blocks(io.BytesIO(blob)))
 
 
+def _structural_block_key(block: Any) -> tuple[str, Any] | None:
+    """Identity key for structural blocks shared between sibling strokes.
+
+    Strokes that hang off the same tree node are serialised per-annotation,
+    so each blob carries its own copy of the shared SceneTreeBlock /
+    TreeNodeBlock / SceneGroupItemBlock. Emitting those copies verbatim
+    produces DUPLICATE_TREE_NODE scene graphs (rejected by the executor's
+    validator). This key lets the preservation layer emit each shared
+    structural block exactly once; per-stroke SceneLineItemBlocks return None
+    and are always kept.
+    """
+    from rmscene.scene_stream import (
+        SceneGroupItemBlock,
+        SceneTreeBlock,
+        TreeNodeBlock,
+    )
+
+    if isinstance(block, TreeNodeBlock):
+        return ("tree_node", block.group.node_id)
+    if isinstance(block, SceneTreeBlock):
+        return ("scene_tree", block.tree_id)
+    if isinstance(block, SceneGroupItemBlock):
+        return ("group_item", block.item.item_id)
+    return None
+
+
 # =============================================================================
 # Re-parenting
 # =============================================================================
@@ -175,11 +201,17 @@ class HiddenLayerManager:
             return None
 
         unknown_blocks: list[PreserveUnknown] = []
+        seen_structural: set[tuple[str, Any]] = set()
         for blob in orphan_blobs:
             try:
                 raw_blocks = deserialize_annotation_blocks(blob)
                 reparented = reparent_blocks_to_preservation(raw_blocks)
                 for block in reparented:
+                    key = _structural_block_key(block)
+                    if key is not None:
+                        if key in seen_structural:
+                            continue
+                        seen_structural.add(key)
                     unknown_blocks.append(PreserveUnknown(opaque_handle=block))
             except Exception as e:
                 logger.warning(f"Failed to deserialise orphan blob ({len(blob)} bytes): {e}")
