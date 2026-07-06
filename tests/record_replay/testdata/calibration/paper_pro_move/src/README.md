@@ -4,7 +4,7 @@ Ground-truth corpus for the layout test bench (see `docs/LAYOUT_TESTBENCH_PLAN.m
 Phase 2, `docs/LAYOUT_SPEC.md` "Corpus contract").
 
 Each markdown file exercises a specific set of spec items. Unique **sentinel
-words** `ZEBRA01`…`ZEBRA40` are distributed across the corpus. During the device
+words** `ZEBRA01`…`ZEBRA69` are distributed across the corpus. During the device
 session the operator highlights every sentinel; each on-device highlight stores
 an absolute glyph rectangle (`SceneGlyphItemBlock`), giving a device-signed
 statement of exactly where those characters landed (principle P2).
@@ -23,6 +23,12 @@ rect(s)` and derives measured layout values into `profile.json`.
 | `05_spacing_ladder.md` | B1, T2 | ZEBRA31–ZEBRA35 |
 | `06_multipage.md` | P1g, P2g, B5 | ZEBRA36–ZEBRA40 |
 | `07_t5_probe.md` | T5 (baseline offset) | handwritten descender, no highlight |
+| `08_t5_anchor_probe.md` | T5, anchor_origin_x inset | ZEBRA41 + 4 strokes |
+| `09_heading_multiline.md` | T3, B2, tier map | ZEBRA42–ZEBRA53 |
+| `10_wrap_boundary_bisection.md` | W1 interval | ZEBRA54–ZEBRA58 |
+| `11_longword.md` | W2 char-granularity | ZEBRA59 + 2 in-word highlights |
+| `12_list_marker_probe.md` | B3 marker indent | ZEBRA60–ZEBRA65 |
+| `13_multipage_break.md` | P1g, P2g | ZEBRA66–ZEBRA69 |
 
 ## Sentinel rules
 

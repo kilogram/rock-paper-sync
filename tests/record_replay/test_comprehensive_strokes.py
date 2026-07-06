@@ -138,11 +138,13 @@ def test_comprehensive_strokes(device, workspace, fixtures_dir):
     insertion_text = """
 ## NEW SECTION: Inserted Before Margin Note
 
-This large section was inserted AFTER Trip 1 annotations.
-The margin note in Section 5 should reanchor to follow its paragraph.
+This section was inserted AFTER Trip 1
+annotations. The margin note in Section 5
+should reanchor to follow its paragraph.
 
-Lorem ipsum dolor sit amet, consectetur adipiscing elit.
-Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.
+Lorem ipsum dolor sit amet, consectetur
+adipiscing elit. Sed do eiusmod tempor
+incididunt ut labore et dolore magna.
 
 """
     modified_content = original_content.replace(
@@ -222,9 +224,9 @@ Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.
 
     # Modify text in Section 1
     modified_content = current_content.replace(
-        "Write here: _________________________________________________",
-        "MODIFIED GAP: _______________________________________________",
-        1,  # Only first occurrence
+        "Write here: ______________________________",
+        "MODIFIED GAP: ____________________________",
+        1,  # Only first occurrence (Section 1; Section 9's gap is longer)
     )
     workspace.test_doc.write_text(modified_content)
     print("   Modified gap text in Section 1")

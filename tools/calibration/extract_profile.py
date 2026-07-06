@@ -631,6 +631,76 @@ def derive_measurements(records: list[dict], input_dir: Path) -> dict:
     return m
 
 
+def read_stroke_anchors(rm_path: Path) -> list[dict]:
+    """Extract TreeNodeBlock anchors + per-node stroke bounds from a pulled .rm.
+
+    This is the Phase 8 instrumentation that 07_t5_probe lacked: with the
+    anchor captured, a stroke's absolute position is anchor-derived and the
+    T5 baseline (and the anchor_origin_x inset) become direct measurements.
+
+    Each record: node_id, anchor part2, mapped char offset, the 12 chars of
+    text at that offset, device anchor_origin_x, engine x at the offset,
+    native stroke bbox, and the production-rule absolute y-bounds.
+    """
+    from rmscene.scene_stream import TreeNodeBlock
+
+    from rock_paper_sync.rm_file_extractor import RmFileExtractor
+
+    end_of_doc = 281474976710655
+    ex = RmFileExtractor.from_path(rm_path)
+    ctx = ex.get_layout_context(DEFAULT_DEVICE)
+
+    strokes_by_parent: dict = {}
+    for block in ex.blocks:
+        if isinstance(block, SceneLineItemBlock) and block.item.value is not None:
+            pts = getattr(block.item.value, "points", [])
+            if pts:
+                strokes_by_parent.setdefault(block.parent_id, []).append(
+                    {
+                        "min_x": min(p.x for p in pts),
+                        "max_x": max(p.x for p in pts),
+                        "min_y": min(p.y for p in pts),
+                        "max_y": max(p.y for p in pts),
+                    }
+                )
+
+    records: list[dict] = []
+    for block in ex.blocks:
+        if not isinstance(block, TreeNodeBlock):
+            continue
+        aid = getattr(block.group, "anchor_id", None)
+        if aid is None or aid.value is None:
+            continue
+        part2 = aid.value.part2
+        rec: dict = {
+            "node_id": [block.group.node_id.part1, block.group.node_id.part2],
+            "anchor_part2": part2,
+            "anchor_origin_x": getattr(
+                getattr(block.group, "anchor_origin_x", None), "value", None
+            ),
+            "strokes_native": strokes_by_parent.get(block.group.node_id, []),
+        }
+        if part2 == end_of_doc:
+            rec["end_of_doc"] = True
+        else:
+            offset = ex.crdt_to_char.get(aid.value)
+            rec["char_offset"] = offset
+            if offset is not None:
+                rec["anchor_text"] = ex.text_content[offset : offset + 12]
+                x, y = ctx.offset_to_position(offset)
+                rec["engine_x"] = round(x, 2)
+                rec["engine_line_top_y"] = round(y, 2)
+                # Production rule: abs = line_top (+ negative_y_offset when
+                # native y < 0) + native y. Report abs top per stroke.
+                abs_tops = []
+                for s in rec["strokes_native"]:
+                    off_y = DEFAULT_DEVICE.negative_y_offset if s["min_y"] < 0 else 0.0
+                    abs_tops.append(round(y + off_y + s["min_y"], 2))
+                rec["strokes_abs_top_y"] = abs_tops
+        records.append(rec)
+    return records
+
+
 def _derive_t5(records: list[dict], input_dir: Path) -> dict | None:
     """Estimate baseline offset from the T5 probe (highlight vs descender)."""
     t5_rec = next((r for r in records if r["sentinel"] == "T5BASE"), None)
@@ -699,6 +769,22 @@ def create_corpus_profile(device: str, input_dir: Path, output_path: Path | None
     profile["sentinels"] = records
     profile["measurements"] = measurements
     profile["warnings"] = warnings
+
+    # Phase 8 instrumentation: per-doc TreeNodeBlock anchors + stroke bounds.
+    # Additive; empty for docs without handwritten strokes. Resolves T5 and
+    # the anchor_origin_x inset once 08_t5_anchor_probe is recorded.
+    stroke_anchors: dict = {}
+    if rm_root.exists():
+        for doc_dir in sorted(p for p in rm_root.iterdir() if p.is_dir()):
+            doc_records = []
+            for rm in sorted(doc_dir.glob("*.rm")):
+                try:
+                    doc_records.extend(read_stroke_anchors(rm))
+                except Exception as e:  # noqa: BLE001
+                    warnings.append(f"stroke anchor extraction failed for {rm.name}: {e}")
+            if doc_records:
+                stroke_anchors[doc_dir.name] = doc_records
+    profile["stroke_anchors"] = stroke_anchors
 
     if output_path:
         output_path.parent.mkdir(parents=True, exist_ok=True)

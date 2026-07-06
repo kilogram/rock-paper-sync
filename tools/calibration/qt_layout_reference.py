@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 
 # Check if PyQt6 is available
 try:
-    from PyQt6.QtCore import QPointF, Qt
+    from PyQt6.QtCore import QPointF
     from PyQt6.QtGui import QFont, QFontMetricsF, QGuiApplication, QTextLayout, QTextOption
 
     PYQT6_AVAILABLE = True
@@ -63,10 +63,14 @@ class QtLayoutReference:
     compare relative differences rather than absolute values.
     """
 
-    font_family: str = "Noto Sans"
-    font_size: float = 29.5  # Point size (note: Qt interprets this differently than fonttools)
+    # Defaults mirror the DEVICE: reMarkableSans (vendored, extracted from
+    # xochitl) at DeviceGeometry.font_pixel_size, applied as a Qt pixel size.
+    # xochitl itself calls QFont::setPixelSize (binary inspection 2026-07-05),
+    # so pixel-size mode is the faithful configuration.
+    font_family: str = "reMarkable Sans"
+    font_size: float = DEFAULT_DEVICE.font_pixel_size
     text_width: float = _LAYOUT_WIDTH  # Layout width for word-wrap (from DeviceGeometry)
-    use_pixel_size: bool = False  # If True, interpret font_size as pixels not points
+    use_pixel_size: bool = True  # If True, interpret font_size as pixels not points
 
     _app: QGuiApplication | None = None
     _font: QFont | None = None
@@ -83,6 +87,15 @@ class QtLayoutReference:
         # Create QGuiApplication if not already running
         if QGuiApplication.instance() is None:
             self._app = QGuiApplication(sys.argv)
+
+        # Register the vendored device font so "reMarkable Sans" resolves
+        # regardless of what the host system has installed.
+        from PyQt6.QtGui import QFontDatabase
+
+        from rock_paper_sync.font_metrics import DEVICE_FONT_PATH
+
+        if DEVICE_FONT_PATH.exists():
+            QFontDatabase.addApplicationFont(str(DEVICE_FONT_PATH))
 
         # Create font
         self._font = QFont(self.font_family)

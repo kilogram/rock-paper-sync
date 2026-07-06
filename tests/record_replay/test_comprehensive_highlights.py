@@ -139,9 +139,11 @@ def test_comprehensive_highlights(device, workspace, fixtures_dir):
 This entire section was inserted AFTER Trip 1 annotations.
 It contains substantial text to push Section 2 down significantly.
 
-Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod
-tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam,
-quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo.
+Lorem ipsum dolor sit amet, consectetur
+adipiscing elit. Sed do eiusmod tempor
+incididunt ut labore et dolore magna
+aliqua. Ut enim ad minim veniam, quis
+nostrud exercitation ullamco laboris.
 
 """
     modified_content = original_content.replace(

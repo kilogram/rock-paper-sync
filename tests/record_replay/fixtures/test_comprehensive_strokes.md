@@ -1,103 +1,89 @@
 # Comprehensive Stroke Test
 
-This document tests all stroke behaviors in a single recording session.
+All lines fit the 750 px text width
+(reMarkableSans @ 10.16 pt): no line
+wraps on device; Section 8 onward falls
+past the first page break.
 
 ## Section 1: Basic Stroke
 
-**Instructions:** Write "hello" in the gap below using the default pen.
+Write "hello" below, default pen.
 
-Write here: _________________________________________________
-
-Use normal width, default color (black).
+Write here: ______________________________
 
 ## Section 2: Colored Strokes
 
-**Instructions:** Write using different colored pens.
+Write "red" (RED), "blue" (BLUE).
 
-Write "red" here (RED pen): _________________________________
+Write "red" here (RED): ___________________
 
-Write "blue" here (BLUE pen): _______________________________
+Write "blue" here (BLUE): _________________
 
 ## Section 3: Different Tools
 
-**Instructions:** Use different pen tools.
+Use PENCIL, MARKER, BALLPOINT.
 
-Write with PENCIL: _________________________________________
+Write with PENCIL: ________________________
 
-Write with MARKER: _________________________________________
+Write with MARKER: ________________________
 
-Write with BALLPOINT: ______________________________________
+Write with BALLPOINT: _____________________
 
 ## Section 4: Width Variation
 
-**Instructions:** Vary your stroke width/pressure.
+Thin line, then thick line.
 
-Draw a thin line: __________________________________________
+Draw a thin line: _________________________
 
-Draw a thick line: _________________________________________
+Draw a thick line: ________________________
 
 ## Section 5: Margin Note
 
-**Instructions:** Add a margin note next to this paragraph.
-
-Write something in the margin here. This paragraph will have content
-inserted above it in Trip 2, testing margin note reanchoring.
-The note should follow this paragraph to its new position.
+Write a margin note beside this
+paragraph. Content is inserted above it
+in Trip 2; the note must follow this
+paragraph to its new position.
 
 ## Section 6: Deletion Target
 
-**Instructions:** Write "delete me" in the gap below.
+Write "delete me" in the gap.
 
-This will be deleted: ______________________________________
+This will be deleted: _____________________
 
-This entire section will be deleted in Trip 3, making this stroke
-become an orphan.
+This section is deleted in Trip 3; the
+stroke becomes an orphan.
 
 ## Section 7: Long Content (Pagination)
 
-This section contains enough text to push the next section to page 2.
-The purpose is to test cross-page stroke handling.
+This filler pushes Section 8 to page 2
+to test cross-page stroke handling.
 
-Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod
-tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam,
-quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo
-consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse
-cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat
-non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.
-
-Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium
-doloremque laudantium, totam rem aperiam, eaque ipsa quae ab illo inventore
-veritatis et quasi architecto beatae vitae dicta sunt explicabo. Nemo enim
-ipsam voluptatem quia voluptas sit aspernatur aut odit aut fugit, sed quia
-consequuntur magni dolores eos qui ratione voluptatem sequi nesciunt.
-
-Neque porro quisquam est, qui dolorem ipsum quia dolor sit amet, consectetur,
-adipisci velit, sed quia non numquam eius modi tempora incidunt ut labore et
-dolore magnam aliquam quaerat voluptatem. Ut enim ad minima veniam, quis
-nostrum exercitationem ullam corporis suscipit laboriosam, nisi ut aliquid
-ex ea commodi consequatur.
-
-Quis autem vel eum iure reprehenderit qui in ea voluptate velit esse quam
-nihil molestiae consequatur, vel illum qui dolorem eum fugiat quo voluptas
-nulla pariatur. At vero eos et accusamus et iusto odio dignissimos ducimus
-qui blanditiis praesentium voluptatum deleniti atque corrupti quos dolores
-et quas molestias excepturi sint occaecati cupiditate non provident.
+Lorem ipsum dolor sit amet, consectetur
+adipiscing elit. Sed do eiusmod tempor
+incididunt ut labore et dolore magna
+aliqua. Ut enim ad minim veniam, quis
+nostrud exercitation ullamco laboris
+nisi ut aliquip ex ea commodo consequat.
+Duis aute irure dolor in reprehenderit
+in voluptate velit esse cillum dolore
+eu fugiat nulla pariatur. Excepteur
+sint occaecat cupidatat non proident,
+sunt in culpa qui officia deserunt
+mollit anim id est laborum est.
 
 ## Section 8: Page 2 Stroke
 
-**Instructions:** Write "page2" in the margin here.
-
-This section should appear on page 2 (after the long content above).
-Add a margin note here to test cross-page stroke handling.
+Write "page2" in the margin here, on
+page 2, to test cross-page strokes.
 
 ## Section 9: Stability Control
 
-**Instructions:** Write "stable" in the gap below.
+Write "stable" in the gap below.
 
-Write here: ________________________________________________
+Write here: _______________________________
 
-This should remain unchanged through all modifications.
+This stays unchanged in every trip.
 
 ---
 
-**End of comprehensive stroke test document**
+**End of comprehensive stroke test**
