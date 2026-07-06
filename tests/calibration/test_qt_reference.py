@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-PYQT6_AVAILABLE = importlib.util.find_spec("PyQt6.QtGui") is not None
+PYQT6_AVAILABLE = importlib.util.find_spec("PyQt6") is not None
 
 # Add tools to path for imports
 TOOLS_PATH = Path(__file__).parent.parent.parent / "tools"
