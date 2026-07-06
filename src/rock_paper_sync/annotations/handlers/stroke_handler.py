@@ -282,6 +282,79 @@ class StrokeHandler:
         # Returning the block unchanged preserves pixel-perfect stroke paths.
         return block
 
+    def resolve_page_anchor_offsets(
+        self,
+        stroke_annos: list,
+        page_text: str,
+        geometry: DeviceGeometry | None = None,
+        crdt_base_id: int = 16,
+    ) -> dict:
+        """Resolve anchor offsets for ALL strokes of a page with dispersion guards.
+
+        Systemic guards against the 2026-07-05 stacking failure class (see
+        docs/bugs/STROKE_SESSION_2026-07-05_FORENSICS.md):
+
+        1. **Cluster preservation** — bundles that shared one original device
+           anchor (same TreeNodeBlock anchor_id) are resolved ONCE and all
+           receive the same target offset, so sibling strokes of one visual
+           glyph can never separate (the split-'t' failure mode).
+        2. **No silent collapse** — bundles with DISTINCT original anchors must
+           not converge on one target offset. When a coarse fallback would
+           stack a second group onto an already-taken offset, that group falls
+           back to its original semantic offset (clamped), preserving relative
+           structure, and an ERROR is logged. Wrong-but-dispersed beats a
+           silent pile of ink.
+
+        Args:
+            stroke_annos: DocumentAnnotations with original_tree_node +
+                anchor_context (annotations without a tree node are skipped).
+            page_text: Target page text.
+            geometry: DeviceGeometry for the Y-hint fallback.
+            crdt_base_id: TEXT_BASE_ITEM_ID used to map original anchor CRDT
+                part2 back to a semantic offset for the dispersion fallback.
+
+        Returns:
+            Mapping of annotation_id -> resolved semantic offset.
+        """
+        # Group by original device anchor identity.
+        groups: dict = {}
+        order: list = []
+        for anno in stroke_annos:
+            tn = getattr(anno, "original_tree_node", None)
+            anchor_id = None
+            if tn is not None and getattr(tn.group, "anchor_id", None) is not None:
+                anchor_id = tn.group.anchor_id.value
+            key = anchor_id if anchor_id is not None else ("solo", anno.annotation_id)
+            if key not in groups:
+                groups[key] = []
+                order.append(key)
+            groups[key].append(anno)
+
+        taken: dict = {}  # offset -> group key that claimed it
+        resolved: dict = {}
+        for key in order:
+            members = groups[key]
+            offset = self._calculate_anchor_offset(members[0].anchor_context, page_text, geometry)
+            if offset in taken and taken[offset] != key:
+                original_offset = None
+                if not (isinstance(key, tuple) and key[0] == "solo"):
+                    original_offset = max(
+                        0, min(key.part2 - crdt_base_id, max(len(page_text) - 1, 0))
+                    )
+                logger.error(
+                    f"Stroke anchor collapse prevented: group {key} resolved to "
+                    f"offset {offset} already claimed by {taken[offset]}; "
+                    f"falling back to original offset {original_offset} "
+                    f"({len(members)} stroke(s)). Anchor text: "
+                    f"{members[0].anchor_context.text_content[:40]!r}"
+                )
+                if original_offset is not None:
+                    offset = original_offset
+            taken.setdefault(offset, key)
+            for anno in members:
+                resolved[anno.annotation_id] = offset
+        return resolved
+
     def _calculate_anchor_offset(
         self,
         anchor_context: AnchorContext,
@@ -448,6 +521,7 @@ class StrokeHandler:
         tree_node: TreeNodeBlock | None = None,
         scene_group_item: Any | None = None,
         scene_tree_block: Any | None = None,
+        precomputed_offset: int | None = None,
     ) -> CrdtRelativePosition | None:
         """Apply a stroke annotation to a target page.
 
@@ -478,8 +552,14 @@ class StrokeHandler:
             # No tree node means we can't place this stroke properly
             return None
 
-        # Calculate target offset in page text (semantic, not CRDT)
-        target_offset = self._calculate_anchor_offset(anchor_context, page_text, geometry)
+        # Calculate target offset in page text (semantic, not CRDT).
+        # Callers placing MULTIPLE strokes on one page must resolve offsets
+        # via resolve_page_anchor_offsets() (dispersion guards) and pass the
+        # result here; per-bundle resolution is only safe in isolation.
+        if precomputed_offset is not None:
+            target_offset = precomputed_offset
+        else:
+            target_offset = self._calculate_anchor_offset(anchor_context, page_text, geometry)
 
         anchor_text = anchor_context.text_content or ""
         logger.debug(

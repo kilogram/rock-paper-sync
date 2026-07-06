@@ -473,6 +473,22 @@ class RemarkableGenerator:
             if block and hasattr(block, "item") and hasattr(block.item, "item_id"):
                 projection_annotation_ids.add(block.item.item_id)
 
+        # Pre-resolve ALL stroke anchor offsets for this page with dispersion
+        # guards (cluster preservation + no-silent-collapse). Per-bundle
+        # resolution is what stacked every stroke group onto one anchor in the
+        # 2026-07-05 session (docs/bugs/STROKE_SESSION_2026-07-05_FORENSICS.md).
+        stroke_annos = [
+            a
+            for a in projection.annotations
+            if not (orphan_annotation_ids and a.annotation_id in orphan_annotation_ids)
+            and a.original_rm_block is not None
+            and "Line" in type(a.original_rm_block).__name__
+            and a.original_tree_node is not None
+        ]
+        stroke_offsets = self._stroke_handler.resolve_page_anchor_offsets(
+            stroke_annos, page_text, self.geometry
+        )
+
         for doc_anno in projection.annotations:
             if orphan_annotation_ids and doc_anno.annotation_id in orphan_annotation_ids:
                 continue
@@ -546,6 +562,7 @@ class RemarkableGenerator:
                     tree_node=doc_anno.original_tree_node,
                     scene_group_item=doc_anno.original_scene_group_item,
                     scene_tree_block=doc_anno.original_scene_tree_block,
+                    precomputed_offset=stroke_offsets.get(doc_anno.annotation_id),
                 )
 
                 if result:
