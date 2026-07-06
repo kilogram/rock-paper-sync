@@ -241,7 +241,12 @@ class TestEstimateBlockLines:
     """Tests for block line estimation."""
 
     def test_horizontal_rule(self, generator: RemarkableGenerator) -> None:
-        """Horizontal rules should take 2 lines."""
+        """Horizontal rules render as one empty placeholder line (Phase 4a).
+
+        blocks_to_text_items emits a single "" placeholder for an HR, so the
+        line count is exactly 1; the old value of 2 was phantom padding that
+        made pages close early.
+        """
         block = ContentBlock(
             type=BlockType.HORIZONTAL_RULE,
             level=0,
@@ -250,7 +255,7 @@ class TestEstimateBlockLines:
         )
 
         lines = generator.estimate_block_lines(block)
-        assert lines == 2
+        assert lines == 1
 
     def test_short_paragraph(self, generator: RemarkableGenerator) -> None:
         """Short paragraph should take minimal lines."""
@@ -278,8 +283,14 @@ class TestEstimateBlockLines:
         lines = generator.estimate_block_lines(block)
         assert lines > 10  # Should wrap many times
 
-    def test_header_extra_spacing(self, generator: RemarkableGenerator) -> None:
-        """Headers should have extra spacing."""
+    def test_header_counts_rendered_lines_only(self, generator: RemarkableGenerator) -> None:
+        """Headers count exactly their rendered lines (Phase 4a).
+
+        The renderer inserts no blank line after headers (blocks are joined
+        with a single newline in blocks_to_text_items), so a same-text header
+        and paragraph occupy the same number of display lines. The old +1
+        "extra spacing" was accounting error, not rendered output.
+        """
         para = ContentBlock(
             type=BlockType.PARAGRAPH,
             level=0,
@@ -293,8 +304,7 @@ class TestEstimateBlockLines:
             formatting=[],
         )
 
-        # Header should take more lines due to spacing
-        assert generator.estimate_block_lines(header) > generator.estimate_block_lines(para)
+        assert generator.estimate_block_lines(header) == generator.estimate_block_lines(para)
 
     def test_code_block_line_count(self, generator: RemarkableGenerator) -> None:
         """Code blocks should count newlines plus spacing."""
@@ -307,8 +317,9 @@ class TestEstimateBlockLines:
         )
 
         lines = generator.estimate_block_lines(block)
-        # Should be number of newlines + 2 for spacing
-        expected_lines = code_text.count("\n") + 2
+        # One display line per source line (newlines + 1); the old +2 padding
+        # was never rendered (Phase 4a pagination refit).
+        expected_lines = code_text.count("\n") + 1
         assert lines == expected_lines
 
 

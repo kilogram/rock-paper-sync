@@ -763,43 +763,23 @@ class RemarkableGenerator:
         return pages if pages else [[]]
 
     def estimate_block_lines(self, block: ContentBlock) -> int:
-        """Estimate how many lines a content block will occupy.
+        """Count display lines a content block occupies when rendered.
 
-        Uses WordWrapLayoutEngine with font metrics for accurate line counting.
-        This ensures pagination matches actual text rendering, preventing text
-        from spilling beyond page boundaries.
+        Delegates to the shared layout.paginator.estimate_block_lines(), which
+        wraps via WordWrapLayoutEngine.calculate_line_breaks at the engine's
+        text_width (DeviceGeometry.effective_layout_width). This is the same
+        counting the ContentPaginator uses, so page fill accounting, Y-position
+        stamping, and actual rendering all agree.
 
         Args:
-            block: Content block to estimate
+            block: Content block to count
 
         Returns:
-            Estimated number of lines
+            Number of display lines
         """
-        if block.type == BlockType.HORIZONTAL_RULE:
-            return 2
+        from rock_paper_sync.layout.paginator import estimate_block_lines
 
-        # Account for list item bullet
-        text = block.text
-        if block.type == BlockType.LIST_ITEM:
-            text = f"• {text}"
-
-        # Use layout engine with font metrics for accurate line counting
-        # This matches the actual rendering in blocks_to_text_items()
-        line_breaks = self.layout_engine.calculate_line_breaks(text, self.geometry.text_width)
-        text_lines = len(line_breaks)
-
-        # No extra spacing for paragraphs (spacing handled by blank lines in markdown)
-        if block.type == BlockType.HEADER:
-            result = text_lines + 1  # Extra space after header for readability
-        elif block.type == BlockType.PARAGRAPH:
-            result = text_lines  # No extra spacing
-        elif block.type == BlockType.CODE_BLOCK:
-            # Code blocks: count actual newlines
-            result = text.count("\n") + 2
-        else:
-            result = text_lines
-
-        return result
+        return estimate_block_lines(block, self.layout_engine)
 
     def blocks_to_text_items(
         self, blocks: list[ContentBlock]

@@ -22,8 +22,54 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Minimum lines remaining on page before starting header on new page
-HEADER_ORPHAN_THRESHOLD_LINES = 10
+# Header orphan prevention (INTENTIONAL keep-together rule, not an estimate):
+# a header placed at the bottom of a page must have room for itself plus at
+# least two lines of the content it introduces. If fewer than this many lines
+# remain, the header starts a new page instead of sitting orphaned at the
+# page bottom. This is the ONLY rule allowed to close a page early (besides
+# an atomic block simply not fitting), so the maximum number of lines it can
+# leave unused on a page is HEADER_ORPHAN_THRESHOLD_LINES - 1.
+#
+# Value = 1 (single-line header) + 2 (minimum content lines kept with it).
+# The previous value of 10 was an accounting error carried from the 57px
+# line-height era and wasted up to 9 lines per page (forensics 2026-07-05).
+HEADER_ORPHAN_THRESHOLD_LINES = 3
+
+
+def estimate_block_lines(block: ContentBlock, layout_engine) -> int:
+    """Count display lines a ContentBlock occupies when rendered.
+
+    This is the single source of truth for block line counting, shared by
+    ContentPaginator and RemarkableGenerator. It mirrors the rendering model
+    of RemarkableGenerator.blocks_to_text_items() exactly: blocks are joined
+    with a single "\\n" (no blank lines are inserted between blocks), a
+    horizontal rule renders as one empty placeholder line, and every other
+    block occupies exactly the word-wrapped lines of its text.
+
+    Line breaks are computed by WordWrapLayoutEngine.calculate_line_breaks at
+    the engine's text_width, which is DeviceGeometry.effective_layout_width
+    when the engine is built via WordWrapLayoutEngine.from_geometry().
+
+    Args:
+        block: ContentBlock to count
+        layout_engine: WordWrapLayoutEngine for wrap calculation
+
+    Returns:
+        Number of display lines (>= 1)
+    """
+    from rock_paper_sync.parser import BlockType
+
+    if block.type == BlockType.HORIZONTAL_RULE:
+        # Rendered as a single empty placeholder line (see blocks_to_text_items)
+        return 1
+
+    text = block.text
+    if block.type == BlockType.LIST_ITEM:
+        text = f"• {text}"
+
+    # calculate_line_breaks handles embedded newlines (code blocks) and
+    # word wrapping; empty text yields one line, matching the render.
+    return len(layout_engine.calculate_line_breaks(text, layout_engine.text_width))
 
 
 class ContentPaginator:
@@ -198,25 +244,4 @@ class ContentPaginator:
         if self._estimate_block_lines:
             return self._estimate_block_lines(block)
 
-        # Default estimation using layout engine
-        from rock_paper_sync.parser import BlockType
-
-        if block.type == BlockType.HORIZONTAL_RULE:
-            return 2
-
-        text = block.text
-        if block.type == BlockType.LIST_ITEM:
-            text = f"• {text}"
-
-        # Code blocks: count actual newlines + padding
-        if block.type == BlockType.CODE_BLOCK:
-            return text.count("\n") + 2
-
-        line_breaks = self.layout_engine.calculate_line_breaks(text, self.layout_engine.text_width)
-        lines = len(line_breaks)
-
-        # Headers get extra spacing
-        if block.type == BlockType.HEADER:
-            lines += 1
-
-        return max(1, lines)
+        return estimate_block_lines(block, self.layout_engine)

@@ -34,9 +34,14 @@ def sources():
 
 
 def test_all_sentinels_present(sources):
-    """The corpus advertises ZEBRA01..ZEBRA40 plus the T5BASE probe."""
+    """The corpus advertises ZEBRA01..ZEBRA40 plus the T5BASE probe.
+
+    Asserted as a subset (not equality): later phases add extra probe docs
+    (08+) with sentinels beyond ZEBRA40, and this test's contract is only
+    that the original Phase 2 corpus is complete.
+    """
     zebra = {s for s in sources if s.startswith("ZEBRA")}
-    assert zebra == {f"ZEBRA{i:02d}" for i in range(1, 41)}
+    assert {f"ZEBRA{i:02d}" for i in range(1, 41)} <= zebra
     assert "T5BASE" in sources
 
 
@@ -60,7 +65,7 @@ def test_char_offsets_are_within_plain_line(sources):
     """char_offset points at the sentinel inside the stripped line text."""
     for name, s in sources.items():
         if s.char_offset is not None:
-            assert s.plain_line[s.char_offset:s.char_offset + len(name)] == name
+            assert s.plain_line[s.char_offset : s.char_offset + len(name)] == name
 
 
 def _fabricate_highlights(sources) -> list[GlyphHighlight]:
@@ -70,7 +75,11 @@ def _fabricate_highlights(sources) -> list[GlyphHighlight]:
     for name, s in sorted(sources.items()):
         h = 87.0 if s.block_type == "heading" else 57.0
         x = -375.0 + (s.list_level or 0) * 30.0
-        hs.append(GlyphHighlight(text=name, rects=[HighlightRect(x=x, y=y, width=120.0, height=h)], doc=s.doc))
+        hs.append(
+            GlyphHighlight(
+                text=name, rects=[HighlightRect(x=x, y=y, width=120.0, height=h)], doc=s.doc
+            )
+        )
         y += h
     return hs
 
