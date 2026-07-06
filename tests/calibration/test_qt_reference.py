@@ -4,16 +4,14 @@ These tests require PyQt6 which is an optional calibration dependency.
 Skip if not available.
 """
 
-import pytest
-from pathlib import Path
-import sys
-
 # Check if PyQt6 is available
-try:
-    from PyQt6.QtGui import QGuiApplication
-    PYQT6_AVAILABLE = True
-except ImportError:
-    PYQT6_AVAILABLE = False
+import importlib.util
+import sys
+from pathlib import Path
+
+import pytest
+
+PYQT6_AVAILABLE = importlib.util.find_spec("PyQt6.QtGui") is not None
 
 # Add tools to path for imports
 TOOLS_PATH = Path(__file__).parent.parent.parent / "tools"
@@ -23,13 +21,13 @@ if str(TOOLS_PATH) not in sys.path:
 
 pytestmark = pytest.mark.skipif(
     not PYQT6_AVAILABLE,
-    reason="PyQt6 not installed. Install with: uv pip install 'rock-paper-sync[calibration]'"
+    reason="PyQt6 not installed. Install with: uv pip install 'rock-paper-sync[calibration]'",
 )
 
 
 # Test strings for comparison
 CALIBRATION_STRINGS = [
-    "This paragraph contains the word \"",
+    'This paragraph contains the word "',
     "The quick brown fox jumps over the lazy dog",
     "INSERTED ",
     "More content that will test word wrapping behavior at the end of lines",
@@ -46,6 +44,7 @@ def qt_ref():
         pytest.skip("PyQt6 not available")
 
     from calibration.qt_layout_reference import QtLayoutReference
+
     return QtLayoutReference(font_family="Noto Sans", font_size=29.5, text_width=758.0)
 
 
@@ -54,6 +53,7 @@ def layout_engine():
     """Create our layout engine for comparison."""
     from rock_paper_sync.layout.device import PAPER_PRO_MOVE
     from rock_paper_sync.layout.engine import WordWrapLayoutEngine
+
     return WordWrapLayoutEngine.from_geometry(PAPER_PRO_MOVE, use_font_metrics=True)
 
 
@@ -77,9 +77,9 @@ class TestCharacterWidths:
 
         # Ratios should be within 10% of each other
         ratio_diff = abs(qt_ratio - our_ratio) / qt_ratio
-        assert ratio_diff < 0.10, (
-            f"Width ratio mismatch: Qt m/i={qt_ratio:.2f}, ours={our_ratio:.2f}"
-        )
+        assert (
+            ratio_diff < 0.10
+        ), f"Width ratio mismatch: Qt m/i={qt_ratio:.2f}, ours={our_ratio:.2f}"
 
     def test_string_width_scaling_consistent(self, qt_ref, layout_engine):
         """String widths should scale consistently (Qt is ~32% larger at same pt)."""
@@ -106,7 +106,9 @@ class TestWordWrap:
 
     def test_word_wrap_algorithm_produces_breaks(self, qt_ref):
         """Qt word wrap should produce valid line breaks."""
-        text = "The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs."
+        text = (
+            "The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs."
+        )
 
         qt_breaks = qt_ref.calculate_line_breaks(text, 758.0)
 
@@ -125,7 +127,9 @@ class TestWordWrap:
 
     def test_our_wrap_produces_breaks(self, layout_engine):
         """Our word wrap should produce valid line breaks."""
-        text = "The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs."
+        text = (
+            "The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs."
+        )
 
         our_breaks = layout_engine.calculate_line_breaks(text, 758.0)
 
@@ -142,9 +146,9 @@ class TestWordWrap:
         wide_breaks = layout_engine.calculate_line_breaks(wide, 758.0)
 
         # Wide characters should need more lines (have more breaks)
-        assert len(wide_breaks) >= len(narrow_breaks), (
-            f"Wide should need at least as many lines: narrow={len(narrow_breaks)}, wide={len(wide_breaks)}"
-        )
+        assert (
+            len(wide_breaks) >= len(narrow_breaks)
+        ), f"Wide should need at least as many lines: narrow={len(narrow_breaks)}, wide={len(wide_breaks)}"
 
 
 class TestFontInfo:

@@ -64,30 +64,23 @@ EPS_PX = 2.0  # same tolerance as the corpus differential suite (D1)
 HL_LEFT_PAD = 3.4  # device highlight box extends 3.4 px left of the glyph
 END_OF_DOC = 281474976710655
 
-# Measured engine-vs-device x divergences, pinned as strict xfails.
-# T4: accumulated per-glyph width error, grows with distance into the line;
-# resolved by the Phase 6 font-metric fit — when that lands these start
-# passing and MUST be removed. W2: word-wrap boundary divergence (device and
-# engine break the line at different words), resolved with T4/W2 fit.
-KNOWN_DIVERGENT_HL = {
-    # (phase dir, highlight text) -> (measured dx, spec item)
-    ("phase_3_post_modification", "target"): (-5.0, "T4"),
-    ("phase_3_post_modification", "bottom"): (+62.7, "W2 wrap divergence"),
-    ("phase_3_post_modification", "cross line"): (+9.5, "T4"),
-    ("phase_4_golden_native", "cross"): (+9.7, "T4"),
-}
-KNOWN_DRIFT_ANCHORS = {
-    # part2 -> measured dx (identical in phase-3 and golden captures)
-    163: +4.3,
-    166: +5.6,
-    228: +2.8,
-    229: +3.0,
-    233: +4.3,
-    235: +5.0,
-    236: +6.9,
-    237: +7.0,
-    238: +7.4,
-}
+# History: with Noto Sans metrics these files carried an accumulated x-drift
+# up to +7.4 px (T4) and one +62.7 px wrap divergence (W2), pinned here as 13
+# per-case strict xfails. The 2026-07-06 reMarkableSans refit (device's own
+# font, fitted 10.16 pt) eliminated ALL of them: every highlight now matches
+# within 2 px and the per-anchor drift collapsed to one UNIFORM residual:
+#
+#   engine_x - device anchor_origin_x = -2.6 px ± 0.6  (19/19 anchors,
+#   both captures)
+#
+# A constant shared by every anchor is a model constant, not glyph drift —
+# most likely the device computes anchor_origin_x with a small fixed inset
+# relative to the glyph x (OPEN; same family as the 3.4 px highlight pad).
+# Pinned as a measured value below; the Phase 8 current-firmware anchor
+# capture decides whether it is firmware-era-specific or a real semantic
+# (then it moves into DeviceGeometry with provenance).
+OLD_FIRMWARE_ANCHOR_X_INSET = -2.6
+ANCHOR_INSET_SPREAD = 0.7  # measured max |dx - inset| is 0.6
 
 
 def _extractor(path: Path) -> RmFileExtractor:
@@ -151,16 +144,8 @@ assert len(HL_CASES) >= 5, "certification is vacuous: highlight testdata missing
     HL_CASES,
     ids=[f"{p}-{t}" for p, t, *_ in HL_CASES],
 )
-def test_highlight_rect_x_matches_engine(phase, text, off, ctx, rects, request):
+def test_highlight_rect_x_matches_engine(phase, text, off, ctx, rects):
     """Device highlight box x == engine char x - 3.4 px pad (first rect)."""
-    if (phase, text) in KNOWN_DIVERGENT_HL:
-        dx, spec = KNOWN_DIVERGENT_HL[(phase, text)]
-        request.node.add_marker(
-            pytest.mark.xfail(
-                strict=True,
-                reason=f"{spec}: measured Δx={dx:+.1f} px (Phase 6 metric fit resolves)",
-            )
-        )
     x, _ = ctx.offset_to_position(off)
     predicted = x - HL_LEFT_PAD
     delta = predicted - rects[0].x
@@ -244,24 +229,32 @@ assert len(ST_CASES) >= 10, "certification is vacuous: stroke anchor testdata mi
     ST_CASES,
     ids=[f"{p}-a{p2}" for p, p2, *_ in ST_CASES],
 )
-def test_stroke_anchor_origin_x_matches_engine(phase, part2, off, ctx, device_ox, request):
+def test_stroke_anchor_origin_x_matches_engine(phase, part2, off, ctx, device_ox):
     """The device computed anchor_origin_x for each stroke's anchor character;
-    the engine must predict the same x. This is the production stroke-placement
-    x input (AnchorResolver), certified against a device-signed value."""
-    if part2 in KNOWN_DRIFT_ANCHORS:
-        request.node.add_marker(
-            pytest.mark.xfail(
-                strict=True,
-                reason=f"T4 metric drift: measured Δx={KNOWN_DRIFT_ANCHORS[part2]:+.1f} px "
-                "(accumulated glyph-width error; Phase 6 font fit resolves)",
-            )
-        )
+    the engine must predict the same x up to the uniform measured inset. This
+    certifies the production stroke-placement x input (AnchorResolver) against
+    a device-signed value: any per-glyph metric drift would break the
+    uniformity, any layout regression would break the mean."""
     x, _ = ctx.offset_to_position(off)
-    delta = x - device_ox
-    assert abs(delta) < EPS_PX, (
+    delta = (x - device_ox) - OLD_FIRMWARE_ANCHOR_X_INSET
+    assert abs(delta) < ANCHOR_INSET_SPREAD + EPS_PX, (
         f"{phase} anchor part2={part2} off={off}: engine x={x:.1f}, "
-        f"device anchor_origin_x={device_ox:.1f}, Δ={delta:+.1f} px"
+        f"device anchor_origin_x={device_ox:.1f}, Δ-inset={delta:+.1f} px"
     )
+
+
+def test_stroke_anchor_residual_is_uniform():
+    """The engine-vs-device anchor residual must stay a single constant
+    (mean ≈ OLD_FIRMWARE_ANCHOR_X_INSET, small spread). If per-glyph drift
+    ever returns — wrong font, wrong size — the spread explodes first."""
+    deltas = []
+    for _, _, off, ctx, device_ox in ST_CASES:
+        x, _ = ctx.offset_to_position(off)
+        deltas.append(x - device_ox)
+    mean = sum(deltas) / len(deltas)
+    spread = max(abs(d - mean) for d in deltas)
+    assert abs(mean - OLD_FIRMWARE_ANCHOR_X_INSET) < 1.0, f"inset moved: mean={mean:+.2f}"
+    assert spread < ANCHOR_INSET_SPREAD + 0.5, f"per-anchor drift returned: spread={spread:.2f}"
 
 
 def test_stroke_anchor_identity_stable_across_device_reconciliations():

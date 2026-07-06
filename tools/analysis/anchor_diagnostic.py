@@ -6,8 +6,9 @@ Usage:
     uv run python tools/analysis/anchor_diagnostic.py
 """
 
-import rmscene
 from pathlib import Path
+
+import rmscene
 
 TESTDATA = Path("tests/record_replay/testdata/multi_trip/phases")
 
@@ -55,7 +56,7 @@ def main():
         info = analyze_rm(rm_file)
         if info["strokes"] > 0:
             print(f"\nPage {idx}: {info['strokes']} strokes")
-            print(f"  TreeNodes:")
+            print("  TreeNodes:")
             for tn in info["tree_nodes"]:
                 print(f"    node_id={tn['node_id']}, anchor={tn['anchor']}")
             print(f"  Stroke parents: {info['stroke_parents'][:3]}...")
@@ -67,7 +68,7 @@ def main():
         info = analyze_rm(rm_file)
         if info["strokes"] > 0:
             print(f"\nPage {idx}: {info['strokes']} strokes")
-            print(f"  TreeNodes:")
+            print("  TreeNodes:")
             for tn in info["tree_nodes"]:
                 print(f"    node_id={tn['node_id']}, anchor={tn['anchor']}")
             print(f"  Stroke parents: {info['stroke_parents'][:3]}...")

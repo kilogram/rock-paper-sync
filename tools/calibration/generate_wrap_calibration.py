@@ -25,6 +25,10 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from rock_paper_sync.layout.device import DEFAULT_DEVICE
+
+_LAYOUT_WIDTH = DEFAULT_DEVICE.effective_layout_width
+
 
 def get_char_width(char: str, font_size: float = 29.5) -> float:
     """Get width of a character using font metrics."""
@@ -135,14 +139,14 @@ def generate_mixed_line_to_width(
 
 
 def generate_calibration_document(
-    layout_width: float = 758.0,
+    layout_width: float = _LAYOUT_WIDTH,
     font_size: float = 29.5,
     width_steps: list[float] | None = None,
 ) -> str:
     """Generate the complete calibration document.
 
     Args:
-        layout_width: Expected wrap width in pixels (default: 758 for Paper Pro Move)
+        layout_width: Expected wrap width in pixels (device layout width)
         font_size: Font size in points
         width_steps: List of target widths to test (default: range around layout_width)
 
@@ -228,8 +232,8 @@ def main():
     parser.add_argument(
         "--layout-width",
         type=float,
-        default=758.0,
-        help="Layout width in pixels (default: 758 for Paper Pro Move)",
+        default=_LAYOUT_WIDTH,
+        help="Layout width in pixels (device layout width)",
     )
     parser.add_argument(
         "--font-size",

@@ -17,7 +17,7 @@ Usage:
     uv run python tools/calibration/qt_layout_reference.py --compare-fonttools
 
     # Test word-wrap at specific width:
-    uv run python tools/calibration/qt_layout_reference.py --width 758 --text "Your text here"
+    uv run python tools/calibration/qt_layout_reference.py --width <layout-width> --text "Your text here"
 
 This tool requires PyQt6 which is only available as an optional dependency
 for calibration purposes. It is NOT a runtime dependency.
@@ -42,6 +42,11 @@ except ImportError:
     PYQT6_AVAILABLE = False
 
 
+from rock_paper_sync.layout.device import DEFAULT_DEVICE
+
+_LAYOUT_WIDTH = DEFAULT_DEVICE.effective_layout_width
+
+
 @dataclass
 class QtLayoutReference:
     """Qt6 reference implementation for text layout.
@@ -60,7 +65,7 @@ class QtLayoutReference:
 
     font_family: str = "Noto Sans"
     font_size: float = 29.5  # Point size (note: Qt interprets this differently than fonttools)
-    text_width: float = 758.0  # Layout width for word-wrap
+    text_width: float = _LAYOUT_WIDTH  # Layout width for word-wrap (from DeviceGeometry)
     use_pixel_size: bool = False  # If True, interpret font_size as pixels not points
 
     _app: QGuiApplication | None = None
@@ -287,7 +292,7 @@ def main():
         "--size", type=float, default=29.5, help="Font size in points (default: 29.5)"
     )
     parser.add_argument(
-        "--width", type=float, default=758.0, help="Text width for word-wrap (default: 758.0)"
+        "--width", type=float, default=_LAYOUT_WIDTH, help="Text width for word-wrap (device layout width)"
     )
     parser.add_argument("--text", help="Text to measure")
     parser.add_argument(

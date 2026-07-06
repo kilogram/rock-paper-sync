@@ -60,7 +60,7 @@ class TestFontCalibration:
         accurate than the old single "INSERTED " measurement. The new proper typography
         model gives ~154.7px for "INSERTED ".
         """
-        expected_width = 154.7  # Based on 10.0pt @ 226 DPI calibration
+        expected_width = 159.5  # reMarkableSans @ fitted 10.16pt, 226 DPI (2026-07-06)
         calculated = text_width("INSERTED ")
 
         # Allow 3% tolerance
@@ -73,21 +73,23 @@ class TestFontCalibration:
     def test_individual_char_widths(self):
         """Verify individual character widths are reasonable.
 
-        These values were measured from Noto Sans at 32.4pt point size.
+        Re-pinned 2026-07-06 to reMarkableSans-Regular (the device's own
+        font, vendored in fonts/device/) at the corpus-fitted 10.16 pt.
+        Previous values were Noto Sans — the wrong font (T4 drift class).
         """
         expected = {
-            "I": 11.0,  # Narrow capital
-            "N": 24.6,  # Medium capital
-            "S": 17.8,  # Medium capital
-            "E": 18.0,  # Medium capital
-            "R": 20.1,  # Medium capital
-            "T": 18.0,  # Medium capital
-            " ": 8.4,  # Space
-            "t": 11.7,  # Narrow lowercase
-            "a": 18.2,  # Medium lowercase
-            "r": 13.4,  # Narrow lowercase
-            "g": 19.9,  # Medium lowercase
-            "e": 18.3,  # Medium lowercase
+            "I": 8.6,  # Narrow capital
+            "N": 23.5,  # Medium capital
+            "S": 20.4,  # Medium capital
+            "E": 18.9,  # Medium capital
+            "R": 21.0,  # Medium capital
+            "T": 18.4,  # Medium capital
+            " ": 7.5,  # Space
+            "t": 11.5,  # Narrow lowercase
+            "a": 17.4,  # Medium lowercase
+            "r": 11.5,  # Narrow lowercase
+            "g": 17.4,  # Medium lowercase
+            "e": 17.4,  # Medium lowercase
         }
 
         for char, expected_width in expected.items():

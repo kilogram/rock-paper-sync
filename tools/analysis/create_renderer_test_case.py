@@ -49,7 +49,6 @@ from device_capture import (
     print_error,
     print_ok,
     print_step,
-    print_warn,
 )
 
 # Default corpus directory
@@ -226,9 +225,9 @@ def main():
 
     print(f"\n{Colors.GREEN}Done!{Colors.END}")
     print(f"  Test case: {test_dir}")
-    print(f"\nNext steps:")
+    print("\nNext steps:")
     print(f"  1. Run rm_inspector.py on {rm_path} to verify content")
-    print(f"  2. Run renderer tests: uv run pytest tests/rmlib/test_device_golden.py")
+    print("  2. Run renderer tests: uv run pytest tests/rmlib/test_device_golden.py")
 
 
 if __name__ == "__main__":

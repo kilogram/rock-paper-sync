@@ -55,15 +55,12 @@ EPS_PX = 2.0
 # Sentinels whose predictions the corpus falsifies today. Each maps to the
 # measured delta so the xfail reason carries the number, not just a label.
 KNOWN_X_DIVERGENT = {
-    # mmm paragraph: device wraps ZEBRA05 to a new line; engine keeps it mid-line.
-    "ZEBRA05": "device wraps 'mmm' earlier (metric too narrow); Δx≈100 px, Δline=1",
-    "ZEBRA06": "accumulated 'mmm' metric drift; Δx≈208 px",
-    # iii paragraphs: narrow-glyph advance overestimated, x drifts right.
-    "ZEBRA03": "'iii' advance too wide; Δx≈+20 px",
-    "ZEBRA04": "'iii' advance too wide; Δx≈+21 px",
-    "ZEBRA02": "mixed-prose metric drift over 4 wrapped lines; Δx≈+17 px",
-    "ZEBRA09": "punctuation advance drift; Δx≈+13 px",
-    "ZEBRA10": "punctuation advance drift; Δx≈+9 px",
+    # 2026-07-06 reMarkableSans refit (device's own font @ fitted 10.16 pt)
+    # resolved the whole T4/W2 drift family: ZEBRA03/04/05/06/09/10 flipped
+    # from strict-xfail to pass. One survivor:
+    "ZEBRA02": "line-assignment divergence: engine places ZEBRA02 one display "
+    "line off (Δx≈-229 px = earlier wrap point in paragraph 2); W2 residual, "
+    "Phase 8 wrap-boundary probe (10_wrap_boundary_bisection)",
 }
 
 

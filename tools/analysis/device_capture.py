@@ -414,7 +414,7 @@ def main():
     print(f"  .rm files: {len(rm_files)}")
     print(f"  Thumbnails: {len(thumbnails)}")
     if logs:
-        print(f"  Logs: captured")
+        print("  Logs: captured")
 
 
 if __name__ == "__main__":

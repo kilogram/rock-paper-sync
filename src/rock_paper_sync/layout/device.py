@@ -317,10 +317,16 @@ PAPER_PRO_MOVE: Final[DeviceGeometry] = DeviceGeometry(
     baseline_offset=25.0,  # From top of line to text baseline
     # Margins
     bottom_margin=100.0,
-    # Font metrics (discovered 2025-12-12 via font size calibration)
-    # This is the TYPOGRAPHIC point size (1/72 inch)
-    # At 226 DPI: 10.0pt × 226 / 72 = 31.4 pixels
-    font_point_size=10.0,
+    # Font metrics: TYPOGRAPHIC point size (1/72 inch) for reMarkableSans
+    # (the device's own font, vendored in fonts/device/ — extracted from
+    # xochitl 2026-07-05). Refit 2026-07-06 by grid search against the
+    # 41-sentinel corpus with reMarkableSans metrics: pt=10.16 puts 9/10
+    # doc-01 sentinels within 2 px of device glyph x and resolves the
+    # 'bottom' W2 wrap divergence exactly; the outlier is a line-assignment
+    # case tracked in the differential suite. The previous 10.0 was
+    # calibrated against Noto Sans (2025-12-12) and carried the T4
+    # accumulated-drift class. At 226 DPI: 10.16pt × 226 / 72 ≈ 31.9 px.
+    font_point_size=10.16,
     # Text extraction coordinate space
     rm_text_block_line_height=8.0,
     # Physical display specs (from remarkable.com/products/remarkable-paper/pro-move)

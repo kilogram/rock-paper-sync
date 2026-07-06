@@ -13,7 +13,13 @@ Allowlist entries must state why the occurrence is not layout math.
 import re
 from pathlib import Path
 
-SRC = Path(__file__).parent.parent.parent / "src" / "rock_paper_sync"
+REPO = Path(__file__).parent.parent.parent
+SRC = REPO / "src" / "rock_paper_sync"
+# tools/rmlib renders; tools/calibration measures. Both must take layout
+# numbers from the engine/profile, never carry their own (the renderer's
+# private BODY_LINE_HEIGHT=57 survived the Phase 4a refit precisely because
+# this guard originally scanned src/ only).
+TOOL_DIRS = [REPO / "tools" / "rmlib", REPO / "tools" / "calibration"]
 
 # Layout literals banned outside src/rock_paper_sync/layout/.
 # Word-boundary-ish regexes: not preceded/followed by digits or a dot, so
@@ -41,18 +47,26 @@ def _matches(text: str, literal: str) -> list[int]:
     return [text[: m.start()].count("\n") + 1 for m in pattern.finditer(text)]
 
 
-def test_layout_literals_only_in_layout_package():
+def _scan(root: Path, label: str) -> list[str]:
     violations = []
-    for py in sorted(SRC.rglob("*.py")):
-        rel = py.relative_to(SRC).as_posix()
-        if rel.startswith("layout/"):
+    for py in sorted(root.rglob("*.py")):
+        rel = py.relative_to(root).as_posix()
+        if label == "src/rock_paper_sync" and rel.startswith("layout/"):
             continue
         text = py.read_text()
         for literal in BANNED:
             for line_no in _matches(text, literal):
-                if (rel, literal) in ALLOWLIST:
+                if (f"{label}/{rel}", literal) in ALLOWLIST or (rel, literal) in ALLOWLIST:
                     continue
-                violations.append(f"src/rock_paper_sync/{rel}:{line_no}: {literal}")
+                violations.append(f"{label}/{rel}:{line_no}: {literal}")
+    return violations
+
+
+def test_layout_literals_only_in_layout_package():
+    violations = _scan(SRC, "src/rock_paper_sync")
+    for tool_dir in TOOL_DIRS:
+        if tool_dir.exists():
+            violations += _scan(tool_dir, f"tools/{tool_dir.name}")
     assert not violations, (
         "Layout literals outside src/rock_paper_sync/layout/ — import from "
         "DeviceGeometry instead (or add a justified ALLOWLIST entry):\n" + "\n".join(violations)

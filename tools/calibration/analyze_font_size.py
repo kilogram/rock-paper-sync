@@ -15,8 +15,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 import rmscene
-from rmscene.scene_stream import SceneGlyphItemBlock
 from fontTools.ttLib import TTFont
+from rmscene.scene_stream import SceneGlyphItemBlock
 
 
 def find_noto_sans() -> Path:
@@ -202,7 +202,7 @@ def main():
 
     # Recommendation
     print("### Recommendation ###\n")
-    print(f"Update DeviceGeometry:")
+    print("Update DeviceGeometry:")
     print(f"  font_point_size={best[0]:.1f}  # Typographic points (verified via calibration)")
     print()
     print("Note: The current empirical value of 29.5 works because it's treated as")

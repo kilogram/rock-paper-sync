@@ -308,7 +308,6 @@ def analyze_scene_graph(rm_file: Path, output_file: Path | None = None):
     Shows blocks in file order to debug parent-child relationships
     and identify issues with SceneGroupItemBlock references.
     """
-    from rmscene.scene_stream import SceneTreeBlock
 
     with rm_file.open('rb') as f:
         blocks = list(rmscene.read_blocks(f))
@@ -376,7 +375,7 @@ def analyze_scene_graph(rm_file: Path, output_file: Path | None = None):
 
     missing_parents = [p for p, exists in referenced_parents if not exists]
     if missing_parents:
-        lines.append(f"\n⚠️ SceneGroupItemBlocks with MISSING parent_id:")
+        lines.append("\n⚠️ SceneGroupItemBlocks with MISSING parent_id:")
         for p in set(missing_parents):
             lines.append(f"  - {p}")
     else:

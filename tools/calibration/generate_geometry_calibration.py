@@ -39,6 +39,8 @@ from rmscene.scene_stream import (
 )
 from rmscene.tagged_block_common import LwwValue
 
+from rock_paper_sync.layout.device import DEFAULT_DEVICE
+
 # reMarkable Paper Pro Move - Physical Device Specs
 # Source: reMarkable website
 PHYSICAL_WIDTH = 954    # pixels (horizontal in portrait)
@@ -50,8 +52,9 @@ PHYSICAL_PPI = 264      # Physical screen resolution
 # All .rm files use reMarkable 2's coordinate system regardless of target device
 PAGE_WIDTH = 1404   # doc pixels (from reMarkable 2: 1404×1872 @ 226 DPI)
 PAGE_HEIGHT = 1872  # doc pixels
-TEXT_WIDTH = 750.0
-TEXT_POS_X = -375.0  # Centered
+
+TEXT_WIDTH = DEFAULT_DEVICE.text_width
+TEXT_POS_X = DEFAULT_DEVICE.text_pos_x  # Centered
 TEXT_POS_Y = 94.0
 
 # CRITICAL: Document DPI is ALWAYS 226 (reMarkable 2's resolution)
@@ -310,7 +313,7 @@ def generate_calibration_markdown() -> str:
         "",
         f"- Document canvas: {PAGE_WIDTH} × {PAGE_HEIGHT} doc pixels (reMarkable 2 format)",
         f"- Document DPI: {DOC_PPI} (reMarkable 2's resolution)",
-        f"- Physical device: Paper Pro Move",
+        "- Physical device: Paper Pro Move",
         f"  - Screen: {PHYSICAL_WIDTH} × {PHYSICAL_HEIGHT} pixels at {PHYSICAL_PPI} PPI",
         f"  - Scale: {PHYSICAL_PPI / DOC_PPI:.3f}× ({PHYSICAL_PPI}/{DOC_PPI})",
         f"- Viewport: ~{VIEWPORT_HEIGHT} doc pixels visible (after UI chrome)",

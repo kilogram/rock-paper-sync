@@ -35,6 +35,12 @@ if TYPE_CHECKING:
 from rmscene import read_blocks
 from rmscene.scene_stream import SceneGlyphItemBlock, SceneLineItemBlock
 
+from rock_paper_sync.layout.device import DEFAULT_DEVICE
+
+# All layout defaults below are hypotheses seeded from the engine's geometry
+# (single source of truth); the extractor's job is to MEASURE and override.
+_LINE = DEFAULT_DEVICE.line_height
+
 
 @dataclass
 class HighlightRect:
@@ -54,10 +60,10 @@ class HighlightRect:
 class StructuralProfile:
     """Structural layout parameters extracted from calibration."""
 
-    paragraph_spacing_px: float = 57.0
-    bullet_item_spacing_px: float = 57.0
-    list_item_spacing_px: float = 57.0
-    checkmark_spacing_px: float = 57.0
+    paragraph_spacing_px: float = _LINE
+    bullet_item_spacing_px: float = _LINE
+    list_item_spacing_px: float = _LINE
+    checkmark_spacing_px: float = _LINE
     bullet_indent_px: float = 30.0
     list_indent_px: float = 30.0
     checkmark_indent_px: float = 30.0
@@ -74,11 +80,11 @@ class DeviceProfile:
     device_name: str
     page_width: int = 1404
     page_height: int = 1872
-    text_width: float = 750.0
-    layout_text_width: float = 758.0
+    text_width: float = DEFAULT_DEVICE.text_width
+    layout_text_width: float = DEFAULT_DEVICE.layout_text_width or DEFAULT_DEVICE.text_width
     font_point_size: float = 29.5
-    line_height: float = 57.0
-    text_pos_x: float = -375.0
+    line_height: float = _LINE
+    text_pos_x: float = DEFAULT_DEVICE.text_pos_x
     text_pos_y: float = 94.0
     baseline_offset: float = 25.0
     bottom_margin: float = 100.0
@@ -197,7 +203,7 @@ def analyze_structure_file(rm_path: Path) -> StructuralProfile:
         return StructuralProfile()
 
     # Group highlights by approximate Y position (within line_height tolerance)
-    line_height = 57.0  # Default, will be refined
+    line_height = _LINE  # Default, will be refined
 
     # Sort by Y
     sorted_highlights = sorted(highlights, key=lambda h: h.y)
@@ -212,7 +218,7 @@ def analyze_structure_file(rm_path: Path) -> StructuralProfile:
 
         if y_deltas:
             # The most common delta is likely the line height
-            line_height = min(y_deltas, key=lambda d: abs(d - 57))
+            line_height = min(y_deltas, key=lambda d: abs(d - _LINE))
 
     # Analyze X positions for indentation
     x_positions = [h.x for h in sorted_highlights]

@@ -204,7 +204,7 @@ def compare_testdata(
         source_desc = f"{mode}/uploaded_rm (our generated output)"
 
     if not golden.annotations or not golden.annotations.rm_files:
-        print(f"Error: Golden has no annotations", file=sys.stderr)
+        print("Error: Golden has no annotations", file=sys.stderr)
         return 1
 
     golden_rm = golden.annotations.rm_files

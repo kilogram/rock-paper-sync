@@ -24,8 +24,11 @@ import rmscene
 from rock_paper_sync.annotations.common.spatial import cluster_bboxes_kdtree
 from rock_paper_sync.coordinates import (
     AnchorResolver as ParentAnchorResolver,
+)
+from rock_paper_sync.coordinates import (
     is_root_layer,
 )
+
 
 # is_text_relative is inverse of is_root_layer
 def is_text_relative(parent_id):
@@ -158,7 +161,7 @@ def generate_svg(
             stroke_to_cluster[stroke_idx] = cluster_idx
 
     svg_parts = [
-        f'<?xml version="1.0" encoding="UTF-8"?>',
+        '<?xml version="1.0" encoding="UTF-8"?>',
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{svg_width:.0f}" height="{svg_height:.0f}" '
         f'viewBox="{min_x - padding} {min_y - padding} {width} {height}">',
         f'  <rect x="{min_x - padding}" y="{min_y - padding}" width="{width}" height="{height}" fill="white"/>',
@@ -167,7 +170,7 @@ def generate_svg(
         "  <!-- Grid lines -->",
         f'  <line x1="{min_x - padding}" y1="0" x2="{max_x + padding}" y2="0" stroke="#ddd" stroke-width="0.5"/>',
         f'  <line x1="0" y1="{min_y - padding}" x2="0" y2="{max_y + padding}" stroke="#ddd" stroke-width="0.5"/>',
-        f'  <text x="5" y="-5" font-size="10" fill="#999">Y=0</text>',
+        '  <text x="5" y="-5" font-size="10" fill="#999">Y=0</text>',
         "",
     ]
 

@@ -1,8 +1,11 @@
-"""Font metrics for accurate text layout using Noto Sans.
+"""Font metrics for accurate text layout using the device's own font.
 
 This module provides per-character width calculations using the actual font
-metrics from Noto Sans Regular, which is the font used by reMarkable devices
-for text rendering.
+metrics from reMarkableSans Regular — the proprietary font xochitl renders
+typed text with (confirmed by firmware binary inspection, 2026-07-05; the
+TTFs are vendored in fonts/device/). Noto Sans system installs remain a
+FALLBACK only; measuring the wrong font is where the T4 accumulated-x-drift
+class came from.
 
 The reMarkable device uses proportional fonts (not monospace), so character
 widths vary significantly:
@@ -28,18 +31,25 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     pass
 
-# Device font size (discovered via calibration 2025-12-12)
-# This is the TYPOGRAPHIC point size (1/72 inch)
-# Measured by highlighting 20 'i' characters and comparing to theoretical widths
-# at different point sizes. 10.0pt matched within 1.2% error.
-DEVICE_FONT_SIZE_PT = 10.0
+# Device font size in TYPOGRAPHIC points (1/72 inch) — single source of
+# truth is DeviceGeometry.font_point_size (see layout/device.py for the
+# calibration provenance). Duplicating a number here is how the engine
+# (which reads geometry) and bare text_width() calls (which read this)
+# silently diverged.
+from .layout.device import DEFAULT_DEVICE as _DEFAULT_DEVICE
+
+DEVICE_FONT_SIZE_PT = _DEFAULT_DEVICE.font_point_size
 
 # Document coordinate DPI (reMarkable 2 format)
 # All reMarkable devices use 226 DPI for document coordinates
 DEFAULT_DOCUMENT_PPI = 226
 
-# Common paths where Noto Sans might be installed
+# The device's own font, vendored as package data — always preferred.
+DEVICE_FONT_PATH = Path(__file__).parent / "fonts" / "device" / "reMarkableSans-Regular.ttf"
+
+# Fallback paths (Noto Sans system installs) if the vendored font is missing.
 FONT_SEARCH_PATHS = [
+    DEVICE_FONT_PATH,
     "/usr/share/fonts/noto/NotoSans-Regular.ttf",  # Arch Linux
     "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",  # Debian/Ubuntu
     "/usr/share/fonts/google-noto/NotoSans-Regular.ttf",  # Fedora
@@ -94,7 +104,7 @@ def _load_font() -> tuple[dict[int, str], dict, int]:
 
 def char_width(
     char: str,
-    font_size_pt: float = DEVICE_FONT_SIZE_PT,
+    font_size_pt: float | None = None,
     document_ppi: int = DEFAULT_DOCUMENT_PPI,
 ) -> float:
     """Get width of a single character in document pixels.
@@ -118,6 +128,8 @@ def char_width(
         raise ValueError(f"Expected single character, got {len(char)}")
 
     # Convert typographic points to document pixels
+    if font_size_pt is None:
+        font_size_pt = DEVICE_FONT_SIZE_PT  # resolved at call time (calibration can retune)
     pixel_size = font_size_pt * document_ppi / 72.0
 
     cmap, glyphset, units_per_em = _load_font()
@@ -137,7 +149,7 @@ def char_width(
 
 def text_width(
     text: str,
-    font_size_pt: float = DEVICE_FONT_SIZE_PT,
+    font_size_pt: float | None = None,
     document_ppi: int = DEFAULT_DOCUMENT_PPI,
 ) -> float:
     """Get total width of text string in document pixels.
@@ -157,7 +169,7 @@ def text_width_range(
     text: str,
     start: int,
     end: int,
-    font_size_pt: float = DEVICE_FONT_SIZE_PT,
+    font_size_pt: float | None = None,
     document_ppi: int = DEFAULT_DOCUMENT_PPI,
 ) -> float:
     """Get width of a text substring.
