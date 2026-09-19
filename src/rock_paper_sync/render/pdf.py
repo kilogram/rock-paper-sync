@@ -137,15 +137,24 @@ mark {{
 
 .rps-list-item {{
     margin: 0.15em 0;
-    padding-left: 1.2em;
+    padding-left: 1.5em;
     text-indent: -1.2em;
 }}
-.rps-indent-2 {{ padding-left: 2.4em; }}
-.rps-indent-3 {{ padding-left: 3.6em; }}
-.rps-indent-4 {{ padding-left: 4.8em; }}
+.rps-indent-2 {{ padding-left: 3.0em; }}
+.rps-indent-3 {{ padding-left: 4.5em; }}
+.rps-indent-4 {{ padding-left: 6.0em; }}
 
 .rps-marker {{
     display: inline;
+    min-width: 1em;
+}}
+
+del {{
+    text-decoration: line-through;
+}}
+
+.rps-link {{
+    text-decoration: underline;
 }}
 
 .rps-checkbox {{
@@ -429,6 +438,7 @@ def _collect_token_texts(
     from rock_paper_sync.render.html import (
         _CHECKBOX_CHECKED,
         _CHECKBOX_UNCHECKED,
+        _ORDERED_PREFIX_RE,
         _strip_rps_markers,
         _tokenise_text,
     )
@@ -441,8 +451,12 @@ def _collect_token_texts(
             continue
 
         if block.type == BlockType.LIST_ITEM:
-            # List marker token
-            texts.append("•")
+            # Detect ordered-number prefix or use bullet as marker
+            ordered_match = _ORDERED_PREFIX_RE.match(text)
+            if ordered_match:
+                texts.append(f"{ordered_match.group(1)}.")
+            else:
+                texts.append("•")
 
             # Handle checkboxes
             remaining = text
@@ -452,6 +466,8 @@ def _collect_token_texts(
             elif text.startswith(_CHECKBOX_UNCHECKED):
                 texts.append("[ ]")
                 remaining = text[len(_CHECKBOX_UNCHECKED) :]
+            elif ordered_match:
+                remaining = text[ordered_match.end() :]
 
             # Word tokens
             texts.extend(_tokenise_text(remaining))

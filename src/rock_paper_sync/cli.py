@@ -47,14 +47,17 @@ def main(ctx: click.Context, config: str, verbose: bool) -> None:
     # Expand config path
     config_path = Path(config).expanduser()
 
-    # Check if config exists (except for init command)
-    if ctx.invoked_subcommand != "init" and not config_path.exists():
+    # Commands that don't require a config file
+    _no_config_commands = {"init", "bench"}
+
+    # Check if config exists (except for commands that don't need it)
+    if ctx.invoked_subcommand not in _no_config_commands and not config_path.exists():
         click.echo(f"Error: Config file not found: {config_path}", err=True)
         click.echo(f"Create one using: rock-paper-sync init {config_path}", err=True)
         sys.exit(1)
 
-    # Load and validate config (except for init command)
-    if ctx.invoked_subcommand != "init":
+    # Load and validate config (except for commands that don't need it)
+    if ctx.invoked_subcommand not in _no_config_commands:
         try:
             app_config = load_config(config_path)
             validate_config(app_config)
@@ -1035,14 +1038,25 @@ def bench_render(file: str, overlay: bool) -> None:
     """
     import time as _time
 
-    from .config import LayoutConfig
+    from .config import LayoutConfig, load_config
     from .device_profile import PROFILES
     from .parser import parse_markdown_file
     from .render.pdf import PdfRenderer
 
     md_path = Path(file).resolve()
+
+    # Try loading layout from config; fall back to defaults
     layout = LayoutConfig()
-    profile = PROFILES.get("paper_pro_move")
+    config_path = Path("~/.config/rock-paper-sync/config.toml").expanduser()
+    if config_path.exists():
+        try:
+            app_config = load_config(config_path)
+            layout = app_config.layout
+            click.echo(f"Using layout from {config_path}", err=True)
+        except Exception:
+            click.echo("Config load failed, using default layout", err=True)
+
+    profile = PROFILES.get(layout.device, PROFILES.get("paper_pro_move"))
     if profile is None:
         click.echo("Error: paper_pro_move profile not found", err=True)
         sys.exit(1)

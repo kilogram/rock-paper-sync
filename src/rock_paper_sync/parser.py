@@ -264,7 +264,8 @@ def parse_content(markdown_text: str) -> list[ContentBlock]:
     # Create mistune parser with AST renderer.
     # "mark" parses ==text== into <mark> (highlights).
     # "task_lists" parses - [ ] / - [x] into task_list_item nodes.
-    md = mistune.create_markdown(renderer="ast", plugins=["mark", "task_lists"])
+    # "strikethrough" parses ~~text~~ into strikethrough nodes.
+    md = mistune.create_markdown(renderer="ast", plugins=["mark", "task_lists", "strikethrough"])
     try:
         ast = md(markdown_text)
     except Exception as e:
@@ -312,12 +313,15 @@ def ast_node_to_block(
         return ContentBlock(type=BlockType.HEADER, level=level, text=text, formatting=formatting)
 
     elif node_type == "list":
-        # Process list items
+        # Process list items, tracking ordered-ness and item index
         items: list[ContentBlock] = []
+        is_ordered = node.get("attrs", {}).get("ordered", False)
+        item_counter = 0
 
         for item_node in node.get("children", []):
             item_type = item_node.get("type")
             if item_type in ("list_item", "task_list_item"):
+                item_counter += 1
                 # List items contain child blocks (usually block_text or nested lists)
                 item_children = item_node.get("children", [])
 
@@ -346,6 +350,20 @@ def ast_node_to_block(
                                 for f in formatting
                             ]
 
+                        # For ordered lists, prepend the item number
+                        if is_ordered and not is_task:
+                            prefix = f"{item_counter}. "
+                            text = prefix + text
+                            formatting = [
+                                TextFormat(
+                                    start=f.start + len(prefix),
+                                    end=f.end + len(prefix),
+                                    style=f.style,
+                                    metadata=f.metadata,
+                                )
+                                for f in formatting
+                            ]
+
                         items.append(
                             ContentBlock(
                                 type=BlockType.LIST_ITEM,
@@ -365,12 +383,8 @@ def ast_node_to_block(
         return items
 
     elif node_type == "block_code":
-        # Code blocks - get raw text
+        # Code blocks - raw text only, language tag is metadata not content
         code_text = node.get("raw", "")
-        lang = node.get("attrs", {}).get("info", "")
-        # Include language info in the text if present
-        if lang:
-            code_text = f"[{lang}]\n{code_text}"
         return ContentBlock(type=BlockType.CODE_BLOCK, level=0, text=code_text, formatting=[])
 
     elif node_type == "block_quote":
@@ -483,26 +497,24 @@ def extract_text_and_formatting(children: list[dict[str, Any]]) -> tuple[str, li
             current_pos += len(code_text)
 
         elif child_type == "link":
-            # Link - extract text and append URL in parentheses
+            # Link - render text only (underlined), URL is noise on paper
             start_pos = current_pos
             inner_text, inner_fmt = extract_text_and_formatting(child.get("children", []))
             url = child.get("attrs", {}).get("url", "")
 
-            # Format as "text (URL)"
-            link_text = f"{inner_text} ({url})" if url else inner_text
-            text_parts.append(link_text)
+            text_parts.append(inner_text)
 
-            # Mark entire link text (including URL) as link formatting
+            # Mark link text as LINK formatting (rendered underlined)
             formatting.append(
                 TextFormat(
                     start=start_pos,
-                    end=start_pos + len(link_text),
+                    end=start_pos + len(inner_text),
                     style=FormatStyle.LINK,
                     metadata={"url": url},
                 )
             )
 
-            # Include nested formatting within the link text part only
+            # Include nested formatting
             for fmt in inner_fmt:
                 formatting.append(
                     TextFormat(
@@ -513,12 +525,17 @@ def extract_text_and_formatting(children: list[dict[str, Any]]) -> tuple[str, li
                     )
                 )
 
-            current_pos += len(link_text)
+            current_pos += len(inner_text)
 
         elif child_type == "image":
-            # Image - replace with placeholder
-            alt_text = child.get("attrs", {}).get("alt", "Image")
-            placeholder = f"[Image: {alt_text}]"
+            # Image - placeholder with filename extracted from URL
+            url = child.get("attrs", {}).get("url", "")
+            # Extract filename from URL/path
+            filename = url.rsplit("/", 1)[-1] if "/" in url else url
+            if not filename:
+                alt_text = child.get("attrs", {}).get("alt", "Image")
+                filename = alt_text
+            placeholder = f"[Image: {filename}]"
             text_parts.append(placeholder)
             current_pos += len(placeholder)
 

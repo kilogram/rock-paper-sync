@@ -224,12 +224,12 @@ class TestInlineFormatting:
 
         text, formatting = extract_text_and_formatting(nodes)
 
-        assert text == "Visit this site (https://example.com) now."
+        assert text == "Visit this site now."
         assert len(formatting) == 1
         assert formatting[0].style == FormatStyle.LINK
         assert formatting[0].metadata["url"] == "https://example.com"
         assert formatting[0].start == 6
-        assert formatting[0].end == 37
+        assert formatting[0].end == 15  # "this site" length
 
     def test_image_placeholder(self):
         """Replace images with placeholder text."""
@@ -244,7 +244,7 @@ class TestInlineFormatting:
 
         text, formatting = extract_text_and_formatting(nodes)
 
-        assert text == "See [Image: diagram] above."
+        assert text == "See [Image: diagram.png] above."
         assert len(formatting) == 0  # Images don't have formatting
 
     def test_strikethrough(self):
@@ -406,7 +406,7 @@ def hello():
         assert len(blocks) == 1
         assert blocks[0].type == BlockType.CODE_BLOCK
         assert "def hello():" in blocks[0].text
-        assert "[python]" in blocks[0].text  # Language tag included
+        assert "[python]" not in blocks[0].text  # Language tag is metadata, not content
 
     def test_blockquote(self):
         """Parse blockquote."""
@@ -507,9 +507,9 @@ class TestFileFixtures:
         code_blocks = [b for b in doc.content if b.type == BlockType.CODE_BLOCK]
         assert len(code_blocks) >= 2
 
-        # Check that language is included
-        python_block = next(b for b in code_blocks if "python" in b.text.lower())
-        assert "def hello_world" in python_block.text
+        # Check that code content is present (language tag is no longer in text)
+        hello_block = next(b for b in code_blocks if "hello_world" in b.text)
+        assert "def hello_world" in hello_block.text
 
     def test_complex_fixture(self, fixtures_dir: Path):
         """Parse complex.md fixture with all elements."""

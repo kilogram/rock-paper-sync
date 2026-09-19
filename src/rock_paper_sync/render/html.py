@@ -33,6 +33,9 @@ TOKEN_ATTR = "data-token"
 _CHECKBOX_UNCHECKED = "[ ] "
 _CHECKBOX_CHECKED = "[x] "
 
+# Ordered list number prefix pattern (e.g. "1. ", "12. ")
+_ORDERED_PREFIX_RE = re.compile(r"^(\d+)\. ")
+
 # RPS marker comment pattern (strip before rendering)
 _RPS_MARKER_RE = re.compile(
     r"<!--\s*RPS:.*?-->.*?<!--\s*RPS:END\s*-->",
@@ -96,15 +99,14 @@ def _apply_inline_formatting(
             opens.setdefault(start, []).append("<code>")
             closes.setdefault(end, []).append("</code>")
         elif fmt.style == FormatStyle.STRIKETHROUGH:
-            opens.setdefault(start, []).append("<s>")
-            closes.setdefault(end, []).append("</s>")
+            opens.setdefault(start, []).append("<del>")
+            closes.setdefault(end, []).append("</del>")
         elif fmt.style == FormatStyle.MARK:
             opens.setdefault(start, []).append("<mark>")
             closes.setdefault(end, []).append("</mark>")
         elif fmt.style == FormatStyle.LINK:
-            url = fmt.metadata.get("url", "")
-            opens.setdefault(start, []).append(f'<a href="{html_mod.escape(url)}">')
-            closes.setdefault(end, []).append("</a>")
+            opens.setdefault(start, []).append('<span class="rps-link">')
+            closes.setdefault(end, []).append("</span>")
 
     result: list[str] = []
     for i, ch in enumerate(chars):
@@ -126,6 +128,20 @@ def _apply_inline_formatting(
     return "".join(result)
 
 
+def _shift_formatting(formatting: list, offset: int) -> list:
+    """Shift formatting offsets left by `offset`, dropping entries that end before the new start."""
+    return [
+        type(f)(
+            start=f.start - offset,
+            end=f.end - offset,
+            style=f.style,
+            metadata=f.metadata,
+        )
+        for f in formatting
+        if f.end > offset
+    ]
+
+
 def _render_block_tokens(
     text: str,
     formatting: list,
@@ -140,51 +156,41 @@ def _render_block_tokens(
     """
     parts: list[str] = []
 
-    # Handle checkbox prefix for list items
-    checkbox_html = ""
+    # Handle special prefixes for list items (checkbox, ordered number).
+    # These are stripped because the marker is rendered separately by ast_to_html.
+    prefix_html = ""
     remaining_text = text
     remaining_fmt = formatting
 
     if block_type == BlockType.LIST_ITEM:
         if text.startswith(_CHECKBOX_CHECKED):
-            checkbox_html = (
+            prefix_html = (
                 f'<span {TOKEN_ATTR}="{token_counter[0]}">'
                 '<span class="rps-checkbox rps-checkbox-checked">x</span>'
                 "</span> "
             )
             token_counter[0] += 1
             remaining_text = text[len(_CHECKBOX_CHECKED) :]
-            remaining_fmt = [
-                type(f)(
-                    start=f.start - len(_CHECKBOX_CHECKED),
-                    end=f.end - len(_CHECKBOX_CHECKED),
-                    style=f.style,
-                    metadata=f.metadata,
-                )
-                for f in formatting
-                if f.end > len(_CHECKBOX_CHECKED)
-            ]
+            remaining_fmt = _shift_formatting(formatting, len(_CHECKBOX_CHECKED))
         elif text.startswith(_CHECKBOX_UNCHECKED):
-            checkbox_html = (
+            prefix_html = (
                 f'<span {TOKEN_ATTR}="{token_counter[0]}">'
                 '<span class="rps-checkbox"></span>'
                 "</span> "
             )
             token_counter[0] += 1
             remaining_text = text[len(_CHECKBOX_UNCHECKED) :]
-            remaining_fmt = [
-                type(f)(
-                    start=f.start - len(_CHECKBOX_UNCHECKED),
-                    end=f.end - len(_CHECKBOX_UNCHECKED),
-                    style=f.style,
-                    metadata=f.metadata,
-                )
-                for f in formatting
-                if f.end > len(_CHECKBOX_UNCHECKED)
-            ]
+            remaining_fmt = _shift_formatting(formatting, len(_CHECKBOX_UNCHECKED))
+        else:
+            # Strip ordered-number prefix ("N. ") — rendered as marker by ast_to_html
+            m = _ORDERED_PREFIX_RE.match(text)
+            if m:
+                prefix_len = m.end()
+                remaining_text = text[prefix_len:]
+                remaining_fmt = _shift_formatting(formatting, prefix_len)
 
-    if checkbox_html:
-        parts.append(checkbox_html)
+    if prefix_html:
+        parts.append(prefix_html)
 
     tokens = _tokenise_text(remaining_text)
     if not tokens:
@@ -260,9 +266,16 @@ def ast_to_html(
             body_parts.append(f"<p>{content}</p>")
 
         elif block.type == BlockType.LIST_ITEM:
-            indent_class = f' class="rps-indent-{block.level}"' if block.level > 1 else ""
-            # Determine list marker text
-            marker = "•"  # bullet
+            indent_class = f" rps-indent-{block.level}" if block.level > 1 else ""
+
+            # Detect ordered-number prefix ("N. ") from parser
+            ordered_match = _ORDERED_PREFIX_RE.match(text)
+            if ordered_match:
+                marker = f"{ordered_match.group(1)}."
+            else:
+                marker = "•"  # bullet
+
+            # The marker is a token in the word map.
             marker_html = _wrap_token(token_counter[0], html_mod.escape(marker))
             token_counter[0] += 1
 
@@ -270,7 +283,7 @@ def ast_to_html(
                 text, block.formatting, token_counter, block.type, block.level
             )
             body_parts.append(
-                f'<div class="rps-list-item"{indent_class}>'
+                f'<div class="rps-list-item{indent_class}">'
                 f'<span class="rps-marker">{marker_html}</span> {content}'
                 f"</div>"
             )

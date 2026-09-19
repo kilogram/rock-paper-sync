@@ -141,6 +141,76 @@ class TestI1TokenBoxes:
 
 
 # ---------------------------------------------------------------------------
+# Rendering regression tests
+# ---------------------------------------------------------------------------
+
+
+class TestRenderingRegression:
+    """Regression tests for HTML/CSS rendering correctness."""
+
+    def test_ordered_list_html_has_numbering(self) -> None:
+        """Nested ordered list HTML must contain '1.' and '2.' markers."""
+        from rock_paper_sync.parser import parse_content
+        from rock_paper_sync.render.html import ast_to_html
+
+        blocks = parse_content("1. First\n2. Second\n   1. Sub A\n   2. Sub B\n3. Third\n")
+        html, _ = ast_to_html(blocks)
+
+        # Ordered markers must appear in the output
+        assert ">1.<" in html, f"Expected '1.' marker in HTML:\n{html}"
+        assert ">2.<" in html, f"Expected '2.' marker in HTML:\n{html}"
+        assert ">3.<" in html, f"Expected '3.' marker in HTML:\n{html}"
+        # Nested items restart at 1
+        # Count occurrences of ">1.<" — should be at least 2 (top-level + nested)
+        assert html.count(">1.<") >= 2, "Nested ordered list should restart numbering"
+
+    def test_fenced_code_block_no_language_tag(self) -> None:
+        """Fenced code block HTML must not contain the language tag as text."""
+        from rock_paper_sync.parser import parse_content
+        from rock_paper_sync.render.html import ast_to_html
+
+        blocks = parse_content("```python\ndef hello():\n    pass\n```\n")
+        html, _ = ast_to_html(blocks)
+
+        # The language tag "[python]" must not appear
+        assert "[python]" not in html, f"Language tag leaked into HTML:\n{html}"
+        # The code itself must appear
+        assert "def hello():" in html
+
+    def test_strikethrough_renders_del(self) -> None:
+        """~~text~~ must produce a <del> tag."""
+        from rock_paper_sync.parser import parse_content
+        from rock_paper_sync.render.html import ast_to_html
+
+        blocks = parse_content("This has ~~struck~~ text.\n")
+        html, _ = ast_to_html(blocks)
+        assert "<del>" in html, f"Expected <del> in HTML:\n{html}"
+        assert "struck" in html
+
+    def test_link_renders_underlined_no_url(self) -> None:
+        """Links render as underlined text without the URL."""
+        from rock_paper_sync.parser import parse_content
+        from rock_paper_sync.render.html import ast_to_html
+
+        blocks = parse_content("[click here](https://example.com)\n")
+        html, _ = ast_to_html(blocks)
+        assert "click" in html
+        assert "here" in html
+        assert "example.com" not in html, f"URL should not appear in HTML:\n{html}"
+        assert "rps-link" in html
+
+    def test_image_placeholder_has_filename(self) -> None:
+        """Image placeholders must include the filename."""
+        from rock_paper_sync.parser import parse_content
+        from rock_paper_sync.render.html import ast_to_html
+
+        blocks = parse_content("![Alt text](./images/diagram.png)\n")
+        html, _ = ast_to_html(blocks)
+        assert "diagram.png" in html
+        assert "[Image:" in html
+
+
+# ---------------------------------------------------------------------------
 # I2: PdfDocumentPayload produces exactly four keys, no .rm
 # ---------------------------------------------------------------------------
 
