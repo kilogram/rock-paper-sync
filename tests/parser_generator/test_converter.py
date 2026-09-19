@@ -55,8 +55,8 @@ class TestSyncEngine:
         assert result.page_count == 1
         assert result.error is None
 
-        # Verify cloud sync was called
-        assert mock_cloud_sync.upload_document.called
+        # Verify PDF upload was called (Phase 1: PDF push)
+        assert mock_cloud_sync.upload_pdf_document.called
 
     def test_sync_file_not_found(
         self,
@@ -359,10 +359,10 @@ class TestSyncEngine:
 
         engine = SyncEngine(sample_config, state_manager, cloud_sync=mock_cloud_sync)
 
-        # Mock the generator to raise an exception
+        # Mock the PDF renderer to raise an exception
         mocker.patch.object(
-            engine.generator,
-            "generate_document",
+            engine._pdf_renderer,
+            "render",
             side_effect=RuntimeError("Test error during generation"),
         )
 

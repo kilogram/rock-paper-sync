@@ -91,8 +91,16 @@ def main(ctx: click.Context, config: str, verbose: bool) -> None:
     default="both",
     help="Sync direction: push (to device), pull (from device), or both (default)",
 )
+@click.option(
+    "--discard-ink",
+    is_flag=True,
+    default=False,
+    help="Force push even if device has un-pulled ink (prints what it discards)",
+)
 @click.pass_context
-def sync(ctx: click.Context, dry_run: bool, vault: str | None, direction: str) -> None:
+def sync(
+    ctx: click.Context, dry_run: bool, vault: str | None, direction: str, discard_ink: bool = False
+) -> None:
     """Bidirectional sync between Obsidian and reMarkable.
 
     Default behavior (--direction both):
@@ -1001,6 +1009,88 @@ def ocr_prepare_dataset(
         sys.exit(1)
 
     state.close()
+
+
+@main.group()
+def bench() -> None:
+    """Benchmarking and debugging tools."""
+    pass
+
+
+@bench.command("render")
+@click.argument("file", type=click.Path(exists=True))
+@click.option(
+    "--overlay", is_flag=True, help="Draw word-map rects into an overlay PDF (requires pymupdf)"
+)
+def bench_render(file: str, overlay: bool) -> None:
+    """Render a markdown file to PDF and print stats.
+
+    Writes <stem>.pdf next to cwd.  With --overlay, also writes
+    <stem>.overlay.pdf with word-map rectangles drawn over the pages.
+
+    \b
+    Examples:
+        rock-paper-sync bench render notes.md
+        rock-paper-sync bench render notes.md --overlay
+    """
+    import time as _time
+
+    from .config import LayoutConfig
+    from .device_profile import PROFILES
+    from .parser import parse_markdown_file
+    from .render.pdf import PdfRenderer
+
+    md_path = Path(file).resolve()
+    layout = LayoutConfig()
+    profile = PROFILES.get("paper_pro_move")
+    if profile is None:
+        click.echo("Error: paper_pro_move profile not found", err=True)
+        sys.exit(1)
+
+    renderer = PdfRenderer(layout)
+    doc = parse_markdown_file(md_path)
+
+    start = _time.perf_counter()
+    result = renderer.render(doc, profile)
+    elapsed_ms = (_time.perf_counter() - start) * 1000
+
+    # Write PDF
+    out_pdf = Path.cwd() / f"{md_path.stem}.pdf"
+    out_pdf.write_bytes(result.pdf)
+
+    page_count = len(result.word_map.pages)
+    token_count = len(result.word_map.texts)
+
+    click.echo(f"Pages: {page_count}")
+    click.echo(f"Tokens: {token_count}")
+    click.echo(f"Render: {elapsed_ms:.0f} ms")
+    click.echo(f"PDF: {out_pdf}")
+
+    if overlay:
+        try:
+            import fitz  # pymupdf
+        except ImportError:
+            click.echo(
+                "Error: pymupdf is required for --overlay. Install with: uv add pymupdf", err=True
+            )
+            sys.exit(1)
+
+        pdf_doc = fitz.open(stream=result.pdf, filetype="pdf")
+        wm = result.word_map
+
+        for pw in wm.pages:
+            if pw.page >= len(pdf_doc):
+                continue
+            page = pdf_doc[pw.page]
+            for _tid, rect in pw.tokens:
+                # Draw rect in red
+                r = fitz.Rect(rect.x0, rect.y0, rect.x1, rect.y1)
+                page.draw_rect(r, color=(1, 0, 0), width=0.3)
+
+        overlay_path = Path.cwd() / f"{md_path.stem}.overlay.pdf"
+        pdf_doc.save(str(overlay_path))
+        pdf_doc.close()
+        click.echo(f"Overlay: {overlay_path}")
 
 
 if __name__ == "__main__":

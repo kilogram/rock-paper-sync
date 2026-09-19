@@ -317,11 +317,11 @@ class TestComplexMarkdownScenarios:
         sections = []
         for i in range(50):
             sections.append(
-                f"## Section {i+1}\n\n"
-                f"This is section {i+1}. It contains multiple sentences to simulate "
+                f"## Section {i + 1}\n\n"
+                f"This is section {i + 1}. It contains multiple sentences to simulate "
                 f"real content. The content should be long enough to require multiple "
                 f"lines when rendered on the reMarkable device.\n\n"
-                f"Here's a second paragraph in section {i+1} with more details.\n"
+                f"Here's a second paragraph in section {i + 1} with more details.\n"
             )
 
         content = "# Large Document\n\n" + "\n".join(sections)
@@ -559,8 +559,8 @@ class TestFullPipelineStubs:
         assert results[0].success
         assert results[0].remarkable_uuid is not None
 
-        # Verify cloud upload was called
-        assert mock_cloud_sync.upload_document.called
+        # Verify PDF upload was called (Phase 1: PDF push)
+        assert mock_cloud_sync.upload_pdf_document.called
 
         # Verify state was updated
         file_state = state.get_file_state("test-vault", "test.md")
@@ -595,7 +595,7 @@ class TestFullPipelineStubs:
         assert all(r.skipped for r in results2)  # All results should be skipped
 
         # Upload should not be called again (file unchanged)
-        assert not mock_cloud_sync.upload_document.called
+        assert not mock_cloud_sync.upload_pdf_document.called
 
     def test_folder_hierarchy_creation(self, integration_env, mock_cloud_sync):
         """Test that folder structure is created via cloud sync."""
@@ -779,9 +779,9 @@ class TestPerformance:
         # Create file with 1000+ lines
         lines = []
         for i in range(200):
-            lines.append(f"## Section {i+1}\n\n")
-            lines.append(f"Paragraph {i+1} with some content.\n\n")
-            lines.append(f"Second paragraph in section {i+1}.\n\n")
+            lines.append(f"## Section {i + 1}\n\n")
+            lines.append(f"Paragraph {i + 1} with some content.\n\n")
+            lines.append(f"Second paragraph in section {i + 1}.\n\n")
 
         content = "# Large Document\n\n" + "".join(lines)
         large_file = vault / "very_large.md"
@@ -823,8 +823,8 @@ class TestDocumentUpdateFlow:
         uuid1 = result1.remarkable_uuid
         assert uuid1 is not None
 
-        # Verify cloud upload was called
-        assert mock_cloud_sync.upload_document.called
+        # Verify PDF upload was called
+        assert mock_cloud_sync.upload_pdf_document.called
 
         # Update file content
         test_file.write_text("# Version 2\n\nUpdated content with changes.")
@@ -841,8 +841,8 @@ class TestDocumentUpdateFlow:
         # UUID should be SAME
         assert uuid2 == uuid1
 
-        # Verify cloud upload was called for update
-        assert mock_cloud_sync.upload_document.called
+        # Verify PDF upload was called for update
+        assert mock_cloud_sync.upload_pdf_document.called
 
     def test_multiple_updates_same_document(self, integration_env, mock_cloud_sync):
         """Test multiple sequential updates to same document."""
@@ -876,8 +876,8 @@ class TestDocumentUpdateFlow:
                 # Should always be same UUID
                 assert result.remarkable_uuid == uuid
 
-        # Verify upload was called 3 times
-        assert mock_cloud_sync.upload_document.call_count == 3
+        # Verify PDF upload was called 3 times
+        assert mock_cloud_sync.upload_pdf_document.call_count == 3
 
     def test_update_with_folder_move(self, integration_env, mock_cloud_sync):
         """Test updating file that changes folders."""
@@ -953,8 +953,8 @@ class TestDocumentUpdateFlow:
             # Each should preserve its UUID
             assert result.remarkable_uuid == first_uuids[f.name]
 
-        # Verify cloud uploads for all files (5 initial + 5 updates = 10)
-        assert mock_cloud_sync.upload_document.call_count == 10
+        # Verify PDF uploads for all files (5 initial + 5 updates = 10)
+        assert mock_cloud_sync.upload_pdf_document.call_count == 10
 
     def test_update_state_tracking(self, integration_env, mock_cloud_sync):
         """Test that state database correctly tracks updates."""

@@ -52,7 +52,6 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .annotation_markers_v2 import (
-    add_annotation_markers_aligned,
     has_annotation_markers,
     strip_annotation_markers,
 )
@@ -66,8 +65,9 @@ from .config import AppConfig, VaultConfig
 from .generator import RemarkableGenerator
 from .ocr.integration import OCRProcessor
 from .parser import parse_markdown_file
+from .render.pdf import PdfRenderer
 from .rm_cloud_client import RmCloudClient
-from .rm_cloud_sync import RmCloudSync
+from .rm_cloud_sync import InkNotPulledError, RmCloudSync
 from .state import StateManager, SyncRecord
 from .virtual_state import VirtualDeviceState
 
@@ -193,6 +193,10 @@ class SyncEngine:
             config.layout, geometry=config.layout.get_device_geometry()
         )
 
+        # PDF renderer (Phase 1)
+        self._pdf_renderer = PdfRenderer(config.layout)
+        self._device_profile = config.layout.get_device_profile()
+
         # Initialize OCR processor if enabled
         self.ocr_processor: OCRProcessor | None = None
         if config.ocr and config.ocr.enabled:
@@ -246,25 +250,29 @@ class SyncEngine:
         markdown_path: Path,
         broadcast: bool = True,
         correlation_id: str = "",
+        discard_ink: bool = False,
     ) -> SyncResult:
-        """Sync a single markdown file to reMarkable format.
+        """Sync a single markdown file to reMarkable as a PDF document.
 
-        Full pipeline for one file:
+        Pipeline (Phase 1 — PDF push):
         1. Parse markdown
-        2. Check if needs sync (content hash comparison)
+        2. Check if needs sync (content hash + render config comparison)
         3. Create parent folders if needed
-        4. Generate reMarkable document
-        5. Write files to output
-        6. Update state database
+        4. Render PDF via WeasyPrint
+        5. Write transient state (status='pushing')
+        6. Mint ink clearance (or force if --discard-ink)
+        7. Upload PDF payload
+        8. Flip to status='synced'
 
         Args:
-            vault: Vault configuration
-            markdown_path: Absolute path to markdown file
-            broadcast: Whether to broadcast to device (default True)
-            correlation_id: Optional correlation ID for operation tracking
+            vault: Vault configuration.
+            markdown_path: Absolute path to markdown file.
+            broadcast: Whether to broadcast to device (default True).
+            correlation_id: Optional correlation ID for operation tracking.
+            discard_ink: If True, force ink clearance even if device has ink.
 
         Returns:
-            SyncResult indicating success or failure
+            SyncResult indicating success or failure.
         """
         try:
             # Validate file exists and is in vault
@@ -305,80 +313,19 @@ class SyncEngine:
                 file_size=file_size,
             )
 
-            # Check if needs sync (compare semantic content hash)
+            # Check if needs sync (compare content hash + render config)
             current_state = self.state.get_file_state(vault.name, relative_path)
+            render_cfg_hash = self.config.layout.render_config_hash()
 
-            if current_state and current_state.content_hash == md_doc.content_hash:
-                # Semantic content unchanged - check if annotations changed on device
-                logger.debug(f"Semantic content unchanged: {vault.name}:{relative_path}")
+            content_unchanged = (
+                current_state is not None and current_state.content_hash == md_doc.content_hash
+            )
+            render_unchanged = (
+                current_state is not None and current_state.render_config_hash == render_cfg_hash
+            )
 
-                # CASE 2: Only annotations changed → download (Phase 2: efficient detection)
-                existing_uuid = current_state.remarkable_uuid
-                annotation_map = None
-
-                # Check if annotations changed using cloud versioning
-                if existing_uuid and self.annotation_helper.should_download_annotations(
-                    vault.name, relative_path, existing_uuid
-                ):
-                    logger.info(f"Downloading new annotations for {vault.name}:{relative_path}")
-
-                    # Download .rm files with new annotations
-                    existing_page_uuids = self.cloud_sync.get_existing_page_uuids(existing_uuid)
-                    if existing_page_uuids:
-                        temp_dir = self.config.cache_dir / "annotations" / existing_uuid
-                        existing_rm_files = self.cloud_sync.download_page_rm_files(
-                            existing_uuid, existing_page_uuids, temp_dir
-                        )
-
-                        # Map annotations from .rm files
-                        # Add pagination metadata for Y-position based annotation matching (issue #5)
-                        self.generator.paginate_content(
-                            md_doc.content
-                        )  # Sets page_y_start as side effect
-
-                        annotation_map = self.annotation_helper.build_annotation_map(
-                            existing_rm_files, md_doc.content
-                        )
-
-                        # Update state with new cloud versioning info
-                        _, _, current_gen = self.cloud_sync.get_root_state()
-                        current_doc_hash = self.cloud_sync.get_document_index_hash(existing_uuid)
-
-                        updated_state = SyncRecord(
-                            vault_name=vault.name,
-                            obsidian_path=relative_path,
-                            remarkable_uuid=existing_uuid,
-                            content_hash=current_state.content_hash,
-                            last_sync_time=int(time.time()),
-                            page_count=current_state.page_count,
-                            status="synced",
-                            last_root_generation=current_gen,
-                            last_doc_index_hash=current_doc_hash,
-                        )
-                        self.state.update_file_state(updated_state)
-
-                # Update markers if we have annotations
-                if annotation_map:
-                    logger.info("Updating annotation markers (content unchanged)")
-                    # Filter out None values from downloaded files
-                    rm_files = (
-                        [f for f in existing_rm_files if f is not None]
-                        if "existing_rm_files" in locals()
-                        else []
-                    )
-                    self.annotation_helper.update_annotation_markers(
-                        markdown_path,
-                        md_doc.content,
-                        annotation_map,
-                        vault.name,
-                        relative_path,
-                        rm_files=rm_files,
-                    )
-                else:
-                    logger.debug(
-                        f"No annotations to update, skipping: {vault.name}:{relative_path}"
-                    )
-
+            if content_unchanged and render_unchanged:
+                logger.debug(f"Content and render config unchanged: {vault.name}:{relative_path}")
                 return SyncResult(
                     vault_name=vault.name,
                     path=markdown_path,
@@ -388,59 +335,26 @@ class SyncEngine:
                     skipped=True,
                 )
 
-            # Ensure parent folder hierarchy exists (including vault root folder if configured)
+            # Ensure parent folder hierarchy exists
             parent_uuid = self.ensure_folder_hierarchy(vault, markdown_path)
 
-            # Generate reMarkable document (reuse UUID if updating existing file)
-            # CASE 3: Check if annotations ALSO changed (three-way merge)
+            # Reuse existing UUID or generate a new one
             existing_uuid = current_state.remarkable_uuid if current_state else None
-            existing_page_uuids = []
-            existing_rm_files = []
-            annotations_also_changed = False
+            doc_uuid = existing_uuid or str(uuid_module.uuid4())
 
             if existing_uuid:
-                logger.info(f"Updating existing document {existing_uuid} for {markdown_path}")
-
-                # CASE 3 detection: Check if annotations changed on device
-                annotations_also_changed = self.annotation_helper.should_download_annotations(
-                    vault.name, relative_path, existing_uuid
-                )
-                if annotations_also_changed:
-                    logger.info(
-                        f"✓ CASE 3: Both content and annotations changed - "
-                        f"three-way merge for {vault.name}:{relative_path}"
-                    )
-
-                # Fetch existing page UUIDs to avoid CRDT conflicts
-                existing_page_uuids = self.cloud_sync.get_existing_page_uuids(existing_uuid)
-                if existing_page_uuids:
-                    logger.debug(f"Found {len(existing_page_uuids)} existing pages to reuse")
-
-                    # Download .rm files (fresh from cloud if annotations changed)
-                    temp_dir = self.config.cache_dir / "annotations" / existing_uuid
-                    existing_rm_files = self.cloud_sync.download_page_rm_files(
-                        existing_uuid, existing_page_uuids, temp_dir
-                    )
-                    status = "fresh from device" if annotations_also_changed else "cached"
-                    logger.info(
-                        f"Downloaded {len([f for f in existing_rm_files if f])} .rm files ({status})"
-                    )
+                logger.info(f"Re-pushing existing document {doc_uuid} for {markdown_path}")
             else:
-                logger.info(f"Generating new reMarkable document for {markdown_path}")
+                logger.info(f"Generating new PDF document for {markdown_path}")
 
-            # Strip markers before generating device document (keep device view clean)
-            content_for_device = md_doc.content
+            # Strip annotation markers before rendering
             raw_content = markdown_path.read_text(encoding="utf-8")
-
-            # Default to original document (will be replaced if markers need stripping)
             clean_doc = md_doc
 
             if has_annotation_markers(raw_content):
-                logger.debug("Stripping annotation markers before device sync")
-                # Strip markers and re-parse to get clean ContentBlocks
+                logger.debug("Stripping annotation markers before PDF render")
                 clean_content = strip_annotation_markers(raw_content)
 
-                # Write to temp file and parse
                 import tempfile
 
                 with tempfile.NamedTemporaryFile(
@@ -450,151 +364,107 @@ class SyncEngine:
                     tmp_path = Path(tmp_file.name)
 
                 try:
-                    # Parse clean content
                     clean_doc = parse_markdown_file(tmp_path)
-                    # Preserve original title (temp file has wrong name like "tmp3lvh83u3")
                     clean_doc = replace(clean_doc, title=md_doc.title, path=md_doc.path)
-                    content_for_device = clean_doc.content
-                    logger.debug("Using clean content (markers stripped) for device generation")
                 finally:
                     tmp_path.unlink()
 
-            from rock_paper_sync.annotations.services.orphan_triage import OrphanLedger
+            # Render PDF
+            rendered = self._pdf_renderer.render(clean_doc, self._device_profile)
+            page_count = len(rendered.word_map.pages)
 
-            # Snapshot records BEFORE detection: _detect_push_orphans calls
-            # delete_all_orphaned_annotations, which would destroy the blobs needed
-            # to recover annotations whose text reappears (e.g. trip 4 re-anchoring).
-            pre_detection_records = self.state.get_orphaned_annotations(vault.name, relative_path)
+            # Build PDF payload (I2)
+            payload = self.cloud_sync.build_pdf_payload(
+                doc_uuid=doc_uuid,
+                document_name=md_doc.title,
+                parent_uuid=parent_uuid,
+                pdf_bytes=rendered.pdf,
+            )
 
-            # Detect orphans from content-only changes (pull was skipped).
-            push_orphan_ids: set[str] = set()
-            if not annotations_also_changed and existing_rm_files and existing_uuid:
-                push_orphan_ids = self._detect_push_orphans(
-                    vault_name=vault.name,
-                    obsidian_path=relative_path,
-                    existing_rm_files=existing_rm_files,
-                    new_content=strip_annotation_markers(raw_content),
-                )
+            # Write transient state: status='pushing'
+            pushing_state = SyncRecord(
+                vault_name=vault.name,
+                obsidian_path=relative_path,
+                remarkable_uuid=doc_uuid,
+                content_hash=md_doc.content_hash,
+                last_sync_time=int(time.time()),
+                page_count=page_count,
+                status="pushing",
+                pending_pdf_sha256=rendered.pdf_sha256,
+                word_map=rendered.word_map.to_json(),
+                render_config_hash=render_cfg_hash,
+            )
+            self.state.update_file_state(pushing_state)
 
-            # Merge pre- and post-detection records:
-            # - Post-detection records: current orphans to preserve on hidden layer.
-            # - Pre-detection records absent from post-detection: deleted by _detect_push_orphans
-            #   because their anchor text returned → candidates for recovery on visible layer.
-            if push_orphan_ids:
-                post_detection_records = self.state.get_orphaned_annotations(
-                    vault.name, relative_path
-                )
-                post_ids = {r.annotation_id for r in post_detection_records}
-                recoverable = [r for r in pre_detection_records if r.annotation_id not in post_ids]
-                combined_records = post_detection_records + recoverable
+            # Mint ink clearance (I9)
+            if discard_ink:
+                clearance = self.cloud_sync.force_clearance(doc_uuid)
             else:
-                combined_records = pre_detection_records
+                clearance = self.cloud_sync.mint_clearance_if_no_ink(doc_uuid)
 
-            ledger = OrphanLedger.build(
-                records=combined_records,
-                push_orphan_ids=push_orphan_ids,
-            )
-            rm_doc = self.generator.generate_document(
-                clean_doc,
-                parent_uuid,
-                existing_uuid,
-                existing_page_uuids,
-                existing_rm_files,
-                orphan_ledger=ledger,
-            )
-            # Commit DB cleanup only after generation succeeded (no exception above).
-            for _aid in rm_doc.recovered_annotation_ids:
-                self.state.delete_orphaned_annotation(vault.name, relative_path, _aid)
-
-            # Generate binary .rm files for each page
-            pages_with_data = [
-                (page.uuid, self.generator.generate_rm_file(page)) for page in rm_doc.pages
-            ]
-
-            # Upload via cloud API (Sync v3 protocol)
-            self.cloud_sync.upload_document(
-                doc_uuid=rm_doc.uuid,
-                document_name=rm_doc.visible_name,
-                pages=pages_with_data,  # List of (page_uuid, rm_binary_data) tuples
+            # Upload PDF (I9 CAS check inside)
+            self.cloud_sync.upload_pdf_document(
+                payload=payload,
+                clearance=clearance,
                 parent_uuid=parent_uuid,
                 broadcast=broadcast,
             )
 
-            # Create snapshot of clean content (markers stripped) as OLD for next merge
-            # This snapshot will be the BASE in future three-way merges
-            clean_markdown_content = strip_annotation_markers(markdown_path.read_text())
-            self.state.snapshots.snapshot_file(
-                vault_name=vault.name,
-                file_path=relative_path,
-                content=clean_markdown_content.encode("utf-8"),
-                file_type="markdown",
-                sync_time=int(time.time()),
-            )
-            logger.debug(f"Created snapshot for {vault.name}:{relative_path}")
-
-            # Add annotation markers to file if we have annotations
-            if existing_rm_files and any(existing_rm_files):
-                # Map annotations from .rm files (iterate over each page)
-                # Add pagination metadata for Y-position based annotation matching (issue #5)
-                self.generator.paginate_content(md_doc.content)  # Sets page_y_start as side effect
-
-                annotation_map = self.annotation_helper.build_annotation_map(
-                    existing_rm_files, md_doc.content
-                )
-
-                if annotation_map:
-                    logger.info("Adding annotation markers after sync")
-                    # Add markers using ContentBlock alignment
-                    marked_content = add_annotation_markers_aligned(md_doc.content, annotation_map)
-
-                    # Write marked content back to file
-                    with open(markdown_path, "w", encoding="utf-8") as f:
-                        f.write(marked_content)
-
-                    logger.info(
-                        f"Added {len(annotation_map)} annotation markers to {vault.name}:{relative_path}"
-                    )
-
-            # Update state database with cloud versioning info (Phase 2)
+            # Flip to synced
             _, _, current_gen = self.cloud_sync.get_root_state()
-            current_doc_hash = self.cloud_sync.get_document_index_hash(rm_doc.uuid)
+            current_doc_hash = self.cloud_sync.get_document_index_hash(doc_uuid)
 
-            new_state = SyncRecord(
+            synced_state = SyncRecord(
                 vault_name=vault.name,
                 obsidian_path=relative_path,
-                remarkable_uuid=rm_doc.uuid,
+                remarkable_uuid=doc_uuid,
                 content_hash=md_doc.content_hash,
                 last_sync_time=int(time.time()),
-                page_count=len(rm_doc.pages),
+                page_count=page_count,
                 status="synced",
                 last_root_generation=current_gen,
                 last_doc_index_hash=current_doc_hash,
+                pushed_pdf_sha256=rendered.pdf_sha256,
+                word_map=rendered.word_map.to_json(),
+                render_config_hash=render_cfg_hash,
             )
-            self.state.update_file_state(new_state)
+            self.state.update_file_state(synced_state)
             self.state.log_sync_action(
-                vault.name, relative_path, "synced", f"Generated {len(rm_doc.pages)} page(s)"
+                vault.name, relative_path, "synced", f"PDF {page_count} page(s)"
             )
 
-            # AUDIT: Log successful sync with complete details
+            # AUDIT: Log successful sync
             audit.log_sync_success(
                 vault_name=vault.name,
                 file_path=relative_path,
-                remarkable_uuid=rm_doc.uuid,
-                page_count=len(rm_doc.pages),
+                remarkable_uuid=doc_uuid,
+                page_count=page_count,
                 file_hash=md_doc.content_hash,
                 previous_uuid=existing_uuid,
             )
 
             logger.info(
-                f"Successfully synced {vault.name}:{markdown_path} -> {rm_doc.uuid} "
-                f"({len(rm_doc.pages)} page(s))"
+                f"Successfully synced {vault.name}:{markdown_path} -> {doc_uuid} "
+                f"({page_count} page(s), PDF)"
             )
             return SyncResult(
                 vault_name=vault.name,
                 path=markdown_path,
                 success=True,
-                remarkable_uuid=rm_doc.uuid,
-                page_count=len(rm_doc.pages),
+                remarkable_uuid=doc_uuid,
+                page_count=page_count,
+            )
+
+        except InkNotPulledError as e:
+            logger.warning(f"Ink not pulled for {vault.name}:{markdown_path}: {e}")
+            relative_path_str = (
+                str(markdown_path.relative_to(vault.path))
+                if markdown_path.is_relative_to(vault.path)
+                else str(markdown_path)
+            )
+            self.state.log_sync_action(vault.name, relative_path_str, "error", str(e))
+            return SyncResult(
+                vault_name=vault.name, path=markdown_path, success=False, error=str(e)
             )
 
         except Exception as e:

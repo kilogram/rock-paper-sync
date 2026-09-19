@@ -229,8 +229,8 @@ def long_markdown() -> str:
     paragraphs = []
     for i in range(100):
         paragraphs.append(
-            f"## Section {i+1}\n\n"
-            f"This is paragraph {i+1} of the test document. "
+            f"## Section {i + 1}\n\n"
+            f"This is paragraph {i + 1} of the test document. "
             f"It contains enough text to take up multiple lines when rendered. "
             f"The purpose is to test pagination logic and ensure that long documents "
             f"are properly split across multiple pages. Each section should be "
@@ -251,7 +251,7 @@ def valid_config_toml(tmp_path: Path, temp_vault: Path) -> Path:
     config_path = tmp_path / "config.toml"
     config_content = f"""
 [paths]
-state_database = "{tmp_path / 'state.db'}"
+state_database = "{tmp_path / "state.db"}"
 
 [[vaults]]
 name = "test-vault"
@@ -274,7 +274,7 @@ margin_right = 50
 
 [logging]
 level = "info"
-file = "{tmp_path / 'sync.log'}"
+file = "{tmp_path / "sync.log"}"
 """
     config_path.write_text(config_content)
     return config_path
@@ -286,7 +286,7 @@ def multi_vault_config_toml(tmp_path: Path, temp_vault: Path, temp_vault2: Path)
     config_path = tmp_path / "multi_config.toml"
     config_content = f"""
 [paths]
-state_database = "{tmp_path / 'state.db'}"
+state_database = "{tmp_path / "state.db"}"
 
 [[vaults]]
 name = "personal"
@@ -316,7 +316,7 @@ margin_right = 50
 
 [logging]
 level = "info"
-file = "{tmp_path / 'sync.log'}"
+file = "{tmp_path / "sync.log"}"
 """
     config_path.write_text(config_content)
     return config_path
@@ -331,6 +331,8 @@ def config_samples_dir() -> Path:
 @pytest.fixture
 def mock_cloud_sync():
     """Create a mock cloud sync client for testing without real cloud connection."""
+    from rock_paper_sync.rm_cloud_sync import InkClearance, PdfDocumentPayload
+
     mock_sync = MagicMock()
     mock_sync.upload_document = MagicMock()
     mock_sync.upload_folder = MagicMock()
@@ -349,6 +351,24 @@ def mock_cloud_sync():
     mock_sync.upload_index = MagicMock(return_value=("fakehash123", b"fake index content"))
     # Mock apply_virtual_state for high-level atomic operations
     mock_sync.apply_virtual_state = MagicMock(return_value=1)
+    # PDF push support (Phase 1)
+    mock_sync.build_pdf_payload = MagicMock(
+        side_effect=lambda doc_uuid, document_name, parent_uuid, pdf_bytes: PdfDocumentPayload(
+            doc_uuid=doc_uuid,
+            metadata=b'{"test": true}',
+            content=b'{"fileType": "pdf"}',
+            pagedata=b"",
+            pdf=pdf_bytes,
+        )
+    )
+    mock_sync.mint_clearance_if_no_ink = MagicMock(
+        side_effect=lambda doc_uuid: InkClearance(doc_uuid=doc_uuid, doc_index_hash=None)
+    )
+    mock_sync.force_clearance = MagicMock(
+        side_effect=lambda doc_uuid: InkClearance(doc_uuid=doc_uuid, doc_index_hash=None)
+    )
+    mock_sync.upload_pdf_document = MagicMock()
+    mock_sync.invalidate_root_cache = MagicMock()
     return mock_sync
 
 
