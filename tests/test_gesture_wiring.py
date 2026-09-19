@@ -1,7 +1,7 @@
 """Tests for gesture wiring: CLI output and OCR error handling.
 
 Covers:
-- CLI stderr output for gesture counts per file.
+- CLI stderr output for gesture counts per file (via CliRunner).
 - OCRServiceError -> Deferred("ocr_unavailable") in _ocr_gesture_strokes.
 - Non-OCRServiceError propagates (is a bug, not a service outage).
 """
@@ -9,85 +9,206 @@ Covers:
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from rock_paper_sync.config import LayoutConfig
 from rock_paper_sync.ink.candidates import CandidateStroke
-from rock_paper_sync.pull_sync import PullResult, PullSyncEngine
+from rock_paper_sync.pull_sync import PullResult, PullStats, PullSyncEngine
 from rock_paper_sync.state import StateManager
+
+# ---------------------------------------------------------------------------
+# CLI gesture output via CliRunner
+# ---------------------------------------------------------------------------
 
 
 class TestCliGestureOutput:
-    """CLI stderr lines for gesture counts."""
+    """CLI stderr lines for gesture counts, exercised through CliRunner."""
 
-    def test_gesture_counts_on_stderr(self) -> None:
-        """Non-zero gesture counts produce the expected stderr lines."""
+    def test_gesture_counts_on_stderr(self, tmp_path: Path) -> None:
+        """Non-zero gesture counts produce the expected stderr lines.
 
-        # Simulate the CLI output logic with a PullResult
-        result = PullResult(
-            vault_name="test",
+        Uses ``click.testing.CliRunner`` with mocked ``PullSyncEngine``
+        returning a ``PullResult`` with non-zero gesture counts.
+        """
+        from click.testing import CliRunner
+
+        from rock_paper_sync import cli
+
+        vault_dir = tmp_path / "vault"
+        vault_dir.mkdir()
+        (vault_dir / "note.md").write_text("# Test\n")
+
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(f"""\
+[paths]
+state_database = "{tmp_path / "state.db"}"
+
+[[vaults]]
+name = "test-vault"
+path = "{vault_dir}"
+
+[cloud]
+base_url = "http://fake:3000"
+
+[logging]
+level = "warning"
+file = "{tmp_path / "test.log"}"
+""")
+
+        # Build the canned pull result
+        canned_result = PullResult(
+            vault_name="test-vault",
             obsidian_path="note.md",
             success=True,
+            highlights_added=0,
+            notes_appended=0,
+            drawings_saved=0,
             ticks=1,
             strikethroughs=2,
             insertions=1,
             corrections=1,
             gestures_uninterpreted=3,
         )
-
-        stderr_lines: list[str] = []
-
-        gesture_total = (
-            result.ticks + result.strikethroughs + result.insertions + result.corrections
+        canned_stats = PullStats(
+            files_checked=1,
+            files_updated=1,
+            files_skipped=0,
+            files_errored=0,
+            total_highlights=0,
+            total_notes=0,
+            total_drawings=0,
+            total_deferred=0,
         )
-        if gesture_total > 0:
-            parts: list[str] = []
-            if result.ticks:
-                parts.append(f"{result.ticks} tick(s)")
-            if result.strikethroughs:
-                parts.append(f"{result.strikethroughs} strikethrough(s)")
-            if result.insertions:
-                parts.append(f"{result.insertions} insertion(s)")
-            if result.corrections:
-                parts.append(f"{result.corrections} correction(s)")
-            stderr_lines.append(
-                f"  {result.obsidian_path}: {gesture_total} edit(s): {', '.join(parts)}"
+
+        mock_engine = MagicMock()
+        mock_engine.pull_vault.return_value = ([canned_result], canned_stats)
+
+        with (
+            patch(
+                "rock_paper_sync.pull_sync.PullSyncEngine",
+                return_value=mock_engine,
+            ),
+            patch("rock_paper_sync.rm_cloud_sync.RmCloudSync"),
+        ):
+            runner = CliRunner()
+            result = runner.invoke(
+                cli.main,
+                ["--config", str(config_path), "sync", "--direction", "pull"],
             )
 
-        if result.gestures_uninterpreted > 0:
-            stderr_lines.append(
-                f"  {result.obsidian_path}: {result.gestures_uninterpreted} gesture(s) "
-                f"uninterpreted (saved as attachments)"
-            )
+        # Click 8.x mixes stderr into result.output by default.
+        output = result.output
 
-        assert len(stderr_lines) == 2
-        assert "5 edit(s)" in stderr_lines[0]
-        assert "1 tick(s)" in stderr_lines[0]
-        assert "2 strikethrough(s)" in stderr_lines[0]
-        assert "1 insertion(s)" in stderr_lines[0]
-        assert "1 correction(s)" in stderr_lines[0]
-        assert "3 gesture(s) uninterpreted" in stderr_lines[1]
+        assert "5 edit(s)" in output, f"Expected '5 edit(s)' in output:\n{output}"
+        assert "1 tick(s)" in output
+        assert "2 strikethrough(s)" in output
+        assert "1 insertion(s)" in output
+        assert "1 correction(s)" in output
+        assert "3 gesture(s) uninterpreted (saved as attachments)" in output
 
-    def test_zero_gestures_no_output(self) -> None:
-        """Zero gesture counts produce no stderr lines."""
-        result = PullResult(
-            vault_name="test",
+    def test_zero_gestures_no_stderr_lines(self, tmp_path: Path) -> None:
+        """Zero gesture counts produce no gesture-related stderr lines."""
+        from click.testing import CliRunner
+
+        from rock_paper_sync import cli
+
+        vault_dir = tmp_path / "vault"
+        vault_dir.mkdir()
+        (vault_dir / "note.md").write_text("# Test\n")
+
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(f"""\
+[paths]
+state_database = "{tmp_path / "state.db"}"
+
+[[vaults]]
+name = "test-vault"
+path = "{vault_dir}"
+
+[cloud]
+base_url = "http://fake:3000"
+
+[logging]
+level = "warning"
+file = "{tmp_path / "test.log"}"
+""")
+
+        canned_result = PullResult(
+            vault_name="test-vault",
             obsidian_path="note.md",
             success=True,
+            highlights_added=2,
             ticks=0,
             strikethroughs=0,
             insertions=0,
             corrections=0,
             gestures_uninterpreted=0,
         )
-
-        gesture_total = (
-            result.ticks + result.strikethroughs + result.insertions + result.corrections
+        canned_stats = PullStats(
+            files_checked=1,
+            files_updated=1,
+            total_highlights=2,
         )
-        assert gesture_total == 0
-        assert result.gestures_uninterpreted == 0
+
+        mock_engine = MagicMock()
+        mock_engine.pull_vault.return_value = ([canned_result], canned_stats)
+
+        with (
+            patch(
+                "rock_paper_sync.pull_sync.PullSyncEngine",
+                return_value=mock_engine,
+            ),
+            patch("rock_paper_sync.rm_cloud_sync.RmCloudSync"),
+        ):
+            runner = CliRunner()
+            result = runner.invoke(
+                cli.main,
+                ["--config", str(config_path), "sync", "--direction", "pull"],
+            )
+
+        output = result.output
+
+        assert "edit(s)" not in output, f"Unexpected gesture line in output:\n{output}"
+        assert "uninterpreted" not in output
+
+
+# ---------------------------------------------------------------------------
+# OCR error handling in _ocr_gesture_strokes
+# ---------------------------------------------------------------------------
+
+
+def _make_test_candidate(stroke_id_part2: int = 99) -> CandidateStroke:
+    """Build a minimal CandidateStroke for OCR error tests."""
+    from rmscene import CrdtId, CrdtSequenceItem, SceneLineItemBlock
+    from rmscene.scene_items import Line, Pen, PenColor, Point
+
+    from rock_paper_sync.annotations.domain.stroke import Stroke
+
+    line = Line(
+        color=PenColor.BLACK,
+        tool=Pen.FINELINER_1,
+        points=[
+            Point(x=0, y=0, speed=0, direction=0, width=2, pressure=100),
+            Point(x=10, y=10, speed=0, direction=0, width=2, pressure=100),
+        ],
+        thickness_scale=1.0,
+        starting_length=0.0,
+        move_id=None,
+    )
+    block = SceneLineItemBlock(
+        parent_id=CrdtId(0, 11),
+        item=CrdtSequenceItem(
+            item_id=CrdtId(1, stroke_id_part2),
+            left_id=CrdtId(0, 0),
+            right_id=CrdtId(0, 0),
+            deleted_length=0,
+            value=line,
+        ),
+    )
+    stroke = Stroke.from_line_block(block)
+    return CandidateStroke(stroke=stroke, page_index=0, redir=0)
 
 
 class TestOcrGestureStrokes:
@@ -112,37 +233,7 @@ class TestOcrGestureStrokes:
             ocr_processor=FailingOCR(),
         )
 
-        # Build a minimal candidate stroke for the synthetic cluster
-        from rmscene import CrdtId, CrdtSequenceItem, SceneLineItemBlock
-        from rmscene.scene_items import Line, Pen, PenColor, Point
-
-        from rock_paper_sync.annotations.domain.stroke import Stroke
-
-        line = Line(
-            color=PenColor.BLACK,
-            tool=Pen.FINELINER_1,
-            points=[
-                Point(x=0, y=0, speed=0, direction=0, width=2, pressure=100),
-                Point(x=10, y=10, speed=0, direction=0, width=2, pressure=100),
-            ],
-            thickness_scale=1.0,
-            starting_length=0.0,
-            move_id=None,
-        )
-        block = SceneLineItemBlock(
-            parent_id=CrdtId(0, 11),
-            item=CrdtSequenceItem(
-                item_id=CrdtId(1, 99),
-                left_id=CrdtId(0, 0),
-                right_id=CrdtId(0, 0),
-                deleted_length=0,
-                value=line,
-            ),
-        )
-        stroke = Stroke.from_line_block(block)
-        candidate = CandidateStroke(stroke=stroke, page_index=0, redir=0)
-
-        result = engine._ocr_gesture_strokes((candidate,))
+        result = engine._ocr_gesture_strokes((_make_test_candidate(99),))
         assert result is None
 
         state.close()
@@ -164,36 +255,7 @@ class TestOcrGestureStrokes:
             ocr_processor=BuggyOCR(),
         )
 
-        from rmscene import CrdtId, CrdtSequenceItem, SceneLineItemBlock
-        from rmscene.scene_items import Line, Pen, PenColor, Point
-
-        from rock_paper_sync.annotations.domain.stroke import Stroke
-
-        line = Line(
-            color=PenColor.BLACK,
-            tool=Pen.FINELINER_1,
-            points=[
-                Point(x=0, y=0, speed=0, direction=0, width=2, pressure=100),
-                Point(x=10, y=10, speed=0, direction=0, width=2, pressure=100),
-            ],
-            thickness_scale=1.0,
-            starting_length=0.0,
-            move_id=None,
-        )
-        block = SceneLineItemBlock(
-            parent_id=CrdtId(0, 11),
-            item=CrdtSequenceItem(
-                item_id=CrdtId(1, 98),
-                left_id=CrdtId(0, 0),
-                right_id=CrdtId(0, 0),
-                deleted_length=0,
-                value=line,
-            ),
-        )
-        stroke = Stroke.from_line_block(block)
-        candidate = CandidateStroke(stroke=stroke, page_index=0, redir=0)
-
         with pytest.raises(RuntimeError, match="unexpected bug"):
-            engine._ocr_gesture_strokes((candidate,))
+            engine._ocr_gesture_strokes((_make_test_candidate(98),))
 
         state.close()
