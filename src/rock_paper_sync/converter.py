@@ -323,8 +323,10 @@ class SyncEngine:
             render_unchanged = (
                 current_state is not None and current_state.render_config_hash == render_cfg_hash
             )
+            # A 'pushing' status means the previous push was interrupted — re-push.
+            push_incomplete = current_state is not None and current_state.status == "pushing"
 
-            if content_unchanged and render_unchanged:
+            if content_unchanged and render_unchanged and not push_incomplete:
                 logger.debug(f"Content and render config unchanged: {vault.name}:{relative_path}")
                 return SyncResult(
                     vault_name=vault.name,

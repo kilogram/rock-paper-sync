@@ -121,7 +121,6 @@ body {{
     line-height: {line_height};
     color: #000;
     overflow-wrap: anywhere;
-    word-break: break-word;
 }}
 
 h1 {{ font-size: {font_size * 1.8}pt; margin: 0.5em 0 0.3em 0; }}
