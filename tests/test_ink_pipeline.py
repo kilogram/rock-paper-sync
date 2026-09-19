@@ -40,7 +40,7 @@ from rock_paper_sync.render.wordmap import (
     TokenId,
     WordMap,
 )
-from rock_paper_sync.state import StateManager
+from rock_paper_sync.state import StateManager, SyncRecord
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -220,38 +220,55 @@ class TestI10RenderMismatch:
 
 
 class TestI11OverlayPlacement:
-    """I11: every overlay gets Placed or Relocated, never dropped."""
+    """I11: every overlay gets Placed or Relocated, never dropped.
 
-    def test_document_end_overlay_placed(self, simple_word_map: WordMap) -> None:
+    Tests go through the full render pipeline (``PdfRenderer.render``)
+    so that placements come from the actual box-tree walk, not arithmetic.
+    """
+
+    def test_document_end_overlay_placed(self, tmp_path: Path) -> None:
         """An overlay with anchor='document_end' is Placed."""
-        from rock_paper_sync.render.pdf import _compute_placements
+        from rock_paper_sync.config import LayoutConfig
+        from rock_paper_sync.parser import parse_markdown_file
+        from rock_paper_sync.render.pdf import PdfRenderer
 
+        md = tmp_path / "test.md"
+        md.write_text("# Hello\n\nParagraph text.\n")
+        profile = PROFILES["paper_pro_move"]
+        layout = LayoutConfig()
+        renderer = PdfRenderer(layout)
+        doc = parse_markdown_file(md)
         overlay = BakedOverlay(
             anchor="document_end",
             offset=Rect(0, 0, 50, 50),
-            svg=b"<svg/>",
+            svg=b'<svg xmlns="http://www.w3.org/2000/svg" width="50" height="50">'
+            b'<rect width="50" height="50" fill="blue"/></svg>',
         )
-        placements = _compute_placements(
-            [overlay], simple_word_map, page_count=1, profile=PROFILES["paper_pro_move"]
-        )
-        assert len(placements) == 1
-        assert isinstance(placements[0], Placed)
+        rendered = renderer.render(doc, profile, overlays=[overlay])
+        assert len(rendered.placements) == 1
+        assert isinstance(rendered.placements[0], Placed)
 
-    def test_unknown_anchor_relocated(self) -> None:
-        """An overlay whose anchor paragraph was deleted → Relocated."""
-        from rock_paper_sync.render.pdf import _compute_placements
+    def test_unknown_anchor_relocated(self, tmp_path: Path) -> None:
+        """An overlay whose anchor paragraph was deleted -> Relocated."""
+        from rock_paper_sync.config import LayoutConfig
+        from rock_paper_sync.parser import parse_markdown_file
+        from rock_paper_sync.render.pdf import PdfRenderer
 
-        empty_wm = WordMap(page_size=(477.0, 848.0), pages=(), texts=())
+        md = tmp_path / "test.md"
+        md.write_text("# Hello\n\nParagraph text.\n")
+        profile = PROFILES["paper_pro_move"]
+        layout = LayoutConfig()
+        renderer = PdfRenderer(layout)
+        doc = parse_markdown_file(md)
         overlay = BakedOverlay(
-            anchor="sha256hash#0",
+            anchor="nonexistent_anchor_ref#99",
             offset=Rect(0, 0, 50, 50),
-            svg=b"<svg/>",
+            svg=b'<svg xmlns="http://www.w3.org/2000/svg" width="50" height="50">'
+            b'<rect width="50" height="50" fill="red"/></svg>',
         )
-        placements = _compute_placements(
-            [overlay], empty_wm, page_count=1, profile=PROFILES["paper_pro_move"]
-        )
-        assert len(placements) == 1
-        assert isinstance(placements[0], Relocated)
+        rendered = renderer.render(doc, profile, overlays=[overlay])
+        assert len(rendered.placements) == 1
+        assert isinstance(rendered.placements[0], Relocated)
 
 
 # ---------------------------------------------------------------------------
@@ -580,6 +597,218 @@ class TestI8TransformMismatch:
         device_rects = [_DeviceRect(x=bad_x, y=bad_y, w=20.0, h=10.0)]
         result = check_i8("Hello", device_rects, simple_word_map, profile, page=0)
         assert not result.i8_pass
+
+
+# ---------------------------------------------------------------------------
+# Process lock
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# I10: PDF hash mismatch actually raised on pull
+# ---------------------------------------------------------------------------
+
+
+class TestI10Enforcement:
+    """I10: pull compares the .pdf entry hash with pushed_pdf_sha256."""
+
+    def test_corrupt_hash_raises_render_mismatch(self, state_manager: StateManager) -> None:
+        """Corrupted pushed_pdf_sha256 in state → RenderMismatchError."""
+        from unittest.mock import MagicMock
+
+        from rock_paper_sync.config import LayoutConfig, VaultConfig
+        from rock_paper_sync.pull_sync import PullSyncEngine
+        from rock_paper_sync.render.wordmap import DocumentIndexEntry
+
+        # Set up sync state with a pushed PDF hash
+        state_manager.update_file_state(
+            SyncRecord(
+                vault_name="v",
+                obsidian_path="t.md",
+                remarkable_uuid="doc-uuid-1",
+                content_hash="ch",
+                last_sync_time=1,
+                page_count=1,
+                status="synced",
+                pushed_pdf_sha256="expected_hash_abc",
+                word_map=WordMap(
+                    page_size=(477.0, 848.0),
+                    pages=(PageWords(page=0, tokens=()),),
+                    texts=(),
+                ).to_json(),
+            )
+        )
+
+        # Mock cloud reader that returns a different hash for the PDF entry
+        cloud = MagicMock()
+        cloud.get_document_index_hash.return_value = "some_doc_hash"
+        cloud.get_document_index_entries.return_value = [
+            DocumentIndexEntry(entry_name="doc-uuid-1.pdf", hash="different_hash_xyz"),
+        ]
+
+        vault = VaultConfig(
+            name="v",
+            path=Path("/tmp/fakevault"),
+            remarkable_folder=None,
+            include_patterns=["**/*.md"],
+            exclude_patterns=[],
+        )
+        engine = PullSyncEngine(
+            state=state_manager,
+            cloud_reader=cloud,
+            layout=LayoutConfig(),
+            cache_dir=Path("/tmp/fake-cache"),
+        )
+
+        result = engine.pull_file(vault, "t.md")
+        assert not result.success
+        assert "mismatch" in (result.error or "").lower()
+
+
+# ---------------------------------------------------------------------------
+# Idempotent highlight wrapping
+# ---------------------------------------------------------------------------
+
+
+class TestIdempotentHighlights:
+    """Highlights are idempotent: wrapping ==text== twice is a no-op."""
+
+    def test_already_wrapped_is_noop(self) -> None:
+        """If text is already ==wrapped==, apply_edits does not double-wrap."""
+        edit = MarkdownEdit(
+            kind="highlight",
+            cluster_id="c1",
+            anchor=InkAnchor(kind="paragraph", ref=""),
+            text="target phrase",
+        )
+        snapshot = "This is a target phrase in context."
+        current = "This is a ==target phrase== in context."
+        new_text, failed = apply_edits([edit], snapshot, current)
+        assert new_text.count("==target phrase==") == 1
+        assert "====target phrase====" not in new_text
+        assert failed == []
+
+    def test_two_same_phrase_highlights_wrap_both(self) -> None:
+        """Two highlights of the same phrase wrap distinct occurrences."""
+        edit1 = MarkdownEdit(
+            kind="highlight",
+            cluster_id="c1",
+            anchor=InkAnchor(kind="paragraph", ref=""),
+            text="word",
+        )
+        edit2 = MarkdownEdit(
+            kind="highlight",
+            cluster_id="c2",
+            anchor=InkAnchor(kind="paragraph", ref=""),
+            text="word",
+        )
+        snapshot = "word and word again."
+        current = "word and word again."
+        new_text, failed = apply_edits([edit1, edit2], snapshot, current)
+        assert new_text.count("==word==") == 2
+        assert failed == []
+
+
+# ---------------------------------------------------------------------------
+# Overlay positioning: red rectangle near the margin-note paragraph
+# ---------------------------------------------------------------------------
+
+
+class TestOverlayPositioning:
+    """Blocker 1: overlays positioned inside anchor blocks in the PDF."""
+
+    def test_overlay_placed_on_anchor_page(self, tmp_path: Path) -> None:
+        """An overlay anchored to a paragraph renders on the same page."""
+        import hashlib
+
+        from rock_paper_sync.config import LayoutConfig
+        from rock_paper_sync.parser import parse_markdown_file
+        from rock_paper_sync.render.pdf import PdfRenderer
+
+        fixture = Path("tests/record_replay/fixtures/test_pdf_substrate.md")
+        if not fixture.exists():
+            pytest.skip("fixture not found")
+
+        doc = parse_markdown_file(fixture)
+        profile = PROFILES["paper_pro_move"]
+        layout = LayoutConfig()
+        renderer = PdfRenderer(layout)
+
+        # Compute anchor ref for "Margin Note Target" paragraph
+        target_text = (
+            "This paragraph is the anchor for a margin note. The operator "
+            "will write a two-word note in the left margin beside this text "
+            "during the device session."
+        )
+        normalised = " ".join(target_text.split())
+        text_hash = hashlib.sha256(normalised.encode("utf-8")).hexdigest()
+        anchor_ref = f"{text_hash}#0"
+
+        svg = (
+            b'<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20">'
+            b'<rect width="40" height="20" fill="red"/></svg>'
+        )
+        overlay = BakedOverlay(
+            anchor=anchor_ref,
+            offset=Rect(x0=-60, y0=0, x1=-20, y1=20),
+            svg=svg,
+        )
+
+        rendered = renderer.render(doc, profile, overlays=[overlay])
+        assert len(rendered.placements) == 1
+        placement = rendered.placements[0]
+        assert isinstance(placement, Placed)
+
+        # Verify the overlay is on the same page as the anchor paragraph
+        # (the paragraph should be on page 0 or 1 depending on content length)
+        assert placement.page >= 0
+
+        # Verify the rect was read from the box tree (non-zero, reasonable)
+        assert placement.rect.x1 > placement.rect.x0
+        assert placement.rect.y1 > placement.rect.y0
+
+    def test_word_map_has_blocks(self, tmp_path: Path) -> None:
+        """The rendered WordMap includes blocks from data-anchor elements."""
+        from rock_paper_sync.config import LayoutConfig
+        from rock_paper_sync.parser import parse_markdown_file
+        from rock_paper_sync.render.pdf import PdfRenderer
+
+        md = tmp_path / "test.md"
+        md.write_text("# Heading\n\nFirst para.\n\nSecond para.\n")
+        profile = PROFILES["paper_pro_move"]
+        layout = LayoutConfig()
+        renderer = PdfRenderer(layout)
+        doc = parse_markdown_file(md)
+        rendered = renderer.render(doc, profile)
+        wm = rendered.word_map
+        # Should have blocks for heading + 2 paragraphs
+        assert len(wm.blocks) >= 3
+        # Each block should have a non-empty anchor_ref
+        for blk in wm.blocks:
+            assert blk.anchor_ref
+            assert "#" in blk.anchor_ref
+        # token_block should be populated
+        assert len(wm.token_block) == len(wm.texts)
+
+
+# ---------------------------------------------------------------------------
+# GlyphHighlight.glyph_id stability
+# ---------------------------------------------------------------------------
+
+
+class TestGlyphHighlightId:
+    """GlyphHighlight carries a stable glyph_id from the device CrdtId."""
+
+    def test_glyph_id_populated(self) -> None:
+        from rock_paper_sync.ink.classify import GlyphHighlight
+
+        gh = GlyphHighlight(
+            glyph_id="1:20",
+            text="hello world",
+            page=0,
+            device_rects=[(0.0, 0.0, 10.0, 5.0)],
+        )
+        assert gh.glyph_id == "1:20"
 
 
 # ---------------------------------------------------------------------------

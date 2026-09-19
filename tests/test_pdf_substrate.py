@@ -507,9 +507,9 @@ class TestSchemaV9:
         assert "pushed_pdf_sha256" in columns
         assert "render_config_hash" in columns
 
-        # Check version is now 10 (v9 adds PDF columns, v10 adds ink tables)
+        # Check version is now 11 (v9 PDF columns, v10 ink tables, v11 word_map format)
         cursor = mgr.conn.execute("SELECT version FROM schema_version")
-        assert cursor.fetchone()[0] == 10
+        assert cursor.fetchone()[0] == 11
 
         # Check v10 tables exist
         cursor = mgr.conn.execute("PRAGMA table_info(ink_strokes)")
