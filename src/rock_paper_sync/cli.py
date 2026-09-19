@@ -159,19 +159,8 @@ def sync(
 
     # Phase 1: Pull (if direction is 'both' or 'pull')
     if direction in ("both", "pull"):
-        from .errors import NativeLayoutUnavailableError
-
-        click.echo("\n--- Pull Phase: Fetching annotations from device ---")
-        try:
-            _run_pull_sync(config, state, vault_configs, dry_run)
-        except NativeLayoutUnavailableError:
-            click.echo(
-                "Pull sync is unavailable until the PDF-substrate pull "
-                "lands (Phase 4); use --direction push",
-                err=True,
-            )
-            state.close()
-            sys.exit(1)
+        click.echo("\n--- Pull Phase: Fetching ink from device ---")
+        _run_pull_sync(config, state, vault_configs, dry_run)
 
     # Phase 2: Push (if direction is 'both' or 'push')
     if direction in ("both", "push") and engine is not None:
@@ -187,71 +176,52 @@ def _run_pull_sync(
     vault_configs: list,
     dry_run: bool,
 ) -> None:
-    """Run pull sync phase."""
-    from .errors import NativeLayoutUnavailableError
+    """Run pull sync phase (Phase 4 — PDF substrate)."""
+    from .pull_sync import PullSyncEngine
+    from .rm_cloud_sync import RmCloudSync
 
     try:
-        from .annotation_renderer import RenderConfig
-        from .annotation_sync_helper import AnnotationSyncHelper
-        from .annotations.core.processor import AnnotationProcessor
-        from .generator import RemarkableGenerator
-        from .pull_sync import PullSyncEngine
-        from .rm_cloud_sync import RmCloudSync
-
-        # Initialize components
         cloud_sync = RmCloudSync(config.cloud.base_url)
-        generator = RemarkableGenerator(config.layout, config.sync.fonts_dir)
-        annotation_processor = AnnotationProcessor()
         cache_dir = config.sync.state_database.parent / "cache"
-
-        annotation_helper = AnnotationSyncHelper(
-            cloud_sync=cloud_sync,
-            state=state,
-            generator=generator,
-            annotation_processor=annotation_processor,
-            ocr_processor=None,  # OCR handled separately
-            cache_dir=cache_dir,
-        )
+        cache_dir.mkdir(parents=True, exist_ok=True)
 
         pull_engine = PullSyncEngine(
             state=state,
-            cloud_sync=cloud_sync,
-            annotation_helper=annotation_helper,
+            cloud_reader=cloud_sync,
+            layout=config.layout,
             cache_dir=cache_dir,
-            render_config=RenderConfig(),
         )
 
         for vault_config in vault_configs:
-            click.echo(f"\nPulling annotations for vault '{vault_config.name}'...")
-
-            # First, attempt to recover any orphaned annotations
-            # This checks if previously-orphaned annotations can now be re-anchored
-            # (e.g., user restored deleted text)
-            recovered = pull_engine.attempt_orphan_recovery(vault_config, dry_run=dry_run)
-            if recovered:
-                click.echo(f"  Recovered {len(recovered)} orphaned annotation(s)")
-
-            # Then run normal pull sync for new annotation changes
-            results, stats = pull_engine.pull_vault(vault_config, dry_run=dry_run)
+            click.echo(f"\nPulling ink for vault '{vault_config.name}'...")
+            results, stats = pull_engine.pull_vault(vault_config)
 
             if stats.files_updated > 0:
                 click.echo(
                     f"  Updated {stats.files_updated} file(s): "
-                    f"{stats.total_highlights} highlights, "
-                    f"{stats.total_strokes} strokes"
+                    f"{stats.total_highlights} highlight(s), "
+                    f"{stats.total_notes} note(s) appended, "
+                    f"{stats.total_drawings} drawing(s) saved as attachments"
                 )
-                if stats.total_orphans > 0:
-                    click.echo(f"  {stats.total_orphans} orphaned annotation(s)")
+                if stats.total_deferred > 0:
+                    # Collect unique reasons
+                    reasons: set[str] = set()
+                    for r in results:
+                        if r.deferred_reasons:
+                            reasons.update(r.deferred_reasons)
+                    click.echo(
+                        f"  {stats.total_deferred} cluster(s) deferred: "
+                        f"{', '.join(sorted(reasons))}",
+                        err=True,
+                    )
             else:
-                click.echo("  No annotation changes")
+                click.echo("  No new ink")
 
             if stats.files_errored > 0:
-                click.echo(f"  {stats.files_errored} file(s) with errors", err=True)
+                for r in results:
+                    if not r.success and r.error:
+                        click.echo(f"  {r.obsidian_path}: {r.error}", err=True)
 
-    except ImportError as e:
-        click.echo(f"Warning: Pull sync not available: {e}", err=True)
-    except NativeLayoutUnavailableError:
-        raise  # Let the caller handle this with a clean message
     except Exception as e:
         click.echo(f"Error during pull sync: {e}", err=True)
 

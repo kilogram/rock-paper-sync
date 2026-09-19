@@ -68,3 +68,26 @@ class CloudReader(Protocol):
             Ordered list of page UUIDs, empty if document not found.
         """
         ...
+
+    def download_content_file(self, doc_uuid: str) -> bytes | None:
+        """Download the ``.content`` file for a document.
+
+        Args:
+            doc_uuid: Document UUID.
+
+        Returns:
+            Raw JSON bytes of the ``.content`` file, or ``None`` if not found.
+        """
+        ...
+
+    def download_document_blob(self, doc_uuid: str, entry_name: str) -> bytes | None:
+        """Download a specific blob from a document's index.
+
+        Args:
+            doc_uuid: Document UUID.
+            entry_name: Full entry name (e.g. ``"{uuid}.pdf"``).
+
+        Returns:
+            Raw blob bytes, or ``None`` if not found.
+        """
+        ...

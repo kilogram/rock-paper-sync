@@ -507,9 +507,20 @@ class TestSchemaV9:
         assert "pushed_pdf_sha256" in columns
         assert "render_config_hash" in columns
 
-        # Check version is now 9
+        # Check version is now 10 (v9 adds PDF columns, v10 adds ink tables)
         cursor = mgr.conn.execute("SELECT version FROM schema_version")
-        assert cursor.fetchone()[0] == 9
+        assert cursor.fetchone()[0] == 10
+
+        # Check v10 tables exist
+        cursor = mgr.conn.execute("PRAGMA table_info(ink_strokes)")
+        ink_stroke_cols = {row[1] for row in cursor.fetchall()}
+        assert "stroke_id" in ink_stroke_cols
+        assert "cluster_id" in ink_stroke_cols
+
+        cursor = mgr.conn.execute("PRAGMA table_info(ink_clusters)")
+        ink_cluster_cols = {row[1] for row in cursor.fetchall()}
+        assert "cluster_id" in ink_cluster_cols
+        assert "disposition" in ink_cluster_cols
         mgr.close()
 
 

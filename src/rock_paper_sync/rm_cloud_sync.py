@@ -748,6 +748,42 @@ class RmCloudSync:
         doc_index_content = self.sync_client.download_blob(doc_entry.hash)
         return self.sync_client.parse_index(doc_index_content)
 
+    def download_content_file(self, doc_uuid: str) -> bytes | None:
+        """Download the .content file for a document.
+
+        Args:
+            doc_uuid: Document UUID.
+
+        Returns:
+            Raw JSON bytes, or None if not found.
+        """
+        entries = self._get_document_index_entries(doc_uuid)
+        if entries is None:
+            return None
+        content_name = f"{doc_uuid}.content"
+        for entry in entries:
+            if entry.entry_name == content_name:
+                return self.sync_client.download_blob(entry.hash)
+        return None
+
+    def download_document_blob(self, doc_uuid: str, entry_name: str) -> bytes | None:
+        """Download a specific blob from a document's index.
+
+        Args:
+            doc_uuid: Document UUID.
+            entry_name: Full entry name (e.g. "{uuid}.pdf").
+
+        Returns:
+            Raw blob bytes, or None if not found.
+        """
+        entries = self._get_document_index_entries(doc_uuid)
+        if entries is None:
+            return None
+        for entry in entries:
+            if entry.entry_name == entry_name:
+                return self.sync_client.download_blob(entry.hash)
+        return None
+
     def mint_clearance_if_no_ink(self, doc_uuid: str) -> InkClearance:
         """Mint an ink clearance if the document has no un-pulled .rm files.
 

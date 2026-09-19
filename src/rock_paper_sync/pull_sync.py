@@ -1,33 +1,71 @@
-"""Pull sync engine for reMarkable → Obsidian synchronization (M5).
+"""Pull sync engine for reMarkable -> Obsidian (Phase 4, PDF substrate).
 
-This module implements the pull direction of bidirectional sync:
-extracting annotations from device and rendering them into markdown files.
+Extracts ink from device .rm files, classifies it against the pushed
+``WordMap``, and applies edits to the vault markdown file.
 
-Key responsibilities:
-- Detect annotation changes on device
-- Download and extract annotations from .rm files
-- Reanchor annotations to current markdown content
-- Render annotations to markdown (highlights, strokes)
-- Handle orphaned annotations (hidden layer + comment)
-- Update pull state tracking
+Pull pipeline:
+    1. Load ``sync_state`` (word_map, pushed_pdf_sha256).
+    2. Read the document index through ``CloudReader``; verify the
+       ``.pdf`` entry hash == ``pushed_pdf_sha256`` (I10).
+    3. Download ``.content`` -> ``analyse_cpages``; download page ``.rm``
+       files; run I8 on every ``GlyphRange``.
+    4. candidates -> clusters -> classify -> OCR for ``appended`` clusters
+       -> edits -> apply.
+    5. Write order (I12): (a) attachments (idempotent by name),
+       (b) atomic replace of the markdown, (c) ONE SQLite transaction.
+
+Invariants relied upon:
+    INV-I3:  Pull cannot write to the cloud (CloudReader only;
+             import-linter forbids sync_v3, rm_cloud_sync).
+    INV-I4:  A consumed stroke never re-enters a candidate set.
+    INV-I10: Ink is interpreted only against the PDF on the device.
+    INV-I12: Pull is crash-safe toward duplicates, not loss.
+
+Import restrictions (enforced by import-linter):
+    Must NOT import ``rock_paper_sync.sync_v3`` or
+    ``rock_paper_sync.rm_cloud_sync``.
 """
 
+from __future__ import annotations
+
+import hashlib
+import json
 import logging
 import time
+import uuid as uuid_module
 from dataclasses import dataclass
 from pathlib import Path
 
-from rock_paper_sync.annotation_renderer import (
-    AnnotationRenderer,
-    RenderConfig,
+from rock_paper_sync.cloud_reader import CloudReader
+from rock_paper_sync.config import LayoutConfig, VaultConfig
+from rock_paper_sync.errors import RenderMismatchError, TransformMismatchError
+from rock_paper_sync.ink.apply import apply_edits, write_markdown_atomic
+from rock_paper_sync.ink.bake import (
+    bake_cluster,
+    get_attachment_folder,
+    render_cluster_to_png,
 )
-from rock_paper_sync.annotation_sync_helper import AnnotationChange, AnnotationSyncHelper
-from rock_paper_sync.annotations.document_model import DocumentAnnotation, DocumentModel
-from rock_paper_sync.annotations.services.hidden_layer import serialize_annotation_blocks
-from rock_paper_sync.config import VaultConfig
-from rock_paper_sync.layout import DEFAULT_DEVICE
-from rock_paper_sync.rm_cloud_sync import RmCloudSync
-from rock_paper_sync.state import OrphanedAnnotation, StateManager
+from rock_paper_sync.ink.candidates import extract_candidates
+from rock_paper_sync.ink.classify import (
+    Classification,
+    classify_cluster,
+    classify_glyph_highlights,
+)
+from rock_paper_sync.ink.clusters import InkCluster, cluster_candidates
+from rock_paper_sync.ink.dispositions import (
+    DOCUMENT_END,
+    Baked,
+    Consumed,
+    Deferred,
+    Disposition,
+    Highlight,
+    InkAnchor,
+    MarkdownEdit,
+    is_terminal,
+    paragraph_anchor_ref,
+)
+from rock_paper_sync.render.wordmap import Rect, WordMap
+from rock_paper_sync.state import StateManager
 
 logger = logging.getLogger("rock_paper_sync.pull_sync")
 
@@ -40,8 +78,10 @@ class PullResult:
     obsidian_path: str
     success: bool
     highlights_added: int = 0
-    strokes_added: int = 0
-    orphans_count: int = 0
+    notes_appended: int = 0
+    drawings_saved: int = 0
+    deferred_count: int = 0
+    deferred_reasons: list[str] | None = None
     error: str | None = None
 
 
@@ -54,208 +94,601 @@ class PullStats:
     files_skipped: int = 0
     files_errored: int = 0
     total_highlights: int = 0
-    total_strokes: int = 0
-    total_orphans: int = 0
+    total_notes: int = 0
+    total_drawings: int = 0
+    total_deferred: int = 0
 
 
 class PullSyncEngine:
-    """Orchestrates pull sync from reMarkable to Obsidian.
+    """Orchestrates pull sync from reMarkable to Obsidian (Phase 4).
 
-    This engine handles the complete flow of detecting annotation changes
-    on the device and rendering them into markdown files.
+    Takes ``CloudReader`` (read-only) + ``StateManager`` + renderer-free
+    dependencies. Never writes to the cloud (I3).
     """
 
     def __init__(
         self,
         state: StateManager,
-        cloud_sync: RmCloudSync,
-        annotation_helper: AnnotationSyncHelper,
+        cloud_reader: CloudReader,
+        layout: LayoutConfig,
         cache_dir: Path,
-        render_config: RenderConfig | None = None,
+        ocr_processor: object | None = None,
     ) -> None:
-        """Initialize pull sync engine.
+        """Initialise pull sync engine.
 
         Args:
-            state: State manager for tracking sync status
-            cloud_sync: Cloud sync client for downloading files
-            annotation_helper: Helper for annotation operations
-            cache_dir: Directory for caching downloaded files
-            render_config: Optional render configuration
+            state: State manager for tracking sync status.
+            cloud_reader: Read-only cloud interface.
+            layout: Layout configuration (for notes_heading, profile).
+            cache_dir: Directory for caching downloaded files.
+            ocr_processor: Optional OCR processor (Phase 4: simple interface).
         """
         self.state = state
-        self.cloud_sync = cloud_sync
-        self.annotation_helper = annotation_helper
+        self.cloud_reader = cloud_reader
+        self.layout = layout
         self.cache_dir = cache_dir
-        self.render_config = render_config or RenderConfig()
-        self.renderer = AnnotationRenderer(self.render_config)
-
-    def detect_changes(self, vault_name: str | None = None) -> list[AnnotationChange]:
-        """Detect annotation changes from device.
-
-        Args:
-            vault_name: Optional vault name to filter by
-
-        Returns:
-            List of AnnotationChange records for documents with changes
-        """
-        return self.annotation_helper.detect_annotation_changes(vault_name)
+        self.ocr_processor = ocr_processor
+        self._profile = layout.get_device_profile()
 
     def pull_file(
         self,
-        change: AnnotationChange,
-        vault_path: Path,
-        dry_run: bool = False,
+        vault: VaultConfig,
+        obsidian_path: str,
     ) -> PullResult:
-        """Pull annotations for a single file.
+        """Pull ink from device for a single file.
 
         Args:
-            change: AnnotationChange describing what changed
-            vault_path: Path to the vault root
-            dry_run: If True, don't modify files
+            vault: Vault configuration.
+            obsidian_path: Relative path within the vault.
 
         Returns:
-            PullResult with statistics and status
+            ``PullResult`` with statistics and status.
         """
         try:
-            # Get file path
-            file_path = vault_path / change.obsidian_path
-            if not file_path.exists():
-                return PullResult(
-                    vault_name=change.vault_name,
-                    obsidian_path=change.obsidian_path,
-                    success=False,
-                    error=f"File not found: {file_path}",
-                )
-
-            # Read current markdown content
-            markdown_content = file_path.read_text(encoding="utf-8")
-
-            # Download .rm files
-            temp_dir = self.cache_dir / "pull" / change.remarkable_uuid
-            page_uuids = self.cloud_sync.get_existing_page_uuids(change.remarkable_uuid)
-            if not page_uuids:
-                return PullResult(
-                    vault_name=change.vault_name,
-                    obsidian_path=change.obsidian_path,
-                    success=True,  # No pages = no annotations
-                    highlights_added=0,
-                    strokes_added=0,
-                )
-
-            rm_files = self.cloud_sync.download_page_rm_files(
-                change.remarkable_uuid, page_uuids, temp_dir
-            )
-
-            # Build document model from .rm files
-            valid_files = [f for f in rm_files if f and f.exists()]
-            if not valid_files:
-                return PullResult(
-                    vault_name=change.vault_name,
-                    obsidian_path=change.obsidian_path,
-                    success=True,
-                    highlights_added=0,
-                    strokes_added=0,
-                )
-
-            document_model = DocumentModel.from_rm_files(valid_files, DEFAULT_DEVICE)
-
-            # Reanchor annotations to current markdown content
-            migrated, orphaned = self._reanchor_annotations(
-                document_model.annotations, markdown_content
-            )
-
-            # Create new document model with migrated annotations
-            migrated_model = DocumentModel(
-                paragraphs=document_model.paragraphs,
-                annotations=migrated,
-                full_text=markdown_content,
-                annotation_store=document_model.annotation_store,
-                geometry=document_model.geometry,
-            )
-
-            # Render annotations to markdown
-            render_result = self.renderer.render(markdown_content, migrated_model, orphaned)
-
-            if not dry_run:
-                # Write updated content
-                file_path.write_text(render_result.content, encoding="utf-8")
-
-                # Update pull state
-                self.annotation_helper.update_pull_state(
-                    vault_name=change.vault_name,
-                    obsidian_path=change.obsidian_path,
-                    remarkable_uuid=change.remarkable_uuid,
-                    annotation_hash=change.current_annotation_hash,
-                )
-
-                # Record orphaned annotations
-                self._record_orphans(change, orphaned)
-
-            logger.info(
-                f"Pulled annotations for {change.vault_name}:{change.obsidian_path}: "
-                f"{render_result.highlights_rendered} highlights, "
-                f"{render_result.strokes_rendered} strokes, "
-                f"{render_result.orphans_count} orphans"
-            )
-
+            return self._pull_file_inner(vault, obsidian_path)
+        except RenderMismatchError as e:
+            logger.warning(str(e))
             return PullResult(
-                vault_name=change.vault_name,
-                obsidian_path=change.obsidian_path,
-                success=True,
-                highlights_added=render_result.highlights_rendered,
-                strokes_added=render_result.strokes_rendered,
-                orphans_count=render_result.orphans_count,
+                vault_name=vault.name,
+                obsidian_path=obsidian_path,
+                success=False,
+                error=str(e),
             )
-
+        except TransformMismatchError as e:
+            logger.error(str(e))
+            return PullResult(
+                vault_name=vault.name,
+                obsidian_path=obsidian_path,
+                success=False,
+                error=str(e),
+            )
         except Exception as e:
             logger.error(
-                f"Failed to pull annotations for {change.vault_name}:{change.obsidian_path}: {e}",
+                f"Failed to pull ink for {vault.name}:{obsidian_path}: {e}",
                 exc_info=True,
             )
             return PullResult(
-                vault_name=change.vault_name,
-                obsidian_path=change.obsidian_path,
+                vault_name=vault.name,
+                obsidian_path=obsidian_path,
                 success=False,
                 error=str(e),
             )
 
+    def _pull_file_inner(
+        self,
+        vault: VaultConfig,
+        obsidian_path: str,
+    ) -> PullResult:
+        """Inner pull logic (exceptions propagate)."""
+        # Step 1: Load sync state
+        sync_state = self.state.get_file_state(vault.name, obsidian_path)
+        if sync_state is None:
+            return PullResult(
+                vault_name=vault.name,
+                obsidian_path=obsidian_path,
+                success=True,
+            )
+
+        if sync_state.pushed_pdf_sha256 is None or sync_state.word_map is None:
+            logger.debug(f"No pushed PDF state for {vault.name}:{obsidian_path}, skipping pull")
+            return PullResult(
+                vault_name=vault.name,
+                obsidian_path=obsidian_path,
+                success=True,
+            )
+
+        doc_uuid = sync_state.remarkable_uuid
+        word_map = WordMap.from_json(sync_state.word_map)
+
+        # Step 2: Verify PDF hash matches (I10)
+        doc_index_hash = self.cloud_reader.get_document_index_hash(doc_uuid)
+        if doc_index_hash is None:
+            logger.debug(f"Document {doc_uuid} not found in cloud, skipping pull")
+            return PullResult(
+                vault_name=vault.name,
+                obsidian_path=obsidian_path,
+                success=True,
+            )
+
+        # Download .content to get cPages
+        content_bytes = self.cloud_reader.download_content_file(doc_uuid)
+        if content_bytes is None:
+            logger.warning(f"Could not download .content for {doc_uuid}")
+            return PullResult(
+                vault_name=vault.name,
+                obsidian_path=obsidian_path,
+                success=True,
+            )
+
+        content_data = json.loads(content_bytes)
+        cpages_raw = content_data.get("cPages", content_data)
+        if isinstance(cpages_raw, dict):
+            cpages_list = cpages_raw.get("pages", [])
+        elif isinstance(cpages_raw, list):
+            cpages_list = cpages_raw
+        else:
+            cpages_list = []
+
+        if not cpages_list:
+            logger.debug(f"No cPages entries for {doc_uuid}")
+            return PullResult(
+                vault_name=vault.name,
+                obsidian_path=obsidian_path,
+                success=True,
+            )
+
+        # Step 3: Download .rm files
+        temp_dir = self.cache_dir / "pull" / doc_uuid
+        temp_dir.mkdir(parents=True, exist_ok=True)
+
+        page_uuids = [str(p.get("id", "")) for p in cpages_list if p.get("id")]
+        rm_file_paths = self.cloud_reader.download_page_rm_files(doc_uuid, page_uuids, temp_dir)
+
+        # Build page_uuid -> path mapping
+        rm_files: dict[str, Path] = {}
+        for page_uuid, rm_path in zip(page_uuids, rm_file_paths):
+            if rm_path is not None and rm_path.exists():
+                rm_files[page_uuid] = rm_path
+
+        if not rm_files:
+            logger.debug(f"No .rm files found for {doc_uuid}")
+            return PullResult(
+                vault_name=vault.name,
+                obsidian_path=obsidian_path,
+                success=True,
+            )
+
+        # Step 4: Extract candidates, cluster, classify
+        known_ids = self.state.get_known_stroke_ids(vault.name, obsidian_path)
+
+        candidates = extract_candidates(rm_files, cpages_list, known_ids)
+
+        # Also extract glyph highlights (these are not stroke clusters)
+        glyph_highlights = classify_glyph_highlights(rm_files, cpages_list, known_ids)
+
+        if not candidates and not glyph_highlights:
+            logger.debug(f"No new ink for {vault.name}:{obsidian_path}")
+            return PullResult(
+                vault_name=vault.name,
+                obsidian_path=obsidian_path,
+                success=True,
+            )
+
+        # Count content pages (pages with redir values < total pages in word map)
+        content_page_count = len(word_map.pages)
+
+        clusters = cluster_candidates(candidates)
+
+        # Classify each cluster
+        classifications: list[Classification] = []
+        for cluster in clusters:
+            classification = classify_cluster(cluster, word_map, self._profile, content_page_count)
+            classifications.append(classification)
+
+        # Read snapshot text for edit computation
+        snapshot_text = ""
+        snapshot = self.state.snapshots.get_latest_snapshot(vault.name, obsidian_path)
+        if snapshot is not None:
+            snapshot_text = snapshot.decode("utf-8") if isinstance(snapshot, bytes) else snapshot
+        if not snapshot_text:
+            # Fall back to current file
+            file_path = vault.path / obsidian_path
+            if file_path.exists():
+                snapshot_text = file_path.read_text(encoding="utf-8")
+
+        # Build edits from classifications and highlights
+        edits: list[MarkdownEdit] = []
+        dispositions: dict[str, Disposition] = {}
+        deferred_reasons: list[str] = []
+
+        # Process glyph highlights
+        for gh in glyph_highlights:
+            cluster_id = hashlib.sha256(f"highlight:{gh.text}:{gh.page}".encode()).hexdigest()
+
+            edit = MarkdownEdit(
+                kind="highlight",
+                cluster_id=cluster_id,
+                anchor=InkAnchor(kind="paragraph", ref=""),
+                text=gh.text,
+            )
+            dispositions[cluster_id] = Highlight(edit=edit)
+            edits.append(edit)
+
+        # Process stroke clusters
+        for classification in classifications:
+            cluster = classification.cluster
+            cid = cluster.cluster_id
+
+            if classification.kind == "appended":
+                # OCR the cluster for text
+                anchor = DOCUMENT_END
+                ocr_text = self._ocr_cluster(cluster, vault.name, obsidian_path)
+                if ocr_text is not None:
+                    edit = MarkdownEdit(
+                        kind="append",
+                        cluster_id=cid,
+                        anchor=anchor,
+                        text=ocr_text,
+                    )
+                    dispositions[cid] = Consumed(edit_id=str(uuid_module.uuid4()), edit=edit)
+                    edits.append(edit)
+                else:
+                    # OCR failed or unavailable -> deferred
+                    reason = "ocr_unavailable"
+                    deferred_reasons.append(reason)
+                    embed_name = (
+                        f"{Path(obsidian_path).stem}-drawing-p{cluster.redir or 0}-{cid[:8]}.svg"
+                    )
+                    edit = MarkdownEdit(
+                        kind="deferred",
+                        cluster_id=cid,
+                        anchor=anchor,
+                        text=(
+                            f"<!-- RPS:UNINTERPRETED kind=appended page={cluster.redir or 0} -->\n"
+                            f"![[{embed_name}]]\n"
+                            f"<!-- RPS:END -->"
+                        ),
+                    )
+                    dispositions[cid] = Deferred(reason=reason, edit=edit)
+                    edits.append(edit)
+
+                    # Still save the SVG
+                    self._save_drawing(cluster, vault, obsidian_path, anchor, None)
+
+            elif classification.kind == "drawing":
+                # Find the anchor paragraph
+                anchor = self._find_anchor_for_drawing(classification, word_map, snapshot_text)
+
+                attachment_name, svg_bytes, overlay = bake_cluster(
+                    cluster,
+                    self._profile,
+                    anchor,
+                    classification.nearest_anchor_rect,
+                    Path(obsidian_path).stem,
+                )
+
+                edit = MarkdownEdit(
+                    kind="embed",
+                    cluster_id=cid,
+                    anchor=anchor,
+                    text=f"![[{attachment_name}]]",
+                )
+                dispositions[cid] = Baked(
+                    attachment=attachment_name,
+                    anchor=anchor,
+                    svg=svg_bytes,
+                    edit=edit,
+                )
+                edits.append(edit)
+
+                # Save attachment (step a of I12)
+                self._save_attachment(vault, attachment_name, svg_bytes)
+
+        # Read current file
+        file_path = vault.path / obsidian_path
+        if not file_path.exists():
+            return PullResult(
+                vault_name=vault.name,
+                obsidian_path=obsidian_path,
+                success=False,
+                error=f"File not found: {file_path}",
+            )
+        current_text = file_path.read_text(encoding="utf-8")
+
+        # Apply edits (step b of I12)
+        if edits:
+            new_text, failed_ids = apply_edits(
+                edits, snapshot_text, current_text, self.layout.notes_heading
+            )
+
+            # Mark failed edits as deferred
+            for fid in failed_ids:
+                if fid in dispositions:
+                    old_disp = dispositions[fid]
+                    edit = (
+                        old_disp.edit
+                        if hasattr(old_disp, "edit")
+                        else MarkdownEdit(  # type: ignore[union-attr]
+                            kind="deferred",
+                            cluster_id=fid,
+                            anchor=DOCUMENT_END,
+                            text="",
+                        )
+                    )
+                    dispositions[fid] = Deferred(reason="patch_failed", edit=edit)
+                    deferred_reasons.append("patch_failed")
+
+            # Atomic write
+            write_markdown_atomic(file_path, new_text)
+
+        # Step c: ONE SQLite transaction
+        all_terminal = all(is_terminal(d) for d in dispositions.values())
+
+        with self.state.conn:
+            # Insert ink_strokes rows
+            stroke_rows: list[tuple[str, str, str, str, str]] = []
+            for cluster in clusters:
+                cid = cluster.cluster_id
+                for cs in cluster.strokes:
+                    sid = f"{cs.stroke.stroke_id.part1}:{cs.stroke.stroke_id.part2}"
+                    stroke_rows.append((vault.name, obsidian_path, doc_uuid, sid, cid))
+
+            # Also record glyph highlight ids as "strokes" so they aren't re-processed
+            for gh in glyph_highlights:
+                gh_id = hashlib.sha256(f"highlight:{gh.text}:{gh.page}".encode()).hexdigest()
+                # Use a synthetic stroke id for the highlight
+                synth_sid = f"glyph:{gh_id[:16]}"
+                stroke_rows.append((vault.name, obsidian_path, doc_uuid, synth_sid, gh_id))
+
+            if stroke_rows:
+                self.state.insert_ink_strokes(stroke_rows)
+
+            # Insert ink_clusters rows
+            now = int(time.time())
+            for cid, disp in dispositions.items():
+                disp_name = type(disp).__name__.lower()
+                deferred_reason = disp.reason if isinstance(disp, Deferred) else None
+                anchor_kind = None
+                anchor_ref = None
+                attachment = None
+                edit_id = None
+                rect_json = None
+
+                if isinstance(disp, Highlight):
+                    anchor_kind = disp.edit.anchor.kind
+                    anchor_ref = disp.edit.anchor.ref
+                elif isinstance(disp, Consumed):
+                    edit_id = disp.edit_id
+                    anchor_kind = disp.edit.anchor.kind
+                    anchor_ref = disp.edit.anchor.ref
+                elif isinstance(disp, Baked):
+                    attachment = disp.attachment
+                    anchor_kind = disp.anchor.kind
+                    anchor_ref = disp.anchor.ref
+                elif isinstance(disp, Deferred):
+                    anchor_kind = disp.edit.anchor.kind
+                    anchor_ref = disp.edit.anchor.ref
+
+                # Find cluster for page_redir
+                page_redir = None
+                for cluster in clusters:
+                    if cluster.cluster_id == cid:
+                        page_redir = cluster.redir
+                        rect_json = json.dumps(
+                            {
+                                "x0": cluster.bbox[0],
+                                "y0": cluster.bbox[1],
+                                "x1": cluster.bbox[2],
+                                "y1": cluster.bbox[3],
+                            }
+                        )
+                        break
+
+                self.state.insert_ink_cluster(
+                    cluster_id=cid,
+                    vault_name=vault.name,
+                    obsidian_path=obsidian_path,
+                    disposition=disp_name,
+                    deferred_reason=deferred_reason,
+                    page_redir=page_redir,
+                    rect=rect_json,
+                    anchor_kind=anchor_kind,
+                    anchor_ref=anchor_ref,
+                    attachment=attachment,
+                    edit_id=edit_id,
+                    pushed_pdf_sha256=sync_state.pushed_pdf_sha256,
+                    created_at=now,
+                )
+
+            # Update pull_state
+            from rock_paper_sync.state import PullState
+
+            pull_state = PullState(
+                vault_name=vault.name,
+                obsidian_path=obsidian_path,
+                remarkable_uuid=doc_uuid,
+                last_annotation_hash=doc_index_hash,
+                last_pull_time=now,
+                last_rm_files_hash=None,
+            )
+            self.state.update_pull_state(pull_state)
+
+            # Set ink_clearance_hash only if all clusters are terminal
+            if all_terminal and dispositions:
+                self.state.update_ink_clearance_hash(vault.name, obsidian_path, doc_index_hash)
+
+        # Count results
+        highlight_count = sum(1 for d in dispositions.values() if isinstance(d, Highlight))
+        notes_count = sum(1 for d in dispositions.values() if isinstance(d, Consumed))
+        drawings_count = sum(1 for d in dispositions.values() if isinstance(d, Baked))
+        deferred_count = sum(1 for d in dispositions.values() if isinstance(d, Deferred))
+
+        return PullResult(
+            vault_name=vault.name,
+            obsidian_path=obsidian_path,
+            success=True,
+            highlights_added=highlight_count,
+            notes_appended=notes_count,
+            drawings_saved=drawings_count,
+            deferred_count=deferred_count,
+            deferred_reasons=deferred_reasons if deferred_reasons else None,
+        )
+
+    def _ocr_cluster(
+        self,
+        cluster: InkCluster,
+        vault_name: str,
+        obsidian_path: str,
+    ) -> str | None:
+        """OCR a cluster (render to PNG, send to OCR service).
+
+        Returns OCR text or None if OCR is unavailable or fails.
+        """
+        if self.ocr_processor is None:
+            return None
+
+        try:
+            png_bytes = render_cluster_to_png(cluster, self._profile)
+
+            # Simple OCR interface: expects a process_image method
+            if hasattr(self.ocr_processor, "process_image"):
+                result = self.ocr_processor.process_image(png_bytes)
+                if result and hasattr(result, "text"):
+                    return result.text
+                if isinstance(result, str):
+                    return result
+            return None
+        except Exception:
+            logger.warning(
+                f"OCR failed for cluster {cluster.cluster_id[:8]}",
+                exc_info=True,
+            )
+            return None
+
+    def _find_anchor_for_drawing(
+        self,
+        classification: Classification,
+        word_map: WordMap,
+        snapshot_text: str,
+    ) -> InkAnchor:
+        """Find the paragraph anchor nearest to a drawing cluster.
+
+        Uses the nearest paragraph box on the same page to compute the
+        anchor ref from the snapshot text.
+        """
+        if classification.nearest_anchor_rect is None:
+            return DOCUMENT_END
+
+        page = classification.nearest_anchor_page
+        if page is None:
+            return DOCUMENT_END
+
+        # Get tokens on this page near the anchor rect
+        anchor_rect = classification.nearest_anchor_rect
+
+        # Find the paragraph in snapshot text that corresponds to this position
+        # Group tokens by y-band to identify paragraphs
+        paragraphs = _split_paragraphs_for_anchor(snapshot_text)
+        text_counts: dict[str, int] = {}
+
+        # Try to match by token content on the page near the anchor rect
+        tokens_on_page: list[str] = []
+        for pw in word_map.pages:
+            if pw.page == page:
+                for tid, rect in pw.tokens:
+                    # Check if token is in the anchor paragraph's y-band
+                    if abs(rect.y0 - anchor_rect.y0) < 20.0:
+                        tokens_on_page.append(word_map.texts[tid])
+
+        if tokens_on_page:
+            # Find which paragraph in snapshot text contains these tokens
+            search_text = " ".join(tokens_on_page[:5])
+            for para in paragraphs:
+                normalised = " ".join(para.split())
+                if not normalised:
+                    continue
+                ordinal = text_counts.get(normalised, 0)
+                text_counts[normalised] = ordinal + 1
+                if search_text in normalised or any(t in normalised for t in tokens_on_page[:3]):
+                    ref = paragraph_anchor_ref(normalised, ordinal)
+                    return InkAnchor(kind="paragraph", ref=ref)
+
+        return DOCUMENT_END
+
+    def _save_drawing(
+        self,
+        cluster: InkCluster,
+        vault: VaultConfig,
+        obsidian_path: str,
+        anchor: InkAnchor,
+        anchor_rect: Rect | None,
+    ) -> str | None:
+        """Save a drawing cluster as an SVG attachment. Returns attachment name."""
+        attachment_name, svg_bytes, _ = bake_cluster(
+            cluster,
+            self._profile,
+            anchor,
+            anchor_rect,
+            Path(obsidian_path).stem,
+        )
+        self._save_attachment(vault, attachment_name, svg_bytes)
+        return attachment_name
+
+    def _save_attachment(
+        self,
+        vault: VaultConfig,
+        attachment_name: str,
+        svg_bytes: bytes,
+    ) -> None:
+        """Save an SVG attachment to the vault's attachment folder.
+
+        Idempotent: if the file already exists with the same name, it is
+        overwritten (same cluster id = same content).
+        """
+        attach_dir = get_attachment_folder(vault.path)
+        attach_dir.mkdir(parents=True, exist_ok=True)
+        attach_path = attach_dir / attachment_name
+        attach_path.write_bytes(svg_bytes)
+        logger.debug(f"Saved attachment: {attach_path}")
+
     def pull_vault(
         self,
         vault: VaultConfig,
-        dry_run: bool = False,
     ) -> tuple[list[PullResult], PullStats]:
-        """Pull annotations for all changed files in a vault.
+        """Pull ink for all synced files in a vault.
 
         Args:
-            vault: Vault configuration
-            dry_run: If True, don't modify files
+            vault: Vault configuration.
 
         Returns:
-            Tuple of (list of PullResult, PullStats)
+            Tuple of (list of PullResult, PullStats).
         """
         stats = PullStats()
         results: list[PullResult] = []
 
-        # Detect changes
-        changes = self.detect_changes(vault.name)
-        stats.files_checked = len(self.state.get_all_synced_files(vault.name))
+        synced_files = self.state.get_all_synced_files(vault.name)
+        stats.files_checked = len(synced_files)
 
-        if not changes:
-            logger.info(f"No annotation changes detected for vault {vault.name}")
-            return results, stats
+        for record in synced_files:
+            if record.pushed_pdf_sha256 is None:
+                stats.files_skipped += 1
+                continue
 
-        logger.info(f"Found {len(changes)} files with annotation changes in {vault.name}")
-
-        for change in changes:
-            result = self.pull_file(change, vault.path, dry_run)
+            result = self.pull_file(vault, record.obsidian_path)
             results.append(result)
 
             if result.success:
-                if result.highlights_added > 0 or result.strokes_added > 0:
+                if (
+                    result.highlights_added > 0
+                    or result.notes_appended > 0
+                    or result.drawings_saved > 0
+                    or result.deferred_count > 0
+                ):
                     stats.files_updated += 1
                     stats.total_highlights += result.highlights_added
-                    stats.total_strokes += result.strokes_added
-                    stats.total_orphans += result.orphans_count
+                    stats.total_notes += result.notes_appended
+                    stats.total_drawings += result.drawings_saved
+                    stats.total_deferred += result.deferred_count
                 else:
                     stats.files_skipped += 1
             else:
@@ -263,212 +696,10 @@ class PullSyncEngine:
 
         return results, stats
 
-    def _reanchor_annotations(
-        self,
-        annotations: list[DocumentAnnotation],
-        new_content: str,
-    ) -> tuple[list[DocumentAnnotation], list[DocumentAnnotation]]:
-        """Reanchor annotations to new content using AnchorContext.
 
-        Args:
-            annotations: List of annotations to reanchor
-            new_content: New markdown content
+def _split_paragraphs_for_anchor(text: str) -> list[str]:
+    """Split text into paragraphs for anchor matching."""
+    import re
 
-        Returns:
-            Tuple of (migrated annotations, orphaned annotations)
-        """
-        migrated = []
-        orphaned = []
-
-        for annotation in annotations:
-            if not annotation.anchor_context:
-                orphaned.append(annotation)
-                continue
-
-            # Try to resolve anchor in new content
-            # resolve() needs old_text - use anchor's text_content as a proxy
-            # since we're reanchoring to new content from device annotations
-            old_text = annotation.anchor_context.text_content
-            resolved = annotation.anchor_context.resolve(old_text, new_content)
-
-            if resolved and resolved.confidence >= 0.6:
-                # Create new annotation with updated anchor
-                from rock_paper_sync.annotations.document_model import AnchorContext
-
-                new_anchor = AnchorContext.from_text_span(
-                    new_content, resolved.start_offset, resolved.end_offset
-                )
-                new_annotation = DocumentAnnotation(
-                    annotation_id=annotation.annotation_id,
-                    annotation_type=annotation.annotation_type,
-                    source_page_idx=annotation.source_page_idx,
-                    anchor_context=new_anchor,
-                    stroke_data=annotation.stroke_data,
-                    highlight_data=annotation.highlight_data,
-                )
-                migrated.append(new_annotation)
-                logger.debug(
-                    f"Reanchored {annotation.annotation_type} "
-                    f"(confidence={resolved.confidence:.2f})"
-                )
-            else:
-                orphaned.append(annotation)
-                logger.debug(
-                    f"Orphaned {annotation.annotation_type}: anchor text not found in new content"
-                )
-
-        return migrated, orphaned
-
-    def _record_orphans(
-        self,
-        change: AnnotationChange,
-        orphaned: list[DocumentAnnotation],
-    ) -> None:
-        """Record orphaned annotations in state database.
-
-        Args:
-            change: AnnotationChange for the file
-            orphaned: List of orphaned annotations
-        """
-        # Clear previous orphans for this file
-        self.state.delete_all_orphaned_annotations(change.vault_name, change.obsidian_path)
-
-        # Record new orphans (with serialised blocks for hidden-layer preservation)
-        for annotation in orphaned:
-            anchor_text = None
-            if annotation.anchor_context:
-                anchor_text = annotation.anchor_context.text_content
-
-            blocks_blob = serialize_annotation_blocks(annotation)
-
-            orphan_record = OrphanedAnnotation(
-                vault_name=change.vault_name,
-                obsidian_path=change.obsidian_path,
-                annotation_id=annotation.annotation_id,
-                annotation_type=annotation.annotation_type,
-                original_anchor_text=anchor_text,
-                orphaned_at=int(time.time()),
-                blocks_blob=blocks_blob,
-                source_page_idx=annotation.source_page_idx,
-            )
-            self.state.add_orphaned_annotation(orphan_record)
-
-    def attempt_orphan_recovery(
-        self,
-        vault: VaultConfig,
-        dry_run: bool = False,
-    ) -> list[tuple[str, str, int]]:
-        """Attempt to recover orphaned annotations by re-pulling from device.
-
-        When text is restored in markdown after being deleted (e.g., user undo),
-        orphaned annotations can potentially be re-anchored. This method:
-
-        1. Finds files with orphaned annotations in the database
-        2. Checks if the orphan's anchor text now exists in the markdown
-        3. Forces a re-pull from device to attempt reanchoring
-        4. Returns list of recovered annotations
-
-        This should be called:
-        - During bidirectional sync, before push phase
-        - After markdown content changes are detected
-        - Periodically as part of maintenance
-
-        Args:
-            vault: Vault configuration to check for recoverable orphans
-            dry_run: If True, only check for recoverable orphans without modifying
-
-        Returns:
-            List of tuples (obsidian_path, annotation_id, recovered_count) for recovered annotations
-        """
-        recovered_files: list[tuple[str, str, int]] = []
-
-        # Get all synced files for this vault
-        synced_files = self.state.get_all_synced_files(vault.name)
-
-        for record in synced_files:
-            # Get orphans for this file
-            orphans = self.state.get_orphaned_annotations(vault.name, record.obsidian_path)
-            if not orphans:
-                continue
-
-            # Check if file exists
-            file_path = vault.path / record.obsidian_path
-            if not file_path.exists():
-                logger.debug(f"Skipping orphan recovery for deleted file: {record.obsidian_path}")
-                continue
-
-            # Read current markdown content
-            try:
-                markdown_content = file_path.read_text(encoding="utf-8")
-            except Exception as e:
-                logger.warning(f"Failed to read {record.obsidian_path} for orphan recovery: {e}")
-                continue
-
-            # Check if any orphans might be recoverable
-            recoverable_orphans = []
-            for orphan in orphans:
-                if orphan.original_anchor_text:
-                    # Simple presence check - actual reanchoring will verify
-                    if orphan.original_anchor_text in markdown_content:
-                        recoverable_orphans.append(orphan)
-                        logger.debug(
-                            f"Orphan {orphan.annotation_id} potentially recoverable: "
-                            f"'{orphan.original_anchor_text[:30]}...' found in content"
-                        )
-
-            if not recoverable_orphans:
-                continue
-
-            logger.info(
-                f"Found {len(recoverable_orphans)} potentially recoverable orphan(s) "
-                f"for {vault.name}:{record.obsidian_path}"
-            )
-
-            if dry_run:
-                # In dry run, just report what we found
-                for orphan in recoverable_orphans:
-                    recovered_files.append((record.obsidian_path, orphan.annotation_id, 0))
-                continue
-
-            # Force a re-pull to attempt recovery
-            # Create a synthetic AnnotationChange to trigger pull_file
-            change = AnnotationChange(
-                vault_name=vault.name,
-                obsidian_path=record.obsidian_path,
-                remarkable_uuid=record.remarkable_uuid,
-                change_type="recovery",
-                current_annotation_hash="",  # Will be computed during pull
-                previous_annotation_hash=None,
-            )
-
-            # Count orphans before pull
-            orphan_count_before = len(orphans)
-
-            # Run pull_file - this will re-extract from device and reanchor
-            result = self.pull_file(change, vault.path, dry_run=False)
-
-            if result.success:
-                # Count orphans after pull
-                new_orphans = self.state.get_orphaned_annotations(vault.name, record.obsidian_path)
-                orphan_count_after = len(new_orphans)
-                recovered_count = orphan_count_before - orphan_count_after
-
-                if recovered_count > 0:
-                    # Find which orphans were recovered
-                    new_orphan_ids = {o.annotation_id for o in new_orphans}
-                    for orphan in orphans:
-                        if orphan.annotation_id not in new_orphan_ids:
-                            recovered_files.append((record.obsidian_path, orphan.annotation_id, 1))
-                    logger.info(
-                        f"Recovered {recovered_count} orphan(s) for "
-                        f"{vault.name}:{record.obsidian_path}"
-                    )
-                else:
-                    logger.debug(
-                        f"No orphans recovered for {vault.name}:{record.obsidian_path} "
-                        f"(reanchoring still failed)"
-                    )
-            else:
-                logger.warning(f"Failed to re-pull for orphan recovery: {result.error}")
-
-        return recovered_files
+    blocks = re.split(r"\n\s*\n", text)
+    return [b.strip() for b in blocks if b.strip()]

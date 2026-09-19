@@ -84,7 +84,7 @@ class OrphanedAnnotation:
 class StateManager:
     """Manages sync state using SQLite database."""
 
-    SCHEMA_VERSION = 9  # Schema v9: PDF substrate columns on sync_state
+    SCHEMA_VERSION = 10  # Schema v10: ink_strokes + ink_clusters tables (Phase 4)
 
     def __init__(self, db_path: Path) -> None:
         """Initialize state manager with database at given path.
@@ -231,6 +231,40 @@ class StateManager:
                 -- Index for finding orphaned annotations by document
                 CREATE INDEX IF NOT EXISTS idx_orphaned_annotations_document
                 ON orphaned_annotations(vault_name, obsidian_path);
+
+                -- Ink stroke ledger: one row per processed stroke (schema v10, I4/I5)
+                CREATE TABLE IF NOT EXISTS ink_strokes (
+                    vault_name TEXT NOT NULL,
+                    obsidian_path TEXT NOT NULL,
+                    doc_uuid TEXT NOT NULL,
+                    stroke_id TEXT NOT NULL,
+                    cluster_id TEXT NOT NULL,
+                    PRIMARY KEY (vault_name, obsidian_path, stroke_id)
+                );
+
+                -- Ink cluster records (schema v10)
+                CREATE TABLE IF NOT EXISTS ink_clusters (
+                    cluster_id TEXT PRIMARY KEY,
+                    vault_name TEXT NOT NULL,
+                    obsidian_path TEXT NOT NULL,
+                    disposition TEXT NOT NULL,
+                    deferred_reason TEXT,
+                    page_redir INTEGER,
+                    rect TEXT,
+                    anchor_kind TEXT,
+                    anchor_ref TEXT,
+                    attachment TEXT,
+                    edit_id TEXT,
+                    pushed_pdf_sha256 TEXT,
+                    created_at INTEGER NOT NULL
+                );
+
+                -- Index for finding ink data by document
+                CREATE INDEX IF NOT EXISTS idx_ink_strokes_document
+                ON ink_strokes(vault_name, obsidian_path);
+
+                CREATE INDEX IF NOT EXISTS idx_ink_clusters_document
+                ON ink_clusters(vault_name, obsidian_path);
                 """
             )
             # Initialize or migrate schema version
@@ -262,6 +296,8 @@ class StateManager:
             self._migrate_to_v8()
         if current_version < 9:
             self._migrate_to_v9()
+        if current_version < 10:
+            self._migrate_to_v10()
 
     def _migrate_to_v7(self) -> None:
         """Migrate from v5/v6 to v7: Add pull_state and orphaned_annotations tables."""
@@ -303,6 +339,43 @@ class StateManager:
             self.conn.execute("DELETE FROM schema_version")
             self.conn.execute("INSERT INTO schema_version (version) VALUES (9)")
         logger.info("Database schema migrated to v9")
+
+    def _migrate_to_v10(self) -> None:
+        """Migrate from v9 to v10: Add ink_strokes and ink_clusters tables."""
+        logger.info("Migrating database schema to v10...")
+        with self.conn:
+            self.conn.executescript("""
+                CREATE TABLE IF NOT EXISTS ink_strokes (
+                    vault_name TEXT NOT NULL,
+                    obsidian_path TEXT NOT NULL,
+                    doc_uuid TEXT NOT NULL,
+                    stroke_id TEXT NOT NULL,
+                    cluster_id TEXT NOT NULL,
+                    PRIMARY KEY (vault_name, obsidian_path, stroke_id)
+                );
+                CREATE TABLE IF NOT EXISTS ink_clusters (
+                    cluster_id TEXT PRIMARY KEY,
+                    vault_name TEXT NOT NULL,
+                    obsidian_path TEXT NOT NULL,
+                    disposition TEXT NOT NULL,
+                    deferred_reason TEXT,
+                    page_redir INTEGER,
+                    rect TEXT,
+                    anchor_kind TEXT,
+                    anchor_ref TEXT,
+                    attachment TEXT,
+                    edit_id TEXT,
+                    pushed_pdf_sha256 TEXT,
+                    created_at INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_ink_strokes_document
+                ON ink_strokes(vault_name, obsidian_path);
+                CREATE INDEX IF NOT EXISTS idx_ink_clusters_document
+                ON ink_clusters(vault_name, obsidian_path);
+            """)
+            self.conn.execute("DELETE FROM schema_version")
+            self.conn.execute("INSERT INTO schema_version (version) VALUES (10)")
+        logger.info("Database schema migrated to v10")
 
     def get_file_state(self, vault_name: str, obsidian_path: str) -> SyncRecord | None:
         """Get sync state for a file.
@@ -1144,6 +1217,165 @@ class StateManager:
         else:
             cursor = self.conn.execute("SELECT COUNT(*) FROM orphaned_annotations")
         return cursor.fetchone()[0]
+
+    # --- Ink ledger methods (schema v10, Phase 4) ---
+
+    def get_known_stroke_ids(self, vault_name: str, obsidian_path: str) -> frozenset[str]:
+        """Get all stroke ids already in the ink_strokes ledger.
+
+        Args:
+            vault_name: Name of the vault.
+            obsidian_path: Relative path of the file.
+
+        Returns:
+            Frozenset of ``"part1:part2"`` stroke id strings.
+        """
+        cursor = self.conn.execute(
+            "SELECT stroke_id FROM ink_strokes WHERE vault_name = ? AND obsidian_path = ?",
+            (vault_name, obsidian_path),
+        )
+        return frozenset(row[0] for row in cursor.fetchall())
+
+    def insert_ink_strokes(
+        self,
+        rows: list[tuple[str, str, str, str, str]],
+    ) -> None:
+        """Insert stroke rows into the ink_strokes ledger.
+
+        Each row is ``(vault_name, obsidian_path, doc_uuid, stroke_id, cluster_id)``.
+        Raises ``sqlite3.IntegrityError`` if a duplicate stroke_id is inserted (I5).
+
+        Args:
+            rows: List of row tuples.
+
+        Raises:
+            sqlite3.IntegrityError: On duplicate stroke id.
+        """
+        self.conn.executemany(
+            """
+            INSERT INTO ink_strokes (vault_name, obsidian_path, doc_uuid, stroke_id, cluster_id)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+
+    def insert_ink_cluster(
+        self,
+        cluster_id: str,
+        vault_name: str,
+        obsidian_path: str,
+        disposition: str,
+        deferred_reason: str | None,
+        page_redir: int | None,
+        rect: str | None,
+        anchor_kind: str | None,
+        anchor_ref: str | None,
+        attachment: str | None,
+        edit_id: str | None,
+        pushed_pdf_sha256: str | None,
+        created_at: int,
+    ) -> None:
+        """Insert a cluster record into ink_clusters.
+
+        Args:
+            cluster_id: sha256 cluster identifier.
+            vault_name: Vault name.
+            obsidian_path: Relative file path.
+            disposition: One of 'highlight', 'consumed', 'baked', 'deferred'.
+            deferred_reason: Reason string (only for 'deferred').
+            page_redir: PDF page index or None.
+            rect: JSON-encoded bounding rect or None.
+            anchor_kind: 'paragraph' or 'document_end' or None.
+            anchor_ref: Anchor reference string or None.
+            attachment: Attachment filename or None.
+            edit_id: Edit identifier or None.
+            pushed_pdf_sha256: PDF hash at the time of this pull.
+            created_at: Unix timestamp.
+        """
+        self.conn.execute(
+            """
+            INSERT OR REPLACE INTO ink_clusters
+            (cluster_id, vault_name, obsidian_path, disposition, deferred_reason,
+             page_redir, rect, anchor_kind, anchor_ref, attachment, edit_id,
+             pushed_pdf_sha256, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                cluster_id,
+                vault_name,
+                obsidian_path,
+                disposition,
+                deferred_reason,
+                page_redir,
+                rect,
+                anchor_kind,
+                anchor_ref,
+                attachment,
+                edit_id,
+                pushed_pdf_sha256,
+                created_at,
+            ),
+        )
+
+    def get_ink_clusters(self, vault_name: str, obsidian_path: str) -> list[dict[str, object]]:
+        """Get all ink cluster records for a document.
+
+        Returns:
+            List of dicts with cluster record fields.
+        """
+        cursor = self.conn.execute(
+            "SELECT * FROM ink_clusters WHERE vault_name = ? AND obsidian_path = ?",
+            (vault_name, obsidian_path),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_baked_clusters(self, vault_name: str, obsidian_path: str) -> list[dict[str, object]]:
+        """Get all baked ink clusters for a document (for overlay re-push).
+
+        Returns:
+            List of dicts for clusters with disposition='baked'.
+        """
+        cursor = self.conn.execute(
+            """
+            SELECT * FROM ink_clusters
+            WHERE vault_name = ? AND obsidian_path = ? AND disposition = 'baked'
+            """,
+            (vault_name, obsidian_path),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def has_deferred_clusters(self, vault_name: str, obsidian_path: str) -> bool:
+        """Check if any ink clusters are deferred (blocking clearance).
+
+        Returns:
+            True if any deferred clusters exist.
+        """
+        cursor = self.conn.execute(
+            """
+            SELECT COUNT(*) FROM ink_clusters
+            WHERE vault_name = ? AND obsidian_path = ? AND disposition = 'deferred'
+            """,
+            (vault_name, obsidian_path),
+        )
+        return cursor.fetchone()[0] > 0
+
+    def update_ink_clearance_hash(
+        self, vault_name: str, obsidian_path: str, clearance_hash: str
+    ) -> None:
+        """Set the ink_clearance_hash on sync_state (only after all clusters are terminal).
+
+        Args:
+            vault_name: Vault name.
+            obsidian_path: Relative path.
+            clearance_hash: Document index hash to store.
+        """
+        self.conn.execute(
+            """
+            UPDATE sync_state SET ink_clearance_hash = ?
+            WHERE vault_name = ? AND obsidian_path = ?
+            """,
+            (clearance_hash, vault_name, obsidian_path),
+        )
 
     def close(self) -> None:
         """Close database connection.

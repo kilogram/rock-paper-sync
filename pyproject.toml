@@ -179,6 +179,18 @@ forbidden_modules = [
     "weasyprint",
     "fitz",
     "pymupdf",
+    "rock_paper_sync.render.pdf",
+    "rock_paper_sync.render.html",
+    "rock_paper_sync.converter",
+    "rock_paper_sync.sync_v3",
+    "rock_paper_sync.rm_cloud_sync",
+]
+
+[[tool.importlinter.contracts]]
+name = "pull_sync cannot write to cloud (I3)"
+type = "forbidden"
+source_modules = ["rock_paper_sync.pull_sync"]
+forbidden_modules = [
     "rock_paper_sync.sync_v3",
     "rock_paper_sync.rm_cloud_sync",
 ]

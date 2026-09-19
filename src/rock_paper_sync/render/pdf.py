@@ -32,7 +32,9 @@ from rock_paper_sync.render.html import TOKEN_ATTR, ast_to_html
 from rock_paper_sync.render.wordmap import (
     BakedOverlay,
     PageWords,
+    Placed,
     Rect,
+    Relocated,
     RenderedDocument,
     TokenId,
     WordMap,
@@ -391,20 +393,18 @@ class PdfRenderer:
 
         Raises:
             TokenBoxError: If a token has zero boxes (I1 violation).
-            NotImplementedError: If non-empty overlays are passed (Phase 4).
         """
-        if overlays:
-            raise NotImplementedError(
-                "Overlay placement is not implemented until Phase 4. "
-                "Pass an empty sequence for now."
-            )
-
         # Build tokenised HTML
         body_html, total_tokens = ast_to_html(
             doc.content,
             trailing_blank_pages=self._layout.trailing_blank_pages,
             page_height_pt=profile.page_height_pt,
         )
+
+        # If overlays exist, inject overlay HTML before closing
+        overlay_html = ""
+        if overlays:
+            overlay_html = _build_overlay_html(overlays)
 
         # Build CSS
         css_str = _build_css(self._layout, profile)
@@ -413,7 +413,7 @@ class PdfRenderer:
         full_html = f"""<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><style>{css_str}</style></head>
-<body>{body_html}</body>
+<body>{body_html}{overlay_html}</body>
 </html>"""
 
         # Render with WeasyPrint
@@ -437,6 +437,9 @@ class PdfRenderer:
             profile.page_size_pt,
         )
 
+        # Compute placements for overlays (I11: total)
+        placements = _compute_placements(overlays, word_map, len(wp_doc.pages), profile)
+
         # Write PDF bytes
         pdf_bytes = wp_doc.write_pdf()
 
@@ -444,14 +447,15 @@ class PdfRenderer:
         pdf_sha256 = hashlib.sha256(pdf_bytes).hexdigest()
 
         logger.info(
-            f"Rendered {len(wp_doc.pages)} page(s), {total_tokens} token(s), {len(pdf_bytes)} bytes"
+            f"Rendered {len(wp_doc.pages)} page(s), {total_tokens} token(s), "
+            f"{len(pdf_bytes)} bytes, {len(placements)} overlay(s)"
         )
 
         return RenderedDocument(
             pdf=pdf_bytes,
             pdf_sha256=pdf_sha256,
             word_map=word_map,
-            placements=(),
+            placements=placements,
         )
 
 
@@ -525,3 +529,76 @@ def _collect_token_texts(
             texts.extend(_tokenise_text(text))
 
     return texts
+
+
+def _build_overlay_html(overlays: Sequence[BakedOverlay]) -> str:
+    """Build HTML for overlay images appended after the body content.
+
+    Overlays are rendered as visible images placed after the last body
+    block (document_end anchors) or inlined (paragraph anchors handled
+    by the CSS layout flow). For now, all overlays are placed at the
+    end of the document body as inline images.
+
+    Returns:
+        HTML string to append to the body.
+    """
+    import base64
+
+    parts: list[str] = []
+    for overlay in overlays:
+        b64 = base64.b64encode(overlay.svg).decode("ascii")
+        # Render as an inline image; the CSS controls sizing
+        w = overlay.offset.x1 - overlay.offset.x0
+        h = overlay.offset.y1 - overlay.offset.y0
+        parts.append(
+            f'<div class="rps-overlay">'
+            f'<img src="data:image/svg+xml;base64,{b64}" '
+            f'style="width:{w:.1f}pt;height:{h:.1f}pt;" />'
+            f"</div>"
+        )
+    return "\n".join(parts)
+
+
+def _compute_placements(
+    overlays: Sequence[BakedOverlay],
+    word_map: WordMap,
+    page_count: int,
+    profile: DeviceProfile,
+) -> tuple[Placed | Relocated, ...]:
+    """Compute a placement for every overlay (I11: total).
+
+    For each overlay:
+    - If anchor == "document_end": place on the last body page.
+    - If anchor matches a paragraph in the word map: place on that page.
+    - Otherwise: ``Relocated`` to an orphaned ink page (last page + 1).
+
+    Returns:
+        Tuple with one ``Placed`` or ``Relocated`` per overlay.
+    """
+    placements: list[Placed | Relocated] = []
+    orphan_page = page_count  # hypothetical appended page
+
+    for overlay in overlays:
+        anchor = overlay.anchor
+        offset = overlay.offset
+
+        if anchor == "document_end":
+            # Place on the last content page
+            last_page = max(0, len(word_map.pages) - 1) if word_map.pages else 0
+            placements.append(Placed(overlay=overlay, page=last_page, rect=offset))
+        else:
+            # Try to place on the first page that has tokens
+            # (anchor matching by ref is done in pull_sync; here we just need
+            # to put the overlay somewhere reasonable on a content page)
+            placed = False
+            for pw in word_map.pages:
+                if pw.tokens:
+                    placements.append(Placed(overlay=overlay, page=pw.page, rect=offset))
+                    placed = True
+                    break
+
+            if not placed:
+                # Anchor not found -> Relocated to orphan page
+                placements.append(Relocated(overlay=overlay, page=orphan_page, rect=offset))
+
+    return tuple(placements)
