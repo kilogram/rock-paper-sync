@@ -235,6 +235,9 @@ def apply_edits(
     appends = [e for e in edits if e.kind == "append"]
     embeds = [e for e in edits if e.kind == "embed"]
     deferred_edits = [e for e in edits if e.kind == "deferred"]
+    gesture_edits = [
+        e for e in edits if e.kind in ("tick", "strikethrough", "insertion", "correction")
+    ]
 
     # Apply highlights (wrap in ==...==).
     #
@@ -297,6 +300,26 @@ def apply_edits(
                 else:
                     logger.warning(f"Failed to apply highlight for cluster {edit.cluster_id}")
                     failed.append(edit.cluster_id)
+
+    # Apply gesture edits (tick, strikethrough, insertion, correction).
+    # Each gesture has a snapshot_span and replacement_text computed by
+    # the gesture pipeline.  We apply them via diff-match-patch just
+    # like highlights, mapping the snapshot edit to the current text.
+    for edit in gesture_edits:
+        if edit.snapshot_span is None or edit.snapshot_span[0] < 0:
+            logger.warning(f"Gesture edit {edit.cluster_id} has no snapshot span, skipping")
+            failed.append(edit.cluster_id)
+            continue
+        ss, se = edit.snapshot_span
+        replacement = edit.text if edit.text else ""
+        patched_snapshot = snapshot_text[:ss] + replacement + snapshot_text[se:]
+        patches = dmp.patch_make(snapshot_text, patched_snapshot)
+        patched, results = dmp.patch_apply(patches, result_text)
+        if all(results):
+            result_text = patched
+        else:
+            logger.warning(f"Gesture patch failed for cluster {edit.cluster_id}")
+            failed.append(edit.cluster_id)
 
     # Apply embeds (insert ![[name.svg]] after anchor paragraph)
     for edit in embeds:

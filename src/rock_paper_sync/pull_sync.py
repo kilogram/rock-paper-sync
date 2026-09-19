@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from rock_paper_sync.cloud_reader import CloudReader
-from rock_paper_sync.config import LayoutConfig, VaultConfig
+from rock_paper_sync.config import InkConfig, LayoutConfig, VaultConfig
 from rock_paper_sync.device_profile import DeviceProfile, device_to_pdf
 from rock_paper_sync.errors import RenderMismatchError, TransformMismatchError
 from rock_paper_sync.ink.apply import apply_edits, build_token_spans, write_markdown_atomic
@@ -46,7 +46,7 @@ from rock_paper_sync.ink.bake import (
     render_cluster_to_png,
 )
 from rock_paper_sync.ink.calibration import DeviceRect, check_i8
-from rock_paper_sync.ink.candidates import extract_candidates
+from rock_paper_sync.ink.candidates import CandidateStroke, extract_candidates
 from rock_paper_sync.ink.classify import (
     Classification,
     GlyphHighlight,
@@ -65,6 +65,7 @@ from rock_paper_sync.ink.dispositions import (
     MarkdownEdit,
     is_terminal,
 )
+from rock_paper_sync.ink.gestures import GestureResult, classify_gesture
 from rock_paper_sync.render.wordmap import Rect, WordMap
 from rock_paper_sync.state import PullState, StateManager
 
@@ -85,6 +86,11 @@ class PullResult:
     highlight_fallback_count: int = 0  # highlights that fell back to substring matching
     deferred_reasons: list[str] | None = None
     error: str | None = None
+    ticks: int = 0
+    strikethroughs: int = 0
+    insertions: int = 0
+    corrections: int = 0
+    gestures_uninterpreted: int = 0
 
 
 @dataclass
@@ -115,6 +121,7 @@ class PullSyncEngine:
         layout: LayoutConfig,
         cache_dir: Path,
         ocr_processor: object | None = None,
+        ink_config: InkConfig | None = None,
     ) -> None:
         """Initialise pull sync engine.
 
@@ -124,12 +131,14 @@ class PullSyncEngine:
             layout: Layout configuration (for notes_heading, profile).
             cache_dir: Directory for caching downloaded files.
             ocr_processor: Optional OCR processor (Phase 4: simple interface).
+            ink_config: Ink gesture configuration (default: ``InkConfig()``).
         """
         self.state = state
         self.cloud_reader = cloud_reader
         self.layout = layout
         self.cache_dir = cache_dir
         self.ocr_processor = ocr_processor
+        self.ink_config = ink_config or InkConfig()
         self._profile = layout.get_device_profile()
 
     def pull_file(
@@ -398,31 +407,58 @@ class PullSyncEngine:
                     self._save_drawing(cluster, vault, obsidian_path, anchor, None)
 
             elif classification.kind == "drawing":
-                # Use anchor_ref from classify (BlockBox-based) when available
-                anchor = _anchor_from_classification(classification)
-
-                attachment_name, svg_bytes, overlay = bake_cluster(
+                # Try gesture classification before baking as a drawing.
+                cluster_page = cluster.redir if cluster.redir is not None else 0
+                gesture = classify_gesture(
                     cluster,
+                    word_map,
                     self._profile,
-                    anchor,
-                    classification.nearest_anchor_rect,
-                    Path(obsidian_path).stem,
+                    cluster_page,
+                    token_spans,
+                    self.ink_config.strikethrough_action,
                 )
 
-                edit = MarkdownEdit(
-                    kind="embed",
-                    cluster_id=cid,
-                    anchor=anchor,
-                    text=f"![[{attachment_name}]]",
-                )
-                dispositions[cid] = Baked(
-                    attachment=attachment_name,
-                    anchor=anchor,
-                    svg=svg_bytes,
-                    edit=edit,
-                )
-                edits.append(edit)
-                self._save_attachment(vault, attachment_name, svg_bytes)
+                if gesture.kind != "none":
+                    self._process_gesture(
+                        gesture,
+                        cluster,
+                        cid,
+                        word_map,
+                        vault,
+                        obsidian_path,
+                        cluster_page,
+                        token_spans,
+                        edits,
+                        dispositions,
+                        deferred_reasons,
+                        classification,
+                    )
+                else:
+                    # No gesture matched -> bake as drawing
+                    anchor = _anchor_from_classification(classification)
+
+                    attachment_name, svg_bytes, overlay = bake_cluster(
+                        cluster,
+                        self._profile,
+                        anchor,
+                        classification.nearest_anchor_rect,
+                        Path(obsidian_path).stem,
+                    )
+
+                    edit = MarkdownEdit(
+                        kind="embed",
+                        cluster_id=cid,
+                        anchor=anchor,
+                        text=f"![[{attachment_name}]]",
+                    )
+                    dispositions[cid] = Baked(
+                        attachment=attachment_name,
+                        anchor=anchor,
+                        svg=svg_bytes,
+                        edit=edit,
+                    )
+                    edits.append(edit)
+                    self._save_attachment(vault, attachment_name, svg_bytes)
 
         # Read current file
         file_path = vault.path / obsidian_path
@@ -519,10 +555,10 @@ class PullSyncEngine:
                     anchor_kind = disp.edit.anchor.kind
                     anchor_ref = disp.edit.anchor.ref
 
-                page_redir = None
+                disp_page_redir: int | None = None
                 for cluster in clusters:
                     if cluster.cluster_id == cid:
-                        page_redir = cluster.redir
+                        disp_page_redir = cluster.redir
                         rect_json = json.dumps(
                             {
                                 "x0": cluster.bbox[0],
@@ -539,7 +575,7 @@ class PullSyncEngine:
                     obsidian_path=obsidian_path,
                     disposition=disp_name,
                     deferred_reason=deferred_reason,
-                    page_redir=page_redir,
+                    page_redir=disp_page_redir,
                     rect=rect_json,
                     anchor_kind=anchor_kind,
                     anchor_ref=anchor_ref,
@@ -567,6 +603,32 @@ class PullSyncEngine:
         drawings_count = sum(1 for d in dispositions.values() if isinstance(d, Baked))
         deferred_count = sum(1 for d in dispositions.values() if isinstance(d, Deferred))
 
+        # Count gestures by kind from Consumed edits
+        tick_count = sum(
+            1 for d in dispositions.values() if isinstance(d, Consumed) and d.edit.kind == "tick"
+        )
+        strikethrough_count = sum(
+            1
+            for d in dispositions.values()
+            if isinstance(d, Consumed) and d.edit.kind == "strikethrough"
+        )
+        insertion_count = sum(
+            1
+            for d in dispositions.values()
+            if isinstance(d, Consumed) and d.edit.kind == "insertion"
+        )
+        correction_count = sum(
+            1
+            for d in dispositions.values()
+            if isinstance(d, Consumed) and d.edit.kind == "correction"
+        )
+        # Gestures that ended up as Baked (UNINTERPRETED)
+        gestures_uninterpreted = sum(
+            1
+            for d in dispositions.values()
+            if isinstance(d, Baked) and d.edit.kind == "deferred" and "kind=" in d.edit.text
+        )
+
         return PullResult(
             vault_name=vault.name,
             obsidian_path=obsidian_path,
@@ -577,7 +639,205 @@ class PullSyncEngine:
             deferred_count=deferred_count,
             highlight_fallback_count=highlight_fallback_count,
             deferred_reasons=deferred_reasons if deferred_reasons else None,
+            ticks=tick_count,
+            strikethroughs=strikethrough_count,
+            insertions=insertion_count,
+            corrections=correction_count,
+            gestures_uninterpreted=gestures_uninterpreted,
         )
+
+    def _process_gesture(
+        self,
+        gesture: GestureResult,
+        cluster: InkCluster,
+        cid: str,
+        word_map: WordMap,
+        vault: VaultConfig,
+        obsidian_path: str,
+        page_redir: int,
+        token_spans: list[tuple[int, int]],
+        edits: list[MarkdownEdit],
+        dispositions: dict[str, Disposition],
+        deferred_reasons: list[str],
+        classification: Classification,
+    ) -> None:
+        """Process a recognised gesture into edits and dispositions.
+
+        Handles OCR for insertion/correction gestures, low-confidence
+        fallback to UNINTERPRETED, leftover stroke baking, and the
+        ``already_checked`` deferred case.
+        """
+        anchor = _anchor_from_classification(classification)
+
+        # Checkbox already checked -> Deferred
+        if gesture.checkbox_already_checked:
+            edit = MarkdownEdit(
+                kind="deferred",
+                cluster_id=cid,
+                anchor=anchor,
+                text="",
+            )
+            dispositions[cid] = Deferred(reason="already_checked", edit=edit)
+            deferred_reasons.append("already_checked")
+            return
+
+        # OCR-based gestures (caret insertion, correction)
+        replacement_text = gesture.replacement_text
+        if gesture.needs_ocr:
+            ocr_text = self._ocr_gesture_strokes(gesture.ocr_strokes)
+            if ocr_text is None:
+                # OCR unavailable -> Deferred
+                edit = MarkdownEdit(
+                    kind="deferred",
+                    cluster_id=cid,
+                    anchor=anchor,
+                    text="",
+                )
+                dispositions[cid] = Deferred(reason="ocr_unavailable", edit=edit)
+                deferred_reasons.append("ocr_unavailable")
+                return
+
+            ocr_confidence = (
+                getattr(ocr_text, "confidence", 1.0) if not isinstance(ocr_text, str) else 1.0
+            )
+            text_value = ocr_text.text if hasattr(ocr_text, "text") else str(ocr_text)
+
+            # Check OCR confidence (reuse OCRConfig threshold via layout)
+            # Use 0.7 as default threshold
+            confidence_threshold = 0.7
+
+            if ocr_confidence < confidence_threshold:
+                # Low confidence -> bake as UNINTERPRETED
+                gesture_kind_str = gesture.kind.replace("_", " ")
+                embed_name = f"{Path(obsidian_path).stem}-drawing-p{page_redir}-{cid[:8]}.svg"
+                marker_text = (
+                    f"<!-- RPS:UNINTERPRETED kind={gesture_kind_str} "
+                    f"confidence={ocr_confidence:.2f} page={page_redir} -->\n"
+                    f"![[{embed_name}]]\n"
+                    f"<!-- RPS:END -->"
+                )
+                edit = MarkdownEdit(
+                    kind="deferred",
+                    cluster_id=cid,
+                    anchor=anchor,
+                    text=marker_text,
+                )
+                attachment_name, svg_bytes, overlay = bake_cluster(
+                    cluster,
+                    self._profile,
+                    anchor,
+                    classification.nearest_anchor_rect,
+                    Path(obsidian_path).stem,
+                )
+                dispositions[cid] = Baked(
+                    attachment=attachment_name,
+                    anchor=anchor,
+                    svg=svg_bytes,
+                    edit=edit,
+                )
+                edits.append(edit)
+                self._save_attachment(vault, attachment_name, svg_bytes)
+                return
+
+            # Build the final replacement text
+            if gesture.kind == "caret_insertion":
+                replacement_text = f" {text_value} "
+            elif gesture.kind == "correction":
+                replacement_text = f"{replacement_text}{text_value}"
+
+        # Build the edit
+        edit_kind: str
+        if gesture.kind == "tick":
+            edit_kind = "tick"
+        elif gesture.kind == "strikethrough":
+            edit_kind = "strikethrough"
+        elif gesture.kind == "caret_insertion":
+            edit_kind = "insertion"
+        elif gesture.kind == "correction":
+            edit_kind = "correction"
+        else:
+            edit_kind = "deferred"
+
+        edit = MarkdownEdit(
+            kind=edit_kind,  # type: ignore[arg-type]
+            cluster_id=cid,
+            anchor=anchor,
+            text=replacement_text or "",
+            snapshot_span=gesture.snapshot_span,
+        )
+        dispositions[cid] = Consumed(edit_id=str(uuid_module.uuid4()), edit=edit)
+        edits.append(edit)
+
+        # Bake leftover strokes as a separate drawing cluster
+        if gesture.leftover_strokes:
+            from rock_paper_sync.ink.gestures import _derive_cluster_id, _stroke_id_str
+
+            leftover_ids = [_stroke_id_str(s) for s in gesture.leftover_strokes]
+            leftover_cid = _derive_cluster_id(leftover_ids)
+            leftover_cluster = InkCluster(
+                cluster_id=leftover_cid,
+                strokes=tuple(gesture.leftover_strokes),
+                bbox=cluster.bbox,  # approximate
+                page_index=cluster.page_index,
+                redir=cluster.redir,
+            )
+            leftover_anchor = _anchor_from_classification(classification)
+            attachment_name, svg_bytes, overlay = bake_cluster(
+                leftover_cluster,
+                self._profile,
+                leftover_anchor,
+                classification.nearest_anchor_rect,
+                Path(obsidian_path).stem,
+            )
+            leftover_edit = MarkdownEdit(
+                kind="embed",
+                cluster_id=leftover_cid,
+                anchor=leftover_anchor,
+                text=f"![[{attachment_name}]]",
+            )
+            dispositions[leftover_cid] = Baked(
+                attachment=attachment_name,
+                anchor=leftover_anchor,
+                svg=svg_bytes,
+                edit=leftover_edit,
+            )
+            edits.append(leftover_edit)
+            self._save_attachment(vault, attachment_name, svg_bytes)
+
+    def _ocr_gesture_strokes(
+        self,
+        strokes: tuple[CandidateStroke, ...],
+    ) -> str | None:
+        """OCR a set of gesture text strokes.
+
+        Renders them as a synthetic cluster and sends to OCR.
+        Returns OCR text or None if OCR is unavailable.
+        """
+        if self.ocr_processor is None or not strokes:
+            return None
+        try:
+            # Create a synthetic cluster for rendering
+            from rock_paper_sync.ink.gestures import _derive_cluster_id, _stroke_id_str
+
+            ids = [_stroke_id_str(s) for s in strokes]
+            synth_cluster = InkCluster(
+                cluster_id=_derive_cluster_id(ids),
+                strokes=tuple(strokes),
+                bbox=strokes[0].stroke.bounding_box,  # approximate
+                page_index=strokes[0].page_index,
+                redir=strokes[0].redir,
+            )
+            png_bytes = render_cluster_to_png(synth_cluster, self._profile)
+            if hasattr(self.ocr_processor, "process_image"):
+                result = self.ocr_processor.process_image(png_bytes)
+                if result and hasattr(result, "text"):
+                    return result.text
+                if isinstance(result, str):
+                    return result
+            return None
+        except Exception:
+            logger.warning("OCR failed for gesture strokes", exc_info=True)
+            return None
 
     def _ocr_cluster(
         self,

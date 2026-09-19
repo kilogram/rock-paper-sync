@@ -94,7 +94,16 @@ class MarkdownEdit:
     highlight rects — ``apply_edits`` falls back to substring search.
     """
 
-    kind: Literal["highlight", "append", "embed", "deferred"]
+    kind: Literal[
+        "highlight",
+        "append",
+        "embed",
+        "deferred",
+        "tick",
+        "strikethrough",
+        "insertion",
+        "correction",
+    ]
     cluster_id: str
     anchor: InkAnchor
     text: str  # for highlight: the matched text; for append: OCR text; for embed: wikilink

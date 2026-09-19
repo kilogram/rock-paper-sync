@@ -30,6 +30,7 @@ __all__ = [
     "BlockBox",
     "DocumentIndexEntry",
     "DocumentRenderer",
+    "LineBox",
     "PageWords",
     "Placed",
     "Rect",
@@ -102,6 +103,26 @@ class TokenMatch:
 
 
 @dataclass(frozen=True, slots=True)
+class LineBox:
+    """A horizontal line of tokens on a page.
+
+    Tokens are grouped into lines by y-band proximity.  Used by the
+    gesture pipeline to determine line height, baseline, inter-line
+    gaps, and per-line token membership.
+
+    Attributes:
+        rect: Bounding box of all tokens in the line (PDF points).
+        token_ids: Token ids in reading order (left to right).
+        baseline_y: Estimated baseline y coordinate.  Approximated as
+            ``rect.y1`` (bottom of the token boxes).
+    """
+
+    rect: Rect
+    token_ids: tuple[TokenId, ...]
+    baseline_y: float
+
+
+@dataclass(frozen=True, slots=True)
 class PageWords:
     """All tokens on one PDF page."""
 
@@ -171,6 +192,92 @@ class WordMap:
         if not matches:
             raise KeyError(token)
         return tuple(matches)
+
+    def lines_on_page(self, page: int) -> tuple[LineBox, ...]:
+        """Group tokens on *page* into horizontal lines by y0 proximity.
+
+        Tokens are sorted by ``(y0, x0)``, then grouped greedily: a token
+        joins the current line if its ``y0`` is within 1pt of the line's
+        ``y0``.  This works because the CSS layout engine gives all tokens
+        on the same typographic line an identical ``y0``; wrapped lines of
+        the same paragraph differ in ``y0`` by the full line pitch (~15pt).
+
+        Each ``LineBox`` carries the union rect, sorted token ids (left to
+        right), and an estimated baseline (``rect.y1``).
+
+        Returns:
+            Tuple of ``LineBox`` in top-to-bottom order.
+        """
+        page_tokens: list[tuple[TokenId, Rect]] = []
+        for pw in self.pages:
+            if pw.page == page:
+                page_tokens = list(pw.tokens)
+                break
+        if not page_tokens:
+            return ()
+
+        sorted_toks = sorted(page_tokens, key=lambda t: (t[1].y0, t[1].x0))
+
+        # Tolerance for grouping: tokens on the same typographic line share
+        # the same y0 (from the CSS layout engine).  We use a tight epsilon
+        # (1.0pt) to distinguish wrapped lines whose y-ranges nearly touch
+        # but whose y0 values differ by the full line pitch (~15pt).
+        y0_epsilon = 1.0
+
+        lines: list[LineBox] = []
+        cur_ids: list[TokenId] = [sorted_toks[0][0]]
+        cur_y0 = sorted_toks[0][1].y0
+        cur_y1 = sorted_toks[0][1].y1
+        cur_x0 = sorted_toks[0][1].x0
+        cur_x1 = sorted_toks[0][1].x1
+
+        for tid, rect in sorted_toks[1:]:
+            if abs(rect.y0 - cur_y0) <= y0_epsilon:
+                cur_ids.append(tid)
+                cur_y0 = min(cur_y0, rect.y0)
+                cur_y1 = max(cur_y1, rect.y1)
+                cur_x0 = min(cur_x0, rect.x0)
+                cur_x1 = max(cur_x1, rect.x1)
+            else:
+                # Sort ids left-to-right within the line
+                cur_ids_sorted = sorted(
+                    cur_ids,
+                    key=lambda t: next(
+                        r.x0
+                        for pw in self.pages
+                        if pw.page == page
+                        for ti, r in pw.tokens
+                        if ti == t
+                    ),
+                )
+                lines.append(
+                    LineBox(
+                        rect=Rect(x0=cur_x0, y0=cur_y0, x1=cur_x1, y1=cur_y1),
+                        token_ids=tuple(cur_ids_sorted),
+                        baseline_y=cur_y1,
+                    )
+                )
+                cur_ids = [tid]
+                cur_y0 = rect.y0
+                cur_y1 = rect.y1
+                cur_x0 = rect.x0
+                cur_x1 = rect.x1
+
+        # Flush last line
+        cur_ids_sorted = sorted(
+            cur_ids,
+            key=lambda t: next(
+                r.x0 for pw in self.pages if pw.page == page for ti, r in pw.tokens if ti == t
+            ),
+        )
+        lines.append(
+            LineBox(
+                rect=Rect(x0=cur_x0, y0=cur_y0, x1=cur_x1, y1=cur_y1),
+                token_ids=tuple(cur_ids_sorted),
+                baseline_y=cur_y1,
+            )
+        )
+        return tuple(lines)
 
     def nearest_block(self, page: int, x: float, y: float) -> BlockBox | None:
         """Find the block nearest to a point on the given page.

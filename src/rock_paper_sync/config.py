@@ -176,6 +176,22 @@ class CloudConfig:
 
 
 @dataclass(frozen=True)
+class InkConfig:
+    """Ink gesture interpretation configuration.
+
+    Controls how ink gestures (strikethrough, tick, insertion, correction)
+    are interpreted during pull sync.
+
+    Attributes:
+        strikethrough_action: ``"mark"`` wraps struck text in ``~~…~~``;
+            ``"delete"`` removes it.  Default: ``"mark"`` (non-destructive,
+            Obsidian-native).
+    """
+
+    strikethrough_action: str = "mark"
+
+
+@dataclass(frozen=True)
 class OCRConfig:
     """OCR processing configuration.
 
@@ -225,6 +241,7 @@ class AppConfig:
     cloud: CloudConfig
     ocr: OCRConfig
     cache_dir: Path  # General application cache directory (XDG standard)
+    ink: InkConfig = InkConfig()
 
 
 def expand_path(path_str: str) -> Path:
@@ -445,6 +462,12 @@ def load_config(config_path: Path) -> AppConfig:
             use_lora=ocr.get("use_lora", True),
         )
 
+        # Extract ink section (optional)
+        ink_dict = config_dict.get("ink", {})
+        ink_config = InkConfig(
+            strikethrough_action=ink_dict.get("strikethrough_action", "mark"),
+        )
+
         app_config = AppConfig(
             sync=sync_config,
             layout=layout_config,
@@ -453,6 +476,7 @@ def load_config(config_path: Path) -> AppConfig:
             cloud=cloud_config,
             ocr=ocr_config,
             cache_dir=app_cache_dir,
+            ink=ink_config,
         )
 
         return app_config
