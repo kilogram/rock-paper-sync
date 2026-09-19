@@ -37,6 +37,7 @@ from rock_paper_sync.ink.dispositions import (
 
 __all__ = [
     "apply_edits",
+    "build_token_spans",
     "compute_paragraph_anchors",
     "strip_uninterpreted_markers",
 ]
@@ -169,6 +170,41 @@ def find_paragraph_in_text(
     return None
 
 
+def build_token_spans(
+    texts: tuple[str, ...],
+    snapshot: str,
+) -> list[tuple[int, int]]:
+    """Map each token to its ``(start, end)`` character span in the snapshot.
+
+    Scans the snapshot greedily in reading order — the same order the
+    renderer's ``_tokenise_text`` produces.  Tokens that are not literal
+    substrings of the markdown (e.g. synthetic list markers like ``•``)
+    get ``(-1, -1)``.
+
+    Used by ``pull_sync`` to compute ``MarkdownEdit.snapshot_span`` so
+    that highlights are applied at the correct position, not at the
+    first substring match.
+
+    Args:
+        texts: Token texts in reading order (from ``WordMap.texts``).
+        snapshot: The pushed snapshot markdown text.
+
+    Returns:
+        List of ``(start, end)`` per token, same length as *texts*.
+    """
+    spans: list[tuple[int, int]] = []
+    search_from = 0
+    for text in texts:
+        idx = snapshot.find(text, search_from)
+        if idx >= 0:
+            end = idx + len(text)
+            spans.append((idx, end))
+            search_from = end
+        else:
+            spans.append((-1, -1))
+    return spans
+
+
 def apply_edits(
     edits: list[MarkdownEdit],
     snapshot_text: str,
@@ -200,41 +236,67 @@ def apply_edits(
     embeds = [e for e in edits if e.kind == "embed"]
     deferred_edits = [e for e in edits if e.kind == "deferred"]
 
-    # Apply highlights (wrap in ==...==), idempotent: if span is
-    # already wrapped, no-op.  Position-aware: each edit wraps the
-    # first bare (not-yet-wrapped) occurrence; previous edits for the
-    # same phrase will have wrapped earlier occurrences already.
+    # Apply highlights (wrap in ==...==).
+    #
+    # When ``snapshot_span`` is set (token-based location from the word map),
+    # the edit targets the exact character range in the snapshot, mapped to
+    # the current text via diff-match-patch.  This avoids hitting an earlier
+    # prose occurrence of the same phrase.
+    #
+    # When ``snapshot_span`` is None (fallback — no tokens found for the
+    # highlight rects), the edit wraps the first bare substring occurrence.
     _highlight_applied: dict[str, int] = {}
     for edit in highlights:
         phrase = edit.text
         already = _highlight_applied.get(phrase, 0)
 
         # Idempotent: count how many are wrapped; skip if enough
-        wrapped = f"=={phrase}=="
-        n_wrapped = _count_occurrences(result_text, wrapped)
+        wrapped_marker = f"=={phrase}=="
+        n_wrapped = _count_occurrences(result_text, wrapped_marker)
         if n_wrapped > already:
             logger.debug(f"Highlight already applied for cluster {edit.cluster_id}, skipping")
             _highlight_applied[phrase] = already + 1
             continue
 
-        # Wrap the first bare occurrence (occurrence index 0 among bare ones,
-        # because earlier occurrences for this phrase are already wrapped).
-        applied = _wrap_nth_bare_occurrence(result_text, phrase, 0)
-        if applied is not None:
-            result_text = applied
-            _highlight_applied[phrase] = already + 1
-        else:
-            # Try patch
-            patches = dmp.patch_make(
-                snapshot_text, snapshot_text.replace(phrase, f"=={phrase}==", 1)
-            )
+        if edit.snapshot_span is not None and edit.snapshot_span[0] >= 0:
+            # Token-based: wrap at the exact span in the snapshot, mapped
+            # to current text via diff-match-patch.
+            ss, se = edit.snapshot_span
+            patched_snapshot = snapshot_text[:ss] + f"=={phrase}==" + snapshot_text[se:]
+            patches = dmp.patch_make(snapshot_text, patched_snapshot)
             patched, results = dmp.patch_apply(patches, result_text)
             if all(results):
                 result_text = patched
                 _highlight_applied[phrase] = already + 1
             else:
-                logger.warning(f"Failed to apply highlight for cluster {edit.cluster_id}")
-                failed.append(edit.cluster_id)
+                logger.warning(
+                    f"Token-span patch failed for cluster {edit.cluster_id}, "
+                    f"falling back to substring"
+                )
+                applied = _wrap_nth_bare_occurrence(result_text, phrase, 0)
+                if applied is not None:
+                    result_text = applied
+                    _highlight_applied[phrase] = already + 1
+                else:
+                    failed.append(edit.cluster_id)
+        else:
+            # Substring fallback: wrap the first bare occurrence.
+            applied = _wrap_nth_bare_occurrence(result_text, phrase, 0)
+            if applied is not None:
+                result_text = applied
+                _highlight_applied[phrase] = already + 1
+            else:
+                # Try patch as last resort
+                patches = dmp.patch_make(
+                    snapshot_text, snapshot_text.replace(phrase, f"=={phrase}==", 1)
+                )
+                patched, results = dmp.patch_apply(patches, result_text)
+                if all(results):
+                    result_text = patched
+                    _highlight_applied[phrase] = already + 1
+                else:
+                    logger.warning(f"Failed to apply highlight for cluster {edit.cluster_id}")
+                    failed.append(edit.cluster_id)
 
     # Apply embeds (insert ![[name.svg]] after anchor paragraph)
     for edit in embeds:

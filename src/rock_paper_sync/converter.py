@@ -391,8 +391,15 @@ class SyncEngine:
             )
             # A 'pushing' status means the previous push was interrupted — re-push.
             push_incomplete = current_state is not None and current_state.status == "pushing"
+            # A NULL word_map means a migration cleared it — re-push to populate.
+            word_map_missing = current_state is not None and current_state.word_map is None
 
-            if content_unchanged and render_unchanged and not push_incomplete:
+            if (
+                content_unchanged
+                and render_unchanged
+                and not push_incomplete
+                and not word_map_missing
+            ):
                 logger.debug(f"Content and render config unchanged: {vault.name}:{relative_path}")
                 return SyncResult(
                     vault_name=vault.name,

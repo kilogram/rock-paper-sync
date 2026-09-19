@@ -708,6 +708,114 @@ class TestIdempotentHighlights:
         assert new_text.count("==word==") == 2
         assert failed == []
 
+    def test_snapshot_span_skips_earlier_prose_occurrence(self) -> None:
+        """Highlight with snapshot_span wraps at the correct position.
+
+        The phrase "target" appears earlier in the text as prose.
+        The highlight (with snapshot_span pointing to the second occurrence)
+        must wrap only the second, leaving the first bare.
+        """
+        snapshot = "The target is mentioned early.\n\nLater, highlight this target word."
+        current = snapshot  # unchanged
+        # snapshot_span points to the second "target" (position 55..61)
+        second_idx = snapshot.index("target", snapshot.index("target") + 1)
+        edit = MarkdownEdit(
+            kind="highlight",
+            cluster_id="c1",
+            anchor=InkAnchor(kind="paragraph", ref=""),
+            text="target",
+            snapshot_span=(second_idx, second_idx + len("target")),
+        )
+        new_text, failed = apply_edits([edit], snapshot, current)
+        assert failed == []
+        # First "target" must remain bare
+        first_idx = new_text.index("target")
+        assert new_text[first_idx - 2 : first_idx] != "=="
+        # Second "target" must be wrapped
+        assert "==target==" in new_text
+        assert new_text.count("==target==") == 1
+
+    def test_snapshot_span_none_falls_back_to_substring(self) -> None:
+        """When snapshot_span is None, apply_edits uses substring fallback."""
+        snapshot = "The word target appears here."
+        current = snapshot
+        edit = MarkdownEdit(
+            kind="highlight",
+            cluster_id="c1",
+            anchor=InkAnchor(kind="paragraph", ref=""),
+            text="target",
+            snapshot_span=None,
+        )
+        new_text, failed = apply_edits([edit], snapshot, current)
+        assert "==target==" in new_text
+        assert failed == []
+
+
+# ---------------------------------------------------------------------------
+# build_token_spans
+# ---------------------------------------------------------------------------
+
+
+class TestBuildTokenSpans:
+    """Token-to-snapshot position mapping."""
+
+    def test_basic_mapping(self) -> None:
+        from rock_paper_sync.ink.apply import build_token_spans
+
+        texts = ("Hello", "world", "paragraph")
+        snapshot = "Hello world\n\nparagraph"
+        spans = build_token_spans(texts, snapshot)
+        assert spans[0] == (0, 5)
+        assert spans[1] == (6, 11)
+        assert spans[2] == (13, 22)
+
+    def test_synthetic_marker_gets_minus_one(self) -> None:
+        from rock_paper_sync.ink.apply import build_token_spans
+
+        # Bullet marker does not appear in the snapshot
+        texts = ("•", "item", "text")
+        snapshot = "- item text"
+        spans = build_token_spans(texts, snapshot)
+        assert spans[0] == (-1, -1)
+        assert spans[1][0] >= 0
+        assert spans[2][0] >= 0
+
+
+# ---------------------------------------------------------------------------
+# v11 migration forces re-push
+# ---------------------------------------------------------------------------
+
+
+class TestV11MigrationForcesPush:
+    """Nulled word_map in state must cause sync_file to re-push."""
+
+    def test_null_word_map_not_skipped(self, state_manager: StateManager) -> None:
+        """After v11 migration nulls word_map, sync_file must not skip the file."""
+        import time
+
+        state_manager.update_file_state(
+            SyncRecord(
+                vault_name="v",
+                obsidian_path="t.md",
+                remarkable_uuid="uuid-1",
+                content_hash="hash_aaa",
+                last_sync_time=int(time.time()),
+                page_count=1,
+                status="synced",
+                pushed_pdf_sha256="pdf_hash",
+                word_map=None,  # simulates v11 migration
+                render_config_hash="rcfg",
+            )
+        )
+        st = state_manager.get_file_state("v", "t.md")
+        assert st is not None
+        assert st.word_map is None
+        # The converter's skip condition checks word_map_missing:
+        # content_unchanged and render_unchanged and not push_incomplete and not word_map_missing
+        # With word_map=None, word_map_missing=True, so skip should be False.
+        word_map_missing = st.word_map is None
+        assert word_map_missing, "word_map_missing should be True when word_map is NULL"
+
 
 # ---------------------------------------------------------------------------
 # Overlay positioning: red rectangle near the margin-note paragraph

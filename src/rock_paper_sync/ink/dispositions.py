@@ -85,12 +85,20 @@ class MarkdownEdit:
     - ``'append'``: insert text under the ``## Notes`` heading.
     - ``'embed'``: insert ``![[name.svg]]`` after an anchor paragraph.
     - ``'deferred'``: insert an ``UNINTERPRETED`` marker block.
+
+    For highlights, ``snapshot_span`` gives the exact ``(start, end)``
+    character offset in the pushed snapshot text, derived from the word
+    map's token positions.  When set, ``apply_edits`` wraps at that span
+    instead of doing a substring search (which could hit the wrong
+    occurrence).  ``None`` means the word map had no tokens for the
+    highlight rects — ``apply_edits`` falls back to substring search.
     """
 
     kind: Literal["highlight", "append", "embed", "deferred"]
     cluster_id: str
     anchor: InkAnchor
     text: str  # for highlight: the matched text; for append: OCR text; for embed: wikilink
+    snapshot_span: tuple[int, int] | None = None  # (start, end) in snapshot text
 
 
 # ---------------------------------------------------------------------------

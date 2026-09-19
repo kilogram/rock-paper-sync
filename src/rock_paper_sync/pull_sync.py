@@ -37,8 +37,9 @@ from pathlib import Path
 
 from rock_paper_sync.cloud_reader import CloudReader
 from rock_paper_sync.config import LayoutConfig, VaultConfig
+from rock_paper_sync.device_profile import DeviceProfile, device_to_pdf
 from rock_paper_sync.errors import RenderMismatchError, TransformMismatchError
-from rock_paper_sync.ink.apply import apply_edits, write_markdown_atomic
+from rock_paper_sync.ink.apply import apply_edits, build_token_spans, write_markdown_atomic
 from rock_paper_sync.ink.bake import (
     bake_cluster,
     get_attachment_folder,
@@ -48,6 +49,7 @@ from rock_paper_sync.ink.calibration import DeviceRect, check_i8
 from rock_paper_sync.ink.candidates import extract_candidates
 from rock_paper_sync.ink.classify import (
     Classification,
+    GlyphHighlight,
     classify_cluster,
     classify_glyph_highlights,
 )
@@ -80,6 +82,7 @@ class PullResult:
     notes_appended: int = 0
     drawings_saved: int = 0
     deferred_count: int = 0
+    highlight_fallback_count: int = 0  # highlights that fell back to substring matching
     deferred_reasons: list[str] | None = None
     error: str | None = None
 
@@ -321,18 +324,41 @@ class PullSyncEngine:
         dispositions: dict[str, Disposition] = {}
         deferred_reasons: list[str] = []
 
-        # Process glyph highlights — use glyph_id for stable identity
+        # Build token→snapshot-character-span index (once, shared by all highlights).
+        token_spans = build_token_spans(word_map.texts, snapshot_text) if snapshot_text else []
+
+        # Process glyph highlights — use glyph_id for stable identity.
+        # Resolve each highlight's character span via the word map so
+        # apply_edits wraps at the correct position (not the first substring match).
+        highlight_fallback_count = 0
         for gh in glyph_highlights:
             cluster_id = gh.glyph_id
+
+            # GlyphRange rects → word-map tokens → snapshot span
+            span = _resolve_highlight_span(
+                gh,
+                word_map,
+                self._profile,
+                token_spans,
+            )
+            if span is None:
+                highlight_fallback_count += 1
 
             edit = MarkdownEdit(
                 kind="highlight",
                 cluster_id=cluster_id,
                 anchor=InkAnchor(kind="paragraph", ref=""),
                 text=gh.text,
+                snapshot_span=span,
             )
             dispositions[cluster_id] = Highlight(edit=edit)
             edits.append(edit)
+
+        if highlight_fallback_count:
+            logger.info(
+                f"{highlight_fallback_count} highlight(s) fell back to substring matching "
+                f"(no word-map tokens found for rects)"
+            )
 
         # Process stroke clusters
         for classification in classifications:
@@ -549,6 +575,7 @@ class PullSyncEngine:
             notes_appended=notes_count,
             drawings_saved=drawings_count,
             deferred_count=deferred_count,
+            highlight_fallback_count=highlight_fallback_count,
             deferred_reasons=deferred_reasons if deferred_reasons else None,
         )
 
@@ -678,3 +705,46 @@ def _anchor_from_classification(classification: Classification) -> InkAnchor:
     if classification.nearest_anchor_ref is not None:
         return InkAnchor(kind="paragraph", ref=classification.nearest_anchor_ref)
     return DOCUMENT_END
+
+
+def _resolve_highlight_span(
+    gh: GlyphHighlight,
+    word_map: WordMap,
+    profile: DeviceProfile,
+    token_spans: list[tuple[int, int]],
+) -> tuple[int, int] | None:
+    """Resolve a highlight's character span in the snapshot via the word map.
+
+    Transforms each ``GlyphRange`` device rect to PDF coords, finds the
+    token at each rect's centre via ``WordMap.token_at``, then maps the
+    contiguous token range to the snapshot character span using the
+    pre-built ``token_spans`` index.
+
+    Returns:
+        ``(start, end)`` in snapshot text, or ``None`` if no tokens matched.
+    """
+
+    matched_tids: list[int] = []
+    for rx, ry, rw, rh in gh.device_rects:
+        dev_cx = rx + rw / 2.0
+        dev_cy = ry + rh / 2.0
+        pdf_x, pdf_y = device_to_pdf(profile, dev_cx, dev_cy)
+        match = word_map.token_at(gh.page, pdf_x, pdf_y)
+        if match is not None:
+            matched_tids.append(int(match.token))
+
+    if not matched_tids or not token_spans:
+        return None
+
+    # Find the contiguous span in the snapshot covering all matched tokens.
+    valid_spans = [
+        token_spans[tid]
+        for tid in matched_tids
+        if tid < len(token_spans) and token_spans[tid][0] >= 0
+    ]
+    if not valid_spans:
+        return None
+
+    start = min(s for s, _ in valid_spans)
+    end = max(e for _, e in valid_spans)
+    return (start, end)
