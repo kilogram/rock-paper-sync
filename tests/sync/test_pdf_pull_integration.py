@@ -704,3 +704,261 @@ The word target appears here in the second paragraph.
         )
 
         state.close()
+
+    def test_gestures_tick_strikethrough_insertion(self, pdf_pull_env):
+        """Push -> inject tick + strikethrough + caret ink -> pull -> assert edits.
+
+        Exercises:
+        - Tick: stroke on "Tick the second item" checkbox -> ``- [x]``
+        - Strikethrough: stroke through "DELETE THIS PHRASE" -> ``~~...~~``
+        - Caret insertion: caret + text before "here." with mock OCR -> insert
+        - Idempotence: second pull -> zero edits, bytes identical
+        - Re-push: no InkNotPulledError
+        """
+        config = pdf_pull_env["config"]
+        vault = pdf_pull_env["vault"]
+        cloud_sync = pdf_pull_env["cloud_sync"]
+        cache_dir = pdf_pull_env["cache_dir"]
+
+        # Use the full test fixture
+        fixture_md = Path("tests/record_replay/fixtures/test_pdf_substrate.md")
+        if not fixture_md.exists():
+            pytest.skip("test_pdf_substrate.md fixture not found")
+
+        state = StateManager(config.sync.state_database)
+        engine = SyncEngine(config, state, cloud_sync=cloud_sync)
+        vault_config = config.sync.vaults[0]
+
+        test_file = vault / "test-gestures.md"
+        test_file.write_text(fixture_md.read_text(encoding="utf-8"))
+
+        # --- (a) Push ---
+        result = engine.sync_file(vault_config, test_file)
+        assert result.success, f"Push failed: {result.error}"
+        doc_uuid = result.remarkable_uuid
+        assert doc_uuid is not None
+
+        file_state = state.get_file_state("test-vault", "test-gestures.md")
+        assert file_state is not None
+
+        from rock_paper_sync.render.wordmap import WordMap
+
+        word_map = WordMap.from_json(file_state.word_map)
+
+        from rock_paper_sync.device_profile import PROFILES, pdf_to_device
+
+        profile = PROFILES["paper_pro_move"]
+
+        # --- (b) Build synthetic ink for gestures ---
+
+        # 1. Tick: find the "[ ]" token for "Tick the second item"
+        checkbox_tids = []
+        for pw in word_map.pages:
+            for tid, rect in pw.tokens:
+                if word_map.texts[tid] == "[ ]":
+                    checkbox_tids.append((tid, rect, pw.page))
+
+        assert len(checkbox_tids) >= 2, (
+            f"Expected >= 2 unchecked checkboxes, got {len(checkbox_tids)}"
+        )
+
+        # Use the second unchecked checkbox
+        tick_tid, tick_rect, tick_page = checkbox_tids[1]
+        # Convert checkbox rect centre to device coords for stroke
+        tick_cx = (tick_rect.x0 + tick_rect.x1) / 2.0
+        tick_cy = (tick_rect.y0 + tick_rect.y1) / 2.0
+        dev_tick_x, dev_tick_y = pdf_to_device(profile, tick_cx, tick_cy)
+        tick_w_dev = (tick_rect.x1 - tick_rect.x0) / 0.5 * 0.8
+        tick_h_dev = (tick_rect.y1 - tick_rect.y0) / 0.5 * 0.8
+
+        tick_stroke = make_line(
+            [
+                (dev_tick_x - tick_w_dev / 3, dev_tick_y),
+                (dev_tick_x, dev_tick_y + tick_h_dev / 2),
+                (dev_tick_x + tick_w_dev / 3, dev_tick_y - tick_h_dev / 3),
+            ]
+        )
+
+        # 2. Strikethrough: find "DELETE THIS PHRASE" tokens
+        strike_words = ["DELETE", "THIS", "PHRASE"]
+        strike_tokens = []
+        for word in strike_words:
+            for pw in word_map.pages:
+                for tid, rect in pw.tokens:
+                    if word_map.texts[tid] == word and tid not in [t[0] for t in strike_tokens]:
+                        strike_tokens.append((tid, rect, pw.page))
+                        break
+
+        assert len(strike_tokens) >= 3
+
+        # Horizontal line through the middle of these tokens
+        first_rect = strike_tokens[0][1]
+        last_rect = strike_tokens[-1][1]
+        mid_y_pdf = (first_rect.y0 + first_rect.y1) / 2.0
+        dev_sx0, dev_sy = pdf_to_device(profile, first_rect.x0 - 5.0, mid_y_pdf)
+        dev_sx1, _ = pdf_to_device(profile, last_rect.x1 + 5.0, mid_y_pdf)
+
+        strike_stroke = make_line(
+            [
+                (dev_sx0, dev_sy),
+                (dev_sx1, dev_sy),
+            ]
+        )
+
+        # 3. Caret insertion: find "here." token and create caret + text
+        caret_tid = None
+        caret_rect_val = None
+        caret_page_val = 0
+        for pw in word_map.pages:
+            for tid, rect in pw.tokens:
+                if word_map.texts[tid] == "here.":
+                    caret_tid = tid
+                    caret_rect_val = rect
+                    caret_page_val = pw.page
+                    break
+            if caret_tid is not None:
+                break
+
+        assert caret_tid is not None, "Token 'here.' not found"
+
+        lines = word_map.lines_on_page(caret_page_val)
+        caret_line = None
+        caret_line_idx = 0
+        for i, line in enumerate(lines):
+            if caret_tid in line.token_ids:
+                caret_line = line
+                caret_line_idx = i
+                break
+
+        assert caret_line is not None
+        lh = caret_line.rect.y1 - caret_line.rect.y0
+
+        caret_x_pdf = caret_rect_val.x0 - 3.0
+        caret_y_pdf = caret_line.baseline_y - lh * 0.1
+        dev_cx, dev_cy = pdf_to_device(profile, caret_x_pdf, caret_y_pdf)
+        caret_mark = make_line(
+            [
+                (dev_cx - 3.0, dev_cy - 5.0),
+                (dev_cx, dev_cy + 2.0),
+                (dev_cx + 3.0, dev_cy - 5.0),
+            ]
+        )
+
+        # Text stroke above the caret line
+        prev_line = lines[caret_line_idx - 1] if caret_line_idx > 0 else None
+        gap_y_pdf = (
+            (prev_line.rect.y1 + caret_line.rect.y0) / 2.0
+            if prev_line
+            else caret_line.rect.y0 - lh * 0.5
+        )
+        dev_tx, dev_ty = pdf_to_device(profile, caret_x_pdf - 10.0, gap_y_pdf)
+        text_ink = make_line(
+            [
+                (dev_tx, dev_ty),
+                (dev_tx + 40.0, dev_ty - 3.0),
+                (dev_tx + 80.0, dev_ty + 2.0),
+            ]
+        )
+
+        # --- Build separate .rm files per gesture ---
+        # Each stroke goes in its own .rm file with a unique page UUID
+        # but all point to redir=0 (same PDF page). This avoids the
+        # KD-tree clustering merging all strokes into one cluster.
+        # Stroke ids must be globally unique across all .rm files.
+        tick_rm = build_stroke_only_rm(tick_stroke, stroke_id=60)
+        strike_rm = build_stroke_only_rm(strike_stroke, stroke_id=61)
+        # Caret + text strokes go together (they must cluster)
+        caret_rm = build_synthetic_rm_with_stroke(
+            glyph_text=None,
+            device_rects=None,
+            stroke_line=caret_mark,
+            extra_stroke_lines=[text_ink],
+        )
+        # caret_mark gets stroke_id=30, text_ink gets 40 (from build_synthetic_rm_with_stroke)
+
+        # --- (c) Inject .rm into document index ---
+        tick_uuid = "page-0000-0000-0000-gesture-tick"
+        strike_uuid = "page-0000-0000-0000-gesture-stk"
+        caret_uuid = "page-0000-0000-0000-gesture-crt"
+
+        cloud_sync.invalidate_root_cache()
+        current_entries = _read_document_index(cloud_sync, doc_uuid)
+        current_files: dict[str, bytes] = {}
+        for entry in current_entries:
+            current_files[entry.entry_name] = cloud_sync.sync_client.download_blob(entry.hash)
+
+        current_files[f"{doc_uuid}/{tick_uuid}.rm"] = tick_rm
+        current_files[f"{doc_uuid}/{strike_uuid}.rm"] = strike_rm
+        current_files[f"{doc_uuid}/{caret_uuid}.rm"] = caret_rm
+        content_with_cpages = {
+            "cPages": {
+                "pages": [
+                    {"id": tick_uuid, "redir": {"value": 0}},
+                    {"id": strike_uuid, "redir": {"value": 0}},
+                    {"id": caret_uuid, "redir": {"value": 0}},
+                ],
+            },
+            "fileType": "pdf",
+        }
+        current_files[f"{doc_uuid}.content"] = json.dumps(content_with_cpages).encode()
+
+        cloud_sync.sync_client.upload_document(
+            doc_uuid=doc_uuid,
+            files=current_files,
+            broadcast=False,
+        )
+        cloud_sync.invalidate_root_cache()
+
+        # --- (d) Pull with mocked OCR ---
+        class MockOCR:
+            """Mock OCR returning 'missing' for gesture text."""
+
+            def process_image(self, png_bytes: bytes) -> str:
+                return "missing"
+
+        pull_engine = PullSyncEngine(
+            state=state,
+            cloud_reader=cloud_sync,
+            layout=config.layout,
+            cache_dir=cache_dir,
+            ocr_processor=MockOCR(),
+        )
+
+        pull_result = pull_engine.pull_file(vault_config, "test-gestures.md")
+        assert pull_result.success, f"Pull failed: {pull_result.error}"
+
+        # --- (e) Assert edits ---
+        content = test_file.read_text(encoding="utf-8")
+
+        # Tick: "- [ ] Tick the second item" -> "- [x] Tick the second item"
+        assert "[x] Tick" in content, (
+            "Expected checked checkbox for 'Tick the second item' in content"
+        )
+
+        # Strikethrough: "DELETE THIS PHRASE" wrapped in ~~
+        assert "~~DELETE THIS PHRASE~~" in content, "Expected ~~DELETE THIS PHRASE~~ in content"
+
+        # Caret insertion: "missing" inserted before "here."
+        assert "missing" in content and "here." in content, (
+            "Expected 'missing' and 'here.' in content"
+        )
+
+        # --- (f) Second pull: idempotent ---
+        content_after_pull1 = content
+        pull2 = pull_engine.pull_file(vault_config, "test-gestures.md")
+        assert pull2.success
+        assert pull2.ticks == 0
+        assert pull2.strikethroughs == 0
+
+        content_after_pull2 = test_file.read_text(encoding="utf-8")
+        assert content_after_pull2 == content_after_pull1, (
+            "Markdown should be byte-identical after second pull"
+        )
+
+        # --- (g) Re-push: no InkNotPulledError ---
+        test_file.write_text(content_after_pull2 + "\n\nPost-gesture paragraph.\n")
+        engine2 = SyncEngine(config, state, cloud_sync=cloud_sync)
+        result2 = engine2.sync_file(vault_config, test_file)
+        assert result2.success, f"Re-push failed: {result2.error}"
+
+        state.close()

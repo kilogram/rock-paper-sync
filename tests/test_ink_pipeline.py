@@ -816,6 +816,117 @@ class TestV11MigrationForcesPush:
         word_map_missing = st.word_map is None
         assert word_map_missing, "word_map_missing should be True when word_map is NULL"
 
+    def test_null_word_map_triggers_push_via_sync_file(self, tmp_path: Path) -> None:
+        """sync_file with null word_map actually pushes (not just skip=False)."""
+        import time
+        from unittest.mock import MagicMock
+
+        from rock_paper_sync.config import (
+            AppConfig,
+            CloudConfig,
+            LayoutConfig,
+            OCRConfig,
+            SyncConfig,
+            VaultConfig,
+        )
+
+        vault_dir = tmp_path / "vault"
+        vault_dir.mkdir()
+        md_file = vault_dir / "t.md"
+        md_file.write_text("# Test\n\nSome content.\n")
+
+        db = tmp_path / "state.db"
+        config = AppConfig(
+            sync=SyncConfig(
+                vaults=[
+                    VaultConfig(
+                        name="v",
+                        path=vault_dir,
+                        remarkable_folder=None,
+                        include_patterns=["**/*.md"],
+                        exclude_patterns=[],
+                    )
+                ],
+                state_database=db,
+                debounce_seconds=1,
+            ),
+            cloud=CloudConfig(base_url="http://fake:3000"),
+            layout=LayoutConfig(),
+            log_level="debug",
+            log_file=tmp_path / "test.log",
+            ocr=OCRConfig(),
+            cache_dir=tmp_path / "cache",
+        )
+
+        state = StateManager(db)
+
+        # Pre-seed state with null word_map (simulates v11 migration)
+        state.update_file_state(
+            SyncRecord(
+                vault_name="v",
+                obsidian_path="t.md",
+                remarkable_uuid="uuid-v11",
+                content_hash="will_match",
+                last_sync_time=int(time.time()),
+                page_count=1,
+                status="synced",
+                pushed_pdf_sha256="old_hash",
+                word_map=None,
+                render_config_hash=config.layout.render_config_hash(),
+            )
+        )
+
+        # Compute the same content hash the parser will produce so
+        # content_unchanged is True (only word_map_missing triggers push).
+        from rock_paper_sync.parser import parse_markdown_file
+
+        doc = parse_markdown_file(md_file)
+        state.update_file_state(
+            SyncRecord(
+                vault_name="v",
+                obsidian_path="t.md",
+                remarkable_uuid="uuid-v11",
+                content_hash=doc.content_hash,
+                last_sync_time=int(time.time()),
+                page_count=1,
+                status="synced",
+                pushed_pdf_sha256="old_hash",
+                word_map=None,
+                render_config_hash=config.layout.render_config_hash(),
+            )
+        )
+
+        # Mock cloud_sync so the upload path is exercised but no network call
+        from rock_paper_sync.rm_cloud_sync import InkClearance
+
+        mock_cloud = MagicMock()
+        mock_cloud.get_root_state.return_value = ([], "root_hash", None)
+        mock_cloud.ensure_folder_hierarchy.return_value = None
+        mock_cloud.upload_pdf_document.return_value = None
+        mock_cloud.mint_clearance_if_no_ink.return_value = InkClearance(
+            doc_uuid="uuid-v11", doc_index_hash="fake_hash"
+        )
+        mock_cloud.get_document_index_hash.return_value = None
+
+        from rock_paper_sync.converter import SyncEngine
+
+        engine = SyncEngine(config, state, cloud_sync=mock_cloud)
+        vault_config = config.sync.vaults[0]
+
+        result = engine.sync_file(vault_config, md_file)
+
+        assert result.success, f"sync_file failed: {result.error}"
+        assert not result.skipped, "File should NOT be skipped when word_map is NULL"
+        # The push should have called upload_pdf_document
+        assert mock_cloud.upload_pdf_document.called, "upload_pdf_document should have been called"
+
+        # After push, word_map should be populated
+        st = state.get_file_state("v", "t.md")
+        assert st is not None
+        assert st.word_map is not None, "word_map should be populated after re-push"
+
+        state.close()
+
 
 # ---------------------------------------------------------------------------
 # Overlay positioning: red rectangle near the margin-note paragraph
