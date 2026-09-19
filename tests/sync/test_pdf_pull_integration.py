@@ -1,4 +1,4 @@
-"""Integration tests for Phase 4 PDF pull with rmfakecloud.
+"""Integration tests for Phase 4/5 PDF pull with rmfakecloud.
 
 Validates the full pull-then-push cycle:
 (a) Push a markdown file with known content.
@@ -9,6 +9,11 @@ Validates the full pull-then-push cycle:
     the margin paragraph, SVG file on disk.
 (e) Push again without discard_ink: no InkNotPulledError, index has no .rm,
     placements has one Placed.
+
+Note: rmfakecloud container start can race on first run (the ``rmfakecloud``
+fixture waits for readiness, but a transient connection refusal is possible
+on cold start).  These tests use a mocked OCR, not a real OCR container, so
+no OCR service startup is involved.
 """
 
 from __future__ import annotations

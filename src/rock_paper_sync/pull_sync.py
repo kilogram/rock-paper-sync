@@ -122,6 +122,7 @@ class PullSyncEngine:
         cache_dir: Path,
         ocr_processor: object | None = None,
         ink_config: InkConfig | None = None,
+        ocr_confidence_threshold: float = 0.7,
     ) -> None:
         """Initialise pull sync engine.
 
@@ -132,6 +133,10 @@ class PullSyncEngine:
             cache_dir: Directory for caching downloaded files.
             ocr_processor: Optional OCR processor (Phase 4: simple interface).
             ink_config: Ink gesture configuration (default: ``InkConfig()``).
+            ocr_confidence_threshold: Minimum OCR confidence to accept a
+                gesture's text; below this the gesture is ``Baked`` with
+                an ``UNINTERPRETED`` marker.  Passed from
+                ``OCRConfig.confidence_threshold``.
         """
         self.state = state
         self.cloud_reader = cloud_reader
@@ -139,6 +144,7 @@ class PullSyncEngine:
         self.cache_dir = cache_dir
         self.ocr_processor = ocr_processor
         self.ink_config = ink_config or InkConfig()
+        self.ocr_confidence_threshold = ocr_confidence_threshold
         self._profile = layout.get_device_profile()
 
     def pull_file(
@@ -332,6 +338,9 @@ class PullSyncEngine:
         edits: list[MarkdownEdit] = []
         dispositions: dict[str, Disposition] = {}
         deferred_reasons: list[str] = []
+        # Overrides for stroke -> cluster_id mapping when gesture processing
+        # splits a cluster into consumed + leftover parts (fix 4).
+        stroke_cluster_overrides: dict[str, str] = {}
 
         # Build token→snapshot-character-span index (once, shared by all highlights).
         token_spans = build_token_spans(word_map.texts, snapshot_text) if snapshot_text else []
@@ -416,6 +425,7 @@ class PullSyncEngine:
                     cluster_page,
                     token_spans,
                     self.ink_config.strikethrough_action,
+                    snapshot_text,
                 )
 
                 if gesture.kind != "none":
@@ -432,6 +442,7 @@ class PullSyncEngine:
                         dispositions,
                         deferred_reasons,
                         classification,
+                        stroke_cluster_overrides,
                     )
                 else:
                     # No gesture matched -> bake as drawing
@@ -479,7 +490,10 @@ class PullSyncEngine:
             cid = cluster.cluster_id
             for cs in cluster.strokes:
                 sid = f"{cs.stroke.stroke_id.part1}:{cs.stroke.stroke_id.part2}"
-                stroke_rows.append((vault.name, obsidian_path, doc_uuid, sid, cid))
+                # Use the override cluster_id if this stroke was routed to
+                # a leftover cluster by gesture processing (fix 4).
+                effective_cid = stroke_cluster_overrides.get(sid, cid)
+                stroke_rows.append((vault.name, obsidian_path, doc_uuid, sid, effective_cid))
 
         for gh in glyph_highlights:
             stroke_rows.append((vault.name, obsidian_path, doc_uuid, gh.glyph_id, gh.glyph_id))
@@ -660,6 +674,7 @@ class PullSyncEngine:
         dispositions: dict[str, Disposition],
         deferred_reasons: list[str],
         classification: Classification,
+        stroke_cluster_overrides: dict[str, str] | None = None,
     ) -> None:
         """Process a recognised gesture into edits and dispositions.
 
@@ -702,9 +717,7 @@ class PullSyncEngine:
             )
             text_value = ocr_text.text if hasattr(ocr_text, "text") else str(ocr_text)
 
-            # Check OCR confidence (reuse OCRConfig threshold via layout)
-            # Use 0.7 as default threshold
-            confidence_threshold = 0.7
+            confidence_threshold = self.ocr_confidence_threshold
 
             if ocr_confidence < confidence_threshold:
                 # Low confidence -> bake as UNINTERPRETED
@@ -768,12 +781,28 @@ class PullSyncEngine:
         dispositions[cid] = Consumed(edit_id=str(uuid_module.uuid4()), edit=edit)
         edits.append(edit)
 
+        # Additional contiguous-run edits (non-adjacent strikethrough/correction)
+        for extra in gesture.extra_edits:
+            extra_edit = MarkdownEdit(
+                kind=edit_kind,  # type: ignore[arg-type]
+                cluster_id=cid,
+                anchor=anchor,
+                text=extra.replacement_text,
+                snapshot_span=extra.snapshot_span,
+            )
+            edits.append(extra_edit)
+
         # Bake leftover strokes as a separate drawing cluster
         if gesture.leftover_strokes:
             from rock_paper_sync.ink.gestures import _derive_cluster_id, _stroke_id_str
 
             leftover_ids = [_stroke_id_str(s) for s in gesture.leftover_strokes]
             leftover_cid = _derive_cluster_id(leftover_ids)
+
+            # Record overrides so stroke_rows uses leftover_cid for these strokes
+            if stroke_cluster_overrides is not None:
+                for sid in leftover_ids:
+                    stroke_cluster_overrides[sid] = leftover_cid
             leftover_cluster = InkCluster(
                 cluster_id=leftover_cid,
                 strokes=tuple(gesture.leftover_strokes),
@@ -807,11 +836,14 @@ class PullSyncEngine:
     def _ocr_gesture_strokes(
         self,
         strokes: tuple[CandidateStroke, ...],
-    ) -> str | None:
+    ) -> object | None:
         """OCR a set of gesture text strokes.
 
         Renders them as a synthetic cluster and sends to OCR.
-        Returns OCR text or ``None`` if OCR is unavailable.
+        Returns the raw OCR result (with ``.text`` and optionally
+        ``.confidence`` attributes), a ``str``, or ``None`` if OCR is
+        unavailable.  ``_process_gesture`` extracts text and confidence
+        from the returned object.
 
         Raises:
             Any exception other than ``OCRServiceError`` — those are bugs,
@@ -836,9 +868,7 @@ class PullSyncEngine:
             png_bytes = render_cluster_to_png(synth_cluster, self._profile)
             if hasattr(self.ocr_processor, "process_image"):
                 result = self.ocr_processor.process_image(png_bytes)
-                if result and hasattr(result, "text"):
-                    return result.text
-                if isinstance(result, str):
+                if result is not None:
                     return result
             return None
         except OCRServiceError:

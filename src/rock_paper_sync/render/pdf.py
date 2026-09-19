@@ -415,7 +415,52 @@ def _boxes_to_wordmap(
         # Sort by (page, y, x) for reading order
         boxes.sort(key=lambda b: (b[0], b[1], b[2]))
 
+        # Deduplicate: a <sup> or line-height:0 element can produce
+        # multiple leaf boxes for the same token on the same page
+        # (one for the base text and one for the superscript).
+        # For overflow-wrap, a token legitimately produces multiple
+        # boxes at non-adjacent x positions (I1).
+        #
+        # Strategy: merge boxes that are adjacent or overlapping
+        # (x-end of one within 2px of x-start of next, AND y-ranges
+        # overlap) into a single union box.  Boxes separated by a
+        # horizontal gap > 2px are overflow-wrap and kept separate.
+        by_page: dict[int, list[tuple[float, float, float, float]]] = {}
         for page_idx, px_x, px_y, px_w, px_h in boxes:
+            by_page.setdefault(page_idx, []).append((px_x, px_y, px_w, px_h))
+
+        deduped: list[tuple[int, float, float, float, float]] = []
+        for page_idx, page_boxes in by_page.items():
+            if len(page_boxes) <= 1:
+                for bx, by, bw, bh in page_boxes:
+                    deduped.append((page_idx, bx, by, bw, bh))
+                continue
+
+            # Sort by x position, then merge adjacent boxes
+            sorted_boxes = sorted(page_boxes, key=lambda b: b[0])
+            merged: list[list[float]] = []  # [x0, y0, x1, y1]
+            for bx, by, bw, bh in sorted_boxes:
+                bx1 = bx + bw
+                by1 = by + bh
+                if merged:
+                    prev = merged[-1]
+                    # Adjacent: prev x1 within 2px of current x0,
+                    # and y ranges overlap
+                    y_overlap = prev[1] < by1 and by < prev[3]
+                    x_adjacent = bx - prev[2] < 2.0
+                    if x_adjacent and y_overlap:
+                        # Merge: union of the two
+                        prev[0] = min(prev[0], bx)
+                        prev[1] = min(prev[1], by)
+                        prev[2] = max(prev[2], bx1)
+                        prev[3] = max(prev[3], by1)
+                        continue
+                merged.append([bx, by, bx1, by1])
+
+            for x0, y0, x1, y1 in merged:
+                deduped.append((page_idx, x0, y0, x1 - x0, y1 - y0))
+
+        for page_idx, px_x, px_y, px_w, px_h in deduped:
             # Convert CSS px to PDF pt
             x0 = px_x * _CSS_PX_TO_PT
             y0 = px_y * _CSS_PX_TO_PT

@@ -199,6 +199,8 @@ def _run_pull_sync(
             cloud_reader=cloud_sync,
             layout=config.layout,
             cache_dir=cache_dir,
+            ink_config=config.ink,
+            ocr_confidence_threshold=config.ocr.confidence_threshold,
         )
 
         for vault_config in vault_configs:

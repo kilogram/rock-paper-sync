@@ -259,3 +259,190 @@ class TestOcrGestureStrokes:
             engine._ocr_gesture_strokes((_make_test_candidate(98),))
 
         state.close()
+
+
+class TestOcrConfidenceThreshold:
+    """Fix 3: OCR confidence threshold from config."""
+
+    def test_high_threshold_rejects_low_confidence(self, tmp_path: Path) -> None:
+        """threshold=0.95 with confidence=0.9 -> Baked + UNINTERPRETED."""
+        from rock_paper_sync.ink.classify import Classification
+        from rock_paper_sync.ink.clusters import InkCluster
+        from rock_paper_sync.ink.dispositions import (
+            Baked,
+            Disposition,
+            MarkdownEdit,
+        )
+        from rock_paper_sync.ink.gestures import GestureResult
+
+        state = StateManager(tmp_path / "test.db")
+        mock_cloud = MagicMock()
+
+        class ConfidenceOCR:
+            def process_image(self, png_bytes: bytes) -> object:
+                class Result:
+                    text = "replacement"
+                    confidence = 0.9
+
+                return Result()
+
+        engine = PullSyncEngine(
+            state=state,
+            cloud_reader=mock_cloud,
+            layout=LayoutConfig(),
+            cache_dir=tmp_path / "cache",
+            ocr_processor=ConfidenceOCR(),
+            ocr_confidence_threshold=0.95,
+        )
+
+        # Build a minimal gesture that needs OCR
+        cs = _make_test_candidate(80)
+        cs2 = _make_test_candidate(81)
+        gesture = GestureResult(
+            kind="caret_insertion",
+            token_ids=(),
+            snapshot_span=(10, 10),
+            replacement_text=None,
+            leftover_strokes=(),
+            needs_ocr=True,
+            ocr_strokes=(cs2,),
+        )
+
+        cluster = InkCluster(
+            cluster_id="test_cluster",
+            strokes=(cs,),
+            bbox=(0, 0, 10, 10),
+            page_index=0,
+            redir=0,
+        )
+
+        vault_dir = tmp_path / "vault"
+        vault_dir.mkdir()
+        from rock_paper_sync.config import VaultConfig
+
+        vault = VaultConfig(
+            name="v",
+            path=vault_dir,
+            remarkable_folder=None,
+            include_patterns=["**/*.md"],
+            exclude_patterns=[],
+        )
+
+        edits: list[MarkdownEdit] = []
+        dispositions: dict[str, Disposition] = {}
+        deferred_reasons: list[str] = []
+
+        classification = Classification(kind="drawing", cluster=cluster)
+
+        engine._process_gesture(
+            gesture,
+            cluster,
+            "test_cluster",
+            None,  # type: ignore[arg-type]  # word_map not used
+            vault,
+            "test.md",
+            0,
+            [],
+            edits,
+            dispositions,
+            deferred_reasons,
+            classification,
+        )
+
+        # With threshold 0.95 and confidence 0.9, should be Baked (UNINTERPRETED)
+        assert "test_cluster" in dispositions
+        assert isinstance(dispositions["test_cluster"], Baked), (
+            f"Expected Baked, got {type(dispositions['test_cluster']).__name__}"
+        )
+
+        state.close()
+
+    def test_low_threshold_accepts_low_confidence(self, tmp_path: Path) -> None:
+        """threshold=0.5 with confidence=0.9 -> Consumed."""
+        from rock_paper_sync.ink.classify import Classification
+        from rock_paper_sync.ink.clusters import InkCluster
+        from rock_paper_sync.ink.dispositions import (
+            Consumed,
+            Disposition,
+            MarkdownEdit,
+        )
+        from rock_paper_sync.ink.gestures import GestureResult
+
+        state = StateManager(tmp_path / "test.db")
+        mock_cloud = MagicMock()
+
+        class ConfidenceOCR:
+            def process_image(self, png_bytes: bytes) -> object:
+                class Result:
+                    text = "replacement"
+                    confidence = 0.9
+
+                return Result()
+
+        engine = PullSyncEngine(
+            state=state,
+            cloud_reader=mock_cloud,
+            layout=LayoutConfig(),
+            cache_dir=tmp_path / "cache",
+            ocr_processor=ConfidenceOCR(),
+            ocr_confidence_threshold=0.5,
+        )
+
+        cs = _make_test_candidate(82)
+        cs2 = _make_test_candidate(83)
+        gesture = GestureResult(
+            kind="caret_insertion",
+            token_ids=(),
+            snapshot_span=(10, 10),
+            replacement_text=None,
+            leftover_strokes=(),
+            needs_ocr=True,
+            ocr_strokes=(cs2,),
+        )
+
+        cluster = InkCluster(
+            cluster_id="test_cluster2",
+            strokes=(cs,),
+            bbox=(0, 0, 10, 10),
+            page_index=0,
+            redir=0,
+        )
+
+        vault_dir = tmp_path / "vault"
+        vault_dir.mkdir()
+        from rock_paper_sync.config import VaultConfig
+
+        vault = VaultConfig(
+            name="v",
+            path=vault_dir,
+            remarkable_folder=None,
+            include_patterns=["**/*.md"],
+            exclude_patterns=[],
+        )
+
+        edits: list[MarkdownEdit] = []
+        dispositions: dict[str, Disposition] = {}
+        deferred_reasons: list[str] = []
+
+        classification = Classification(kind="drawing", cluster=cluster)
+
+        engine._process_gesture(
+            gesture,
+            cluster,
+            "test_cluster2",
+            None,  # type: ignore[arg-type]
+            vault,
+            "test.md",
+            0,
+            [],
+            edits,
+            dispositions,
+            deferred_reasons,
+            classification,
+        )
+
+        # With threshold 0.5 and confidence 0.9, should be Consumed
+        assert "test_cluster2" in dispositions
+        assert isinstance(dispositions["test_cluster2"], Consumed), (
+            f"Expected Consumed, got {type(dispositions['test_cluster2']).__name__}"
+        )

@@ -194,16 +194,16 @@ class WordMap:
         return tuple(matches)
 
     def lines_on_page(self, page: int) -> tuple[LineBox, ...]:
-        """Group tokens on *page* into horizontal lines by y0 proximity.
+        """Group tokens on *page* into horizontal lines by vertical overlap.
 
-        Tokens are sorted by ``(y0, x0)``, then grouped greedily: a token
-        joins the current line if its ``y0`` is within 1pt of the line's
-        ``y0``.  This works because the CSS layout engine gives all tokens
-        on the same typographic line an identical ``y0``; wrapped lines of
-        the same paragraph differ in ``y0`` by the full line pitch (~15pt).
+        A token joins the current line if its vertical centre lies within
+        the line's ``[y0, y1]`` band **and** its height is at most 1.5x
+        the line's median token height (prevents heading-sized tokens from
+        snowball-merging with body text below).
 
-        Each ``LineBox`` carries the union rect, sorted token ids (left to
-        right), and an estimated baseline (``rect.y1``).
+        This handles checkbox tokens whose ``y0`` differs from their item
+        text by a few points: the checkbox's vertical centre still falls
+        within the text line's y-band, so they share a ``LineBox``.
 
         Returns:
             Tuple of ``LineBox`` in top-to-bottom order.
@@ -218,65 +218,61 @@ class WordMap:
 
         sorted_toks = sorted(page_tokens, key=lambda t: (t[1].y0, t[1].x0))
 
-        # Tolerance for grouping: tokens on the same typographic line share
-        # the same y0 (from the CSS layout engine).  We use a tight epsilon
-        # (1.0pt) to distinguish wrapped lines whose y-ranges nearly touch
-        # but whose y0 values differ by the full line pitch (~15pt).
-        y0_epsilon = 1.0
-
         lines: list[LineBox] = []
         cur_ids: list[TokenId] = [sorted_toks[0][0]]
+        cur_heights: list[float] = [sorted_toks[0][1].y1 - sorted_toks[0][1].y0]
         cur_y0 = sorted_toks[0][1].y0
         cur_y1 = sorted_toks[0][1].y1
         cur_x0 = sorted_toks[0][1].x0
         cur_x1 = sorted_toks[0][1].x1
 
+        def _flush() -> None:
+            id_to_x: dict[int, float] = {}
+            for pw2 in self.pages:
+                if pw2.page == page:
+                    for ti, r in pw2.tokens:
+                        if ti in cur_ids and int(ti) not in id_to_x:
+                            id_to_x[int(ti)] = r.x0
+            cur_ids_sorted = sorted(cur_ids, key=lambda t: id_to_x.get(int(t), 0.0))
+            lines.append(
+                LineBox(
+                    rect=Rect(x0=cur_x0, y0=cur_y0, x1=cur_x1, y1=cur_y1),
+                    token_ids=tuple(cur_ids_sorted),
+                    baseline_y=cur_y1,
+                )
+            )
+
         for tid, rect in sorted_toks[1:]:
-            if abs(rect.y0 - cur_y0) <= y0_epsilon:
+            tok_cy = (rect.y0 + rect.y1) / 2.0
+            tok_h = rect.y1 - rect.y0
+
+            # Vertical centre falls within the current line's y-band
+            in_band = cur_y0 <= tok_cy <= cur_y1
+
+            # Height guard: token must not be absurdly tall relative to
+            # the line's existing tokens (prevents merging a heading with
+            # the paragraph below it when the y-bands happen to overlap).
+            sorted_h = sorted(cur_heights)
+            median_h = sorted_h[len(sorted_h) // 2]
+            height_ok = tok_h <= 1.5 * median_h or median_h <= 0
+
+            if in_band and height_ok:
                 cur_ids.append(tid)
+                cur_heights.append(tok_h)
                 cur_y0 = min(cur_y0, rect.y0)
                 cur_y1 = max(cur_y1, rect.y1)
                 cur_x0 = min(cur_x0, rect.x0)
                 cur_x1 = max(cur_x1, rect.x1)
             else:
-                # Sort ids left-to-right within the line
-                cur_ids_sorted = sorted(
-                    cur_ids,
-                    key=lambda t: next(
-                        r.x0
-                        for pw in self.pages
-                        if pw.page == page
-                        for ti, r in pw.tokens
-                        if ti == t
-                    ),
-                )
-                lines.append(
-                    LineBox(
-                        rect=Rect(x0=cur_x0, y0=cur_y0, x1=cur_x1, y1=cur_y1),
-                        token_ids=tuple(cur_ids_sorted),
-                        baseline_y=cur_y1,
-                    )
-                )
+                _flush()
                 cur_ids = [tid]
+                cur_heights = [tok_h]
                 cur_y0 = rect.y0
                 cur_y1 = rect.y1
                 cur_x0 = rect.x0
                 cur_x1 = rect.x1
 
-        # Flush last line
-        cur_ids_sorted = sorted(
-            cur_ids,
-            key=lambda t: next(
-                r.x0 for pw in self.pages if pw.page == page for ti, r in pw.tokens if ti == t
-            ),
-        )
-        lines.append(
-            LineBox(
-                rect=Rect(x0=cur_x0, y0=cur_y0, x1=cur_x1, y1=cur_y1),
-                token_ids=tuple(cur_ids_sorted),
-                baseline_y=cur_y1,
-            )
-        )
+        _flush()
         return tuple(lines)
 
     def nearest_block(self, page: int, x: float, y: float) -> BlockBox | None:

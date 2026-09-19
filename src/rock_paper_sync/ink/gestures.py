@@ -39,6 +39,7 @@ from rock_paper_sync.ink.clusters import InkCluster
 from rock_paper_sync.render.wordmap import LineBox, Rect, TokenId, WordMap
 
 __all__ = [
+    "GestureEdit",
     "GestureResult",
     "classify_gesture",
 ]
@@ -149,17 +150,29 @@ def _cluster_bbox_pdf(geoms: list[_StrokeGeom]) -> Rect:
 
 
 @dataclass(frozen=True, slots=True)
+class GestureEdit:
+    """One contiguous edit produced by a gesture.
+
+    A strikethrough over non-adjacent tokens produces one ``GestureEdit``
+    per contiguous run so that untouched tokens between runs survive.
+    """
+
+    snapshot_span: tuple[int, int]
+    replacement_text: str
+
+
+@dataclass(frozen=True, slots=True)
 class GestureResult:
     """Outcome of gesture classification for a cluster.
 
     Attributes:
         kind: The gesture type, or ``"none"`` if no gesture was found.
         token_ids: Tokens affected by the gesture (empty for ``"none"``).
-        snapshot_span: ``(start, end)`` in the snapshot for the edit,
+        snapshot_span: ``(start, end)`` in the snapshot for the primary edit,
             or ``None``.
-        replacement_text: The text to insert/replace (for tick: ``"[x]"``;
-            for strikethrough: ``"~~text~~"``; for insertion: the OCR text
-            placeholder ``None`` means OCR needed).
+        replacement_text: The text to insert/replace for the primary edit.
+        extra_edits: Additional contiguous-run edits (for non-contiguous
+            strikethrough/correction).  Empty for single-run edits.
         leftover_strokes: Strokes not consumed by the gesture (bake these).
         checkbox_already_checked: True when a tick lands on ``[x]``.
         needs_ocr: True when the gesture requires OCR for its text
@@ -174,6 +187,7 @@ class GestureResult:
     snapshot_span: tuple[int, int] | None
     replacement_text: str | None
     leftover_strokes: tuple[CandidateStroke, ...]
+    extra_edits: tuple[GestureEdit, ...] = ()
     checkbox_already_checked: bool = False
     needs_ocr: bool = False
     ocr_strokes: tuple[CandidateStroke, ...] = ()
@@ -262,6 +276,49 @@ def _line_height(line: LineBox) -> float:
     return line.rect.y1 - line.rect.y0
 
 
+def _contiguous_runs(tids: list[TokenId]) -> list[list[TokenId]]:
+    """Split a sorted list of TokenIds into contiguous runs.
+
+    Two tokens are contiguous if their int values differ by 1.
+    """
+    if not tids:
+        return []
+    runs: list[list[TokenId]] = [[tids[0]]]
+    for tid in tids[1:]:
+        if int(tid) == int(runs[-1][-1]) + 1:
+            runs[-1].append(tid)
+        else:
+            runs.append([tid])
+    return runs
+
+
+def _build_run_edits(
+    runs: list[list[TokenId]],
+    token_spans: list[tuple[int, int]],
+    snapshot_text: str,
+    strikethrough_action: str,
+) -> list[GestureEdit]:
+    """Build one GestureEdit per contiguous run using the literal snapshot slice."""
+    edits: list[GestureEdit] = []
+    for run in runs:
+        spans = [
+            token_spans[int(tid)]
+            for tid in run
+            if int(tid) < len(token_spans) and token_spans[int(tid)][0] >= 0
+        ]
+        if not spans:
+            continue
+        start = min(s for s, _ in spans)
+        end = max(e for _, e in spans)
+        original = snapshot_text[start:end]
+        if strikethrough_action == "delete":
+            replacement = ""
+        else:
+            replacement = f"~~{original}~~"
+        edits.append(GestureEdit(snapshot_span=(start, end), replacement_text=replacement))
+    return edits
+
+
 def _derive_cluster_id(stroke_ids: list[str]) -> str:
     """Deterministic cluster id from sorted stroke ids (matches clusters.py)."""
     joined = "\n".join(sorted(stroke_ids))
@@ -310,7 +367,18 @@ def _try_tick(
             expanded = _expand_rect(tok_rect, TICK_RECT_EXPANSION_PT)
             overlap = _rect_overlap_fraction(cluster_rect, expanded)
 
-            if overlap >= TICK_OVERLAP_THRESHOLD:
+            # Centroid must be inside the *unexpanded* checkbox box to
+            # reject strokes on adjacent item text that merely graze
+            # the checkbox edge.  The expansion is for overlap tolerance
+            # only; the centroid check ensures the stroke is aimed at
+            # the checkbox, not at the text next to it.
+            cluster_cx = (cluster_rect.x0 + cluster_rect.x1) / 2.0
+            cluster_cy = (cluster_rect.y0 + cluster_rect.y1) / 2.0
+            centroid_inside = (
+                tok_rect.x0 <= cluster_cx < tok_rect.x1 and tok_rect.y0 <= cluster_cy < tok_rect.y1
+            )
+
+            if overlap >= TICK_OVERLAP_THRESHOLD and centroid_inside:
                 if text == "[x]":
                     # Already checked
                     return GestureResult(
@@ -404,17 +472,14 @@ def _try_strikethrough(
     token_spans: list[tuple[int, int]],
     lines: tuple[LineBox, ...],
     strikethrough_action: str,
+    snapshot_text: str = "",
 ) -> GestureResult:
     """Detect a strikethrough gesture.
 
     One or more near-horizontal strokes that overlap tokens on a line.
-    Each qualifying stroke produces its own edit.  For simplicity, the
-    first qualifying stroke's covered tokens produce the result; multi-
-    stroke strikethroughs (spanning multiple lines) are handled by
-    successive calls at the pull level.
-
-    Returns a GestureResult for the first stroke that qualifies, with
-    leftover strokes being those that did not participate.
+    Covered tokens are grouped into contiguous runs (by token id) and
+    each run produces its own edit from the literal snapshot slice, so
+    non-adjacent words between runs survive verbatim.
     """
     horizontal_strokes: list[_StrokeGeom] = []
     other_strokes: list[CandidateStroke] = []
@@ -451,30 +516,20 @@ def _try_strikethrough(
     # Deduplicate and sort by token id
     unique_tids = sorted(set(all_covered), key=int)
 
-    # Build snapshot span from the range of covered tokens
-    valid_spans = [
-        token_spans[int(tid)]
-        for tid in unique_tids
-        if int(tid) < len(token_spans) and token_spans[int(tid)][0] >= 0
-    ]
-    if not valid_spans:
+    # Group into contiguous runs to avoid deleting uncovered tokens
+    # between non-adjacent covered tokens.
+    runs = _contiguous_runs(unique_tids)
+    run_edits = _build_run_edits(runs, token_spans, snapshot_text, strikethrough_action)
+    if not run_edits:
         return _NO_GESTURE
 
-    start = min(s for s, _ in valid_spans)
-    end = max(e for _, e in valid_spans)
-
-    # Build replacement text
-    covered_text = " ".join(word_map.texts[tid] for tid in unique_tids)
-    if strikethrough_action == "delete":
-        replacement = ""
-    else:
-        replacement = f"~~{covered_text}~~"
-
+    primary = run_edits[0]
     return GestureResult(
         kind="strikethrough",
         token_ids=tuple(unique_tids),
-        snapshot_span=(start, end),
-        replacement_text=replacement,
+        snapshot_span=primary.snapshot_span,
+        replacement_text=primary.replacement_text,
+        extra_edits=tuple(run_edits[1:]),
         leftover_strokes=tuple(other_strokes),
     )
 
@@ -675,6 +730,7 @@ def _try_correction(
     token_spans: list[tuple[int, int]],
     lines: tuple[LineBox, ...],
     strikethrough_action: str,
+    snapshot_text: str = "",
 ) -> GestureResult:
     """Detect a correction gesture.
 
@@ -771,30 +827,26 @@ def _try_correction(
 
     unique_tids = sorted(set(all_covered), key=int)
 
-    valid_spans = [
-        token_spans[int(tid)]
-        for tid in unique_tids
-        if int(tid) < len(token_spans) and token_spans[int(tid)][0] >= 0
-    ]
-    if not valid_spans:
+    # Group into contiguous runs (same fix as strikethrough)
+    runs = _contiguous_runs(unique_tids)
+    run_edits = _build_run_edits(runs, token_spans, snapshot_text, strikethrough_action)
+    if not run_edits:
         return _NO_GESTURE
 
-    start = min(s for s, _ in valid_spans)
-    end = max(e for _, e in valid_spans)
-
-    covered_text = " ".join(word_map.texts[tid] for tid in unique_tids)
-    if strikethrough_action == "delete":
-        # With delete, correction still shows the new text
-        # The old text is deleted and replaced
-        replacement_prefix = ""
-    else:
-        replacement_prefix = f"~~{covered_text}~~ "
+    # For correction, the OCR text is appended after the last run's replacement.
+    # The primary edit is the first run; extra_edits are the rest.
+    # The replacement_prefix carries the strikethrough text; OCR text is
+    # appended by _process_gesture in pull_sync.
+    primary = run_edits[0]
+    # Append a space to primary replacement for OCR text to follow
+    replacement_prefix = primary.replacement_text + " " if primary.replacement_text else ""
 
     return GestureResult(
         kind="correction",
         token_ids=tuple(unique_tids),
-        snapshot_span=(start, end),
+        snapshot_span=primary.snapshot_span,
         replacement_text=replacement_prefix,  # OCR text appended later
+        extra_edits=tuple(run_edits[1:]),
         leftover_strokes=tuple(other_strokes),
         needs_ocr=True,
         ocr_strokes=tuple(text_above),
@@ -813,6 +865,7 @@ def classify_gesture(
     page: int,
     token_spans: list[tuple[int, int]],
     strikethrough_action: str = "mark",
+    snapshot_text: str = "",
 ) -> GestureResult:
     """Classify a content-page cluster as a gesture or ``"none"``.
 
@@ -826,6 +879,8 @@ def classify_gesture(
         page: PDF page index (redir value).
         token_spans: Pre-built ``(start, end)`` per token in the snapshot.
         strikethrough_action: ``"mark"`` or ``"delete"``.
+        snapshot_text: The pushed snapshot markdown text, used to build
+            literal replacement text for contiguous token runs.
 
     Returns:
         ``GestureResult`` with the classification.
@@ -850,6 +905,7 @@ def classify_gesture(
         token_spans,
         lines,
         strikethrough_action,
+        snapshot_text,
     )
     if result.kind != "none":
         return result
@@ -863,6 +919,7 @@ def classify_gesture(
         token_spans,
         lines,
         strikethrough_action,
+        snapshot_text,
     )
     if result.kind != "none":
         return result

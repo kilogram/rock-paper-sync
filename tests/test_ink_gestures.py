@@ -205,6 +205,7 @@ class TestCheckboxTick:
         self,
         rendered_word_map: WordMap,
         token_spans: list[tuple[int, int]],
+        snapshot_text: str,
     ) -> None:
         """A stroke cluster inside an unchecked checkbox -> tick gesture."""
         # Checkbox tokens carry "[ ]" (unchecked) or "[x]" (checked)
@@ -238,6 +239,7 @@ class TestCheckboxTick:
             PROFILE,
             page,
             token_spans,
+            snapshot_text=snapshot_text,
         )
 
         assert result.kind == "tick"
@@ -249,6 +251,7 @@ class TestCheckboxTick:
         self,
         rendered_word_map: WordMap,
         token_spans: list[tuple[int, int]],
+        snapshot_text: str,
     ) -> None:
         """A stroke on an already-checked box -> already_checked."""
         # Find the "[x]" token (checked checkbox)
@@ -277,6 +280,7 @@ class TestCheckboxTick:
             PROFILE,
             page,
             token_spans,
+            snapshot_text=snapshot_text,
         )
 
         assert result.kind == "tick"
@@ -286,6 +290,7 @@ class TestCheckboxTick:
         self,
         rendered_word_map: WordMap,
         token_spans: list[tuple[int, int]],
+        snapshot_text: str,
     ) -> None:
         """A stroke nowhere near a checkbox -> no gesture (drawing)."""
         # Place stroke far from any checkbox, e.g. in the margin
@@ -299,6 +304,7 @@ class TestCheckboxTick:
             PROFILE,
             0,
             token_spans,
+            snapshot_text=snapshot_text,
         )
 
         assert result.kind == "none"
@@ -316,6 +322,7 @@ class TestStrikethrough:
         self,
         rendered_word_map: WordMap,
         token_spans: list[tuple[int, int]],
+        snapshot_text: str,
     ) -> None:
         """A horizontal stroke through 'DELETE THIS PHRASE' -> strikethrough."""
         words = ["DELETE", "THIS", "PHRASE"]
@@ -350,6 +357,7 @@ class TestStrikethrough:
             page,
             token_spans,
             strikethrough_action="mark",
+            snapshot_text=snapshot_text,
         )
 
         assert result.kind == "strikethrough"
@@ -363,6 +371,7 @@ class TestStrikethrough:
         self,
         rendered_word_map: WordMap,
         token_spans: list[tuple[int, int]],
+        snapshot_text: str,
     ) -> None:
         """Strikethrough with delete action -> empty replacement."""
         words = ["DELETE", "THIS", "PHRASE"]
@@ -396,6 +405,7 @@ class TestStrikethrough:
             page,
             token_spans,
             strikethrough_action="delete",
+            snapshot_text=snapshot_text,
         )
 
         assert result.kind == "strikethrough"
@@ -405,6 +415,7 @@ class TestStrikethrough:
         self,
         rendered_word_map: WordMap,
         token_spans: list[tuple[int, int]],
+        snapshot_text: str,
     ) -> None:
         """A horizontal stroke in the margin (no token overlap) -> drawing."""
         # Place a wide horizontal stroke in the left margin
@@ -418,6 +429,7 @@ class TestStrikethrough:
             PROFILE,
             0,
             token_spans,
+            snapshot_text=snapshot_text,
         )
 
         assert result.kind == "none"
@@ -435,6 +447,7 @@ class TestCaretInsertion:
         self,
         rendered_word_map: WordMap,
         token_spans: list[tuple[int, int]],
+        snapshot_text: str,
     ) -> None:
         """A caret + text strokes above -> caret_insertion with needs_ocr."""
         # Find "here." token for the caret insertion target
@@ -496,6 +509,7 @@ class TestCaretInsertion:
             PROFILE,
             page,
             token_spans,
+            snapshot_text=snapshot_text,
         )
 
         assert result.kind == "caret_insertion"
@@ -506,6 +520,7 @@ class TestCaretInsertion:
         self,
         rendered_word_map: WordMap,
         token_spans: list[tuple[int, int]],
+        snapshot_text: str,
     ) -> None:
         """Text strokes above a line with no caret -> drawing (no gesture)."""
         token = _find_token_by_text(rendered_word_map, "here.")
@@ -555,6 +570,7 @@ class TestCaretInsertion:
             PROFILE,
             page,
             token_spans,
+            snapshot_text=snapshot_text,
         )
 
         # Single stroke can't be caret+text, so no gesture
@@ -564,6 +580,7 @@ class TestCaretInsertion:
         self,
         rendered_word_map: WordMap,
         token_spans: list[tuple[int, int]],
+        snapshot_text: str,
     ) -> None:
         """A caret stroke alone (no text above) -> drawing."""
         token = _find_token_by_text(rendered_word_map, "here.")
@@ -605,6 +622,7 @@ class TestCaretInsertion:
             PROFILE,
             page,
             token_spans,
+            snapshot_text=snapshot_text,
         )
 
         # Single stroke, needs 2 for caret insertion
@@ -623,6 +641,7 @@ class TestCorrection:
         self,
         rendered_word_map: WordMap,
         token_spans: list[tuple[int, int]],
+        snapshot_text: str,
     ) -> None:
         """Strikethrough + text above -> correction with needs_ocr."""
         words = ["DELETE", "THIS", "PHRASE"]
@@ -685,6 +704,7 @@ class TestCorrection:
             page,
             token_spans,
             strikethrough_action="mark",
+            snapshot_text=snapshot_text,
         )
 
         assert result.kind == "correction"
@@ -724,7 +744,220 @@ class TestLinesOnPage:
 
 
 # ---------------------------------------------------------------------------
-# 6. Replay hook (skip if recording doesn't exist)
+# 6. Review-fix tests
+# ---------------------------------------------------------------------------
+
+
+class TestNonContiguousStrikethrough:
+    """Fix 1: non-contiguous strikethrough preserves skipped words."""
+
+    def test_skip_middle_word_preserves_it(
+        self,
+        rendered_word_map: WordMap,
+        token_spans: list[tuple[int, int]],
+        snapshot_text: str,
+    ) -> None:
+        """Two strokes over DELETE and PHRASE (skipping THIS) -> two edits,
+        THIS survives verbatim."""
+        delete_tok = _find_token_by_text(rendered_word_map, "DELETE")
+        phrase_tok = _find_token_by_text(rendered_word_map, "PHRASE")
+        assert delete_tok is not None and phrase_tok is not None
+
+        page = 0
+        for pw in rendered_word_map.pages:
+            for t, _ in pw.tokens:
+                if t == delete_tok[0]:
+                    page = pw.page
+                    break
+
+        mid_y = (delete_tok[1].y0 + delete_tok[1].y1) / 2.0
+
+        s1 = _make_candidate_stroke(
+            Rect(x0=delete_tok[1].x0 - 2, y0=mid_y - 1, x1=delete_tok[1].x1 + 2, y1=mid_y + 1),
+            stroke_id_part2=901,
+            redir=page,
+        )
+        s2 = _make_candidate_stroke(
+            Rect(x0=phrase_tok[1].x0 - 2, y0=mid_y - 1, x1=phrase_tok[1].x1 + 2, y1=mid_y + 1),
+            stroke_id_part2=902,
+            redir=page,
+        )
+        cluster = _make_cluster([s1, s2], redir=page)
+
+        result = classify_gesture(
+            cluster,
+            rendered_word_map,
+            PROFILE,
+            page,
+            token_spans,
+            strikethrough_action="mark",
+            snapshot_text=snapshot_text,
+        )
+
+        assert result.kind == "strikethrough"
+        assert "~~DELETE~~" in (result.replacement_text or "")
+        # THIS must NOT appear inside ~~ markers
+        assert "THIS" not in (result.replacement_text or "")
+        # The extra edit covers PHRASE
+        assert len(result.extra_edits) >= 1
+        assert "~~PHRASE~~" in result.extra_edits[0].replacement_text
+
+        # Apply and verify THIS survived
+        from rock_paper_sync.ink.apply import apply_edits
+        from rock_paper_sync.ink.dispositions import InkAnchor, MarkdownEdit
+
+        all_edits = [
+            MarkdownEdit(
+                kind="strikethrough",
+                cluster_id="test",
+                anchor=InkAnchor(kind="document_end", ref=""),
+                text=result.replacement_text or "",
+                snapshot_span=result.snapshot_span,
+            ),
+        ]
+        for extra in result.extra_edits:
+            all_edits.append(
+                MarkdownEdit(
+                    kind="strikethrough",
+                    cluster_id="test",
+                    anchor=InkAnchor(kind="document_end", ref=""),
+                    text=extra.replacement_text,
+                    snapshot_span=extra.snapshot_span,
+                ),
+            )
+        new_text, failed = apply_edits(all_edits, snapshot_text, snapshot_text)
+        assert not failed
+        assert "~~DELETE~~" in new_text
+        assert "~~PHRASE~~" in new_text
+        assert " THIS " in new_text  # THIS survived between the two edits
+
+
+class TestCheckboxAndItemShareLine:
+    """Fix 2a: checkbox token shares a LineBox with its item text."""
+
+    def test_checkbox_on_same_line_as_item(
+        self,
+        rendered_word_map: WordMap,
+    ) -> None:
+        """The '[ ]' token and 'First' share the same LineBox."""
+        lines = rendered_word_map.lines_on_page(0)
+        checkbox_line = None
+        for line in lines:
+            texts = [rendered_word_map.texts[t] for t in line.token_ids]
+            if "[ ]" in texts and "First" in texts:
+                checkbox_line = line
+                break
+        assert checkbox_line is not None, "Checkbox '[ ]' and 'First' should share a LineBox"
+
+
+class TestFootnoteTokenDedup:
+    """Fix 2b: footnote-ref token has exactly one rect per page."""
+
+    def test_footnote_ref_single_rect(self, tmp_path: Path) -> None:
+        """A <sup> footnote ref does not produce a phantom second rect."""
+        from rock_paper_sync.config import LayoutConfig
+        from rock_paper_sync.parser import parse_markdown_file
+        from rock_paper_sync.render.pdf import PdfRenderer
+
+        md = tmp_path / "fn.md"
+        md.write_text(
+            "---\ntitle: fn test\n---\n\n"
+            "# Footnote test\n\n"
+            "Some text here[^1] and more text.\n\n"
+            "[^1]: A footnote.\n"
+        )
+        doc = parse_markdown_file(md)
+        renderer = PdfRenderer(LayoutConfig())
+        result = renderer.render(doc, PROFILE)
+        wm = result.word_map
+
+        # Count how many times each token appears in pages[].tokens
+        from collections import Counter
+
+        tid_counts: Counter[int] = Counter()
+        for pw in wm.pages:
+            for tid, _ in pw.tokens:
+                tid_counts[int(tid)] += 1
+
+        for tid_int, count in tid_counts.items():
+            assert count == 1, (
+                f"Token {tid_int} ({wm.texts[tid_int]!r}) appears {count} times "
+                f"on its page; expected 1 (dedup fix)"
+            )
+
+
+class TestWrappedParagraphLinesSeparate:
+    """Fix 2: wrapped lines of the same paragraph stay separate."""
+
+    def test_wrapped_lines_separate(
+        self,
+        rendered_word_map: WordMap,
+    ) -> None:
+        """'DELETE' and 'remains' (different wrapped lines) are in different LineBoxes."""
+        lines = rendered_word_map.lines_on_page(0)
+        delete_line_idx = None
+        remains_line_idx = None
+        for i, line in enumerate(lines):
+            texts = [rendered_word_map.texts[t] for t in line.token_ids]
+            if "DELETE" in texts:
+                delete_line_idx = i
+            if "remains" in texts:
+                remains_line_idx = i
+        assert delete_line_idx is not None
+        assert remains_line_idx is not None
+        assert delete_line_idx != remains_line_idx, (
+            "'DELETE' and 'remains' should be on separate lines (different y0)"
+        )
+
+
+class TestTickOvershoot:
+    """Fix 5: tick shifted by 50% of box width -> not a tick."""
+
+    def test_shifted_tick_is_not_tick(
+        self,
+        rendered_word_map: WordMap,
+        token_spans: list[tuple[int, int]],
+        snapshot_text: str,
+    ) -> None:
+        """A stroke shifted right by 50% of the checkbox width is not a tick."""
+        checkbox_tids = []
+        for pw in rendered_word_map.pages:
+            for tid, rect in pw.tokens:
+                if rendered_word_map.texts[tid] == "[ ]":
+                    checkbox_tids.append((tid, rect, pw.page))
+
+        assert len(checkbox_tids) >= 1
+        tid, rect, page = checkbox_tids[0]
+
+        w = rect.x1 - rect.x0
+        # Shift by 50% of box width to the right
+        shifted = Rect(
+            x0=rect.x0 + w * 0.5,
+            y0=rect.y0,
+            x1=rect.x1 + w * 0.5,
+            y1=rect.y1,
+        )
+
+        stroke = _make_candidate_stroke(shifted, stroke_id_part2=950, redir=page)
+        cluster = _make_cluster([stroke], redir=page)
+
+        result = classify_gesture(
+            cluster,
+            rendered_word_map,
+            PROFILE,
+            page,
+            token_spans,
+            snapshot_text=snapshot_text,
+        )
+
+        # Centroid of shifted stroke is outside expanded checkbox -> not a tick
+        assert result.kind != "tick", (
+            "A stroke shifted by 50% of the box width should not be a tick"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 7. Replay hook (skip if recording doesn't exist)
 # ---------------------------------------------------------------------------
 
 
