@@ -19,7 +19,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from rmscene import CrdtId
+from rmscene import CrdtId, SceneLineItemBlock
 
 from rock_paper_sync.annotations.domain.stroke import Stroke
 from rock_paper_sync.rm_file_extractor import RmFileExtractor
@@ -95,8 +95,18 @@ def extract_candidates(
         # Extract strokes from the .rm file
         try:
             extractor = RmFileExtractor.from_path(rm_path)
+            # Try full CRDT-aware extraction first
             index = extractor.get_scene_index()
             strokes = Stroke.from_scene_index(index)
+
+            # Fallback: if no strokes found via bundles, extract raw
+            # SceneLineItemBlock entries (handles synthetic .rm files
+            # and simple device-created strokes without full CRDT tree)
+            if not strokes:
+                for block in extractor.blocks:
+                    if isinstance(block, SceneLineItemBlock):
+                        stroke = Stroke.from_line_block(block)
+                        strokes.append(stroke)
         except Exception:
             logger.warning(f"Failed to extract strokes from {rm_path}", exc_info=True)
             continue

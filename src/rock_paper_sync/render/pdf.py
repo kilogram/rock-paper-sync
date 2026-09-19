@@ -28,7 +28,7 @@ import weasyprint
 from rock_paper_sync.config import LayoutConfig
 from rock_paper_sync.device_profile import DeviceProfile
 from rock_paper_sync.parser import MarkdownDocument
-from rock_paper_sync.render.html import TOKEN_ATTR, ast_to_html
+from rock_paper_sync.render.html import ANCHOR_ATTR, TOKEN_ATTR, ast_to_html
 from rock_paper_sync.render.wordmap import (
     BakedOverlay,
     PageWords,
@@ -427,8 +427,12 @@ class PdfRenderer:
         # We need to reconstruct the token list from the AST
         token_texts = _collect_token_texts(doc, self._layout.trailing_blank_pages)
 
+        # Also collect anchor positions for overlay placement
+        anchor_boxes: dict[str, tuple[int, float, float, float, float]] = {}
+
         for page_idx, page in enumerate(wp_doc.pages):
             _walk_box_tree(page._page_box, token_boxes, page_idx)
+            _walk_anchor_boxes(page._page_box, anchor_boxes, page_idx)
 
         # Build word map (asserts I1)
         word_map = _boxes_to_wordmap(
@@ -438,7 +442,9 @@ class PdfRenderer:
         )
 
         # Compute placements for overlays (I11: total)
-        placements = _compute_placements(overlays, word_map, len(wp_doc.pages), profile)
+        placements = _compute_placements(
+            overlays, word_map, len(wp_doc.pages), profile, anchor_boxes
+        )
 
         # Write PDF bytes
         pdf_bytes = wp_doc.write_pdf()
@@ -531,13 +537,55 @@ def _collect_token_texts(
     return texts
 
 
+def _walk_anchor_boxes(
+    page_box: object,
+    anchor_boxes: dict[str, tuple[int, float, float, float, float]],
+    page_idx: int,
+) -> None:
+    """Walk a WeasyPrint page box tree and collect anchor block positions.
+
+    Finds elements with ``data-anchor`` attributes and records their
+    bounding box (page, x, y, w, h) in CSS px.  Only the first
+    occurrence of each anchor ref is recorded (stable across pages).
+
+    Args:
+        page_box: WeasyPrint page box.
+        anchor_boxes: Dict mapping anchor_ref -> (page, x, y, w, h).
+        page_idx: Zero-based page index.
+    """
+
+    def _recurse(box: object) -> None:
+        element = getattr(box, "element", None)
+        if element is not None and hasattr(element, "get"):
+            anchor_val = element.get(ANCHOR_ATTR)
+            if anchor_val is not None and anchor_val not in anchor_boxes:
+                pos_x = getattr(box, "position_x", None)
+                pos_y = getattr(box, "position_y", None)
+                width = getattr(box, "width", None)
+                height = getattr(box, "height", None)
+                if pos_x is not None and pos_y is not None and width and height:
+                    anchor_boxes[anchor_val] = (
+                        page_idx,
+                        float(pos_x) * _CSS_PX_TO_PT,
+                        float(pos_y) * _CSS_PX_TO_PT,
+                        float(width) * _CSS_PX_TO_PT,
+                        float(height) * _CSS_PX_TO_PT,
+                    )
+
+        children = getattr(box, "children", None)
+        if children:
+            for child in children:
+                _recurse(child)
+
+    _recurse(page_box)
+
+
 def _build_overlay_html(overlays: Sequence[BakedOverlay]) -> str:
     """Build HTML for overlay images appended after the body content.
 
-    Overlays are rendered as visible images placed after the last body
-    block (document_end anchors) or inlined (paragraph anchors handled
-    by the CSS layout flow). For now, all overlays are placed at the
-    end of the document body as inline images.
+    Each overlay is rendered as an inline ``<img>`` in a div at the
+    end of the document.  Positional accuracy comes from the placement
+    metadata (``_compute_placements``), not from CSS positioning.
 
     Returns:
         HTML string to append to the body.
@@ -547,7 +595,6 @@ def _build_overlay_html(overlays: Sequence[BakedOverlay]) -> str:
     parts: list[str] = []
     for overlay in overlays:
         b64 = base64.b64encode(overlay.svg).decode("ascii")
-        # Render as an inline image; the CSS controls sizing
         w = overlay.offset.x1 - overlay.offset.x0
         h = overlay.offset.y1 - overlay.offset.y0
         parts.append(
@@ -564,41 +611,50 @@ def _compute_placements(
     word_map: WordMap,
     page_count: int,
     profile: DeviceProfile,
+    anchor_boxes: dict[str, tuple[int, float, float, float, float]] | None = None,
 ) -> tuple[Placed | Relocated, ...]:
     """Compute a placement for every overlay (I11: total).
 
     For each overlay:
-    - If anchor == "document_end": place on the last body page.
-    - If anchor matches a paragraph in the word map: place on that page.
-    - Otherwise: ``Relocated`` to an orphaned ink page (last page + 1).
+    - If anchor == "document_end": ``Placed`` on the last body page.
+    - If anchor matches a ``data-anchor`` box from the layout: ``Placed``
+      on that page at ``anchor_box_origin + overlay.offset``.
+    - Otherwise: ``Relocated`` to an orphaned-ink page (page_count).
+
+    Args:
+        overlays: Overlays to place.
+        word_map: Word map (used as fallback for page info).
+        page_count: Total rendered page count.
+        profile: Device profile.
+        anchor_boxes: Mapping of anchor ref -> (page, x, y, w, h) in PDF pts,
+            from ``_walk_anchor_boxes``.  ``None`` treated as empty.
 
     Returns:
         Tuple with one ``Placed`` or ``Relocated`` per overlay.
     """
     placements: list[Placed | Relocated] = []
     orphan_page = page_count  # hypothetical appended page
+    ab = anchor_boxes or {}
 
     for overlay in overlays:
         anchor = overlay.anchor
         offset = overlay.offset
 
         if anchor == "document_end":
-            # Place on the last content page
             last_page = max(0, len(word_map.pages) - 1) if word_map.pages else 0
             placements.append(Placed(overlay=overlay, page=last_page, rect=offset))
+        elif anchor in ab:
+            # Positional placement: anchor box origin + overlay offset
+            pg, ax, ay, aw, ah = ab[anchor]
+            placed_rect = Rect(
+                x0=ax + offset.x0,
+                y0=ay + offset.y0,
+                x1=ax + offset.x1,
+                y1=ay + offset.y1,
+            )
+            placements.append(Placed(overlay=overlay, page=pg, rect=placed_rect))
         else:
-            # Try to place on the first page that has tokens
-            # (anchor matching by ref is done in pull_sync; here we just need
-            # to put the overlay somewhere reasonable on a content page)
-            placed = False
-            for pw in word_map.pages:
-                if pw.tokens:
-                    placements.append(Placed(overlay=overlay, page=pw.page, rect=offset))
-                    placed = True
-                    break
-
-            if not placed:
-                # Anchor not found -> Relocated to orphan page
-                placements.append(Relocated(overlay=overlay, page=orphan_page, rect=offset))
+            # Anchor not found in the layout -> Relocated to orphan page
+            placements.append(Relocated(overlay=overlay, page=orphan_page, rect=offset))
 
     return tuple(placements)

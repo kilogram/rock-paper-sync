@@ -45,9 +45,12 @@ Each vault is synced independently:
 - CLI --vault flag to sync specific vault
 """
 
+import fcntl
 import logging
 import time
 import uuid as uuid_module
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -66,8 +69,9 @@ from .generator import RemarkableGenerator
 from .ocr.integration import OCRProcessor
 from .parser import parse_markdown_file
 from .render.pdf import PdfRenderer
+from .render.wordmap import BakedOverlay, Rect
 from .rm_cloud_client import RmCloudClient
-from .rm_cloud_sync import InkNotPulledError, RmCloudSync
+from .rm_cloud_sync import InkClearance, InkNotPulledError, RmCloudSync
 from .state import StateManager, SyncRecord
 from .virtual_state import VirtualDeviceState
 
@@ -80,6 +84,51 @@ RETRY_BACKOFF_MULTIPLIER = 2
 
 # Batch operation constants
 MAX_BATCH_DELETION_SIZE = 100
+
+
+class SyncLockError(Exception):
+    """Raised when another sync process holds the lock.
+
+    Attributes:
+        lock_path: Path to the lock file.
+    """
+
+    def __init__(self, lock_path: Path) -> None:
+        self.lock_path = lock_path
+        super().__init__(
+            f"Another sync is running (lock: {lock_path}). "
+            f"Wait for it to finish or remove the lock file if stale."
+        )
+
+
+@contextmanager
+def sync_lock(db_path: Path) -> Iterator[None]:
+    """Acquire an exclusive process lock for the sync run.
+
+    Uses ``fcntl.flock(LOCK_EX | LOCK_NB)`` on ``<state_db>.lock``.
+    A second invocation while the lock is held raises ``SyncLockError``.
+
+    Args:
+        db_path: Path to the state database file.
+
+    Yields:
+        Nothing; the lock is held for the duration of the ``with`` block.
+
+    Raises:
+        SyncLockError: If another process holds the lock.
+    """
+    lock_path = db_path.with_suffix(".lock")
+    lock_fd = lock_path.open("w")
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        lock_fd.close()
+        raise SyncLockError(lock_path)
+    try:
+        yield
+    finally:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        lock_fd.close()
 
 
 class ResyncRequiredError(Exception):
@@ -362,13 +411,22 @@ class SyncEngine:
             else:
                 logger.info(f"Generating new PDF document for {markdown_path}")
 
-            # Strip annotation markers before rendering
+            # Strip annotation markers and UNINTERPRETED markers before rendering
             raw_content = markdown_path.read_text(encoding="utf-8")
             clean_doc = md_doc
 
-            if has_annotation_markers(raw_content):
-                logger.debug("Stripping annotation markers before PDF render")
-                clean_content = strip_annotation_markers(raw_content)
+            needs_re_parse = has_annotation_markers(raw_content)
+            from .ink.apply import strip_uninterpreted_markers
+
+            has_uninterpreted = "RPS:UNINTERPRETED" in raw_content
+
+            if needs_re_parse or has_uninterpreted:
+                logger.debug("Stripping markers before PDF render")
+                clean_content = raw_content
+                if needs_re_parse:
+                    clean_content = strip_annotation_markers(clean_content)
+                if has_uninterpreted:
+                    clean_content = strip_uninterpreted_markers(clean_content)
 
                 import tempfile
 
@@ -384,8 +442,44 @@ class SyncEngine:
                 finally:
                     tmp_path.unlink()
 
-            # Render PDF
-            rendered = self._pdf_renderer.render(clean_doc, self._device_profile)
+            # Load baked overlays from previous pull (Phase 4)
+            overlays: list[BakedOverlay] = []
+            baked_clusters = self.state.get_baked_clusters(vault.name, relative_path)
+            for bc in baked_clusters:
+                attachment = bc.get("attachment")
+                anchor_ref = bc.get("anchor_ref", "document_end")
+                if attachment:
+                    # Read the SVG from the vault attachment folder
+                    from .ink.bake import get_attachment_folder
+
+                    attach_dir = get_attachment_folder(vault.path)
+                    svg_path = attach_dir / attachment
+                    if svg_path.exists():
+                        svg_bytes = svg_path.read_bytes()
+                        # Parse the rect from stored JSON
+                        import json
+
+                        rect_json = bc.get("rect")
+                        if rect_json:
+                            rd = json.loads(rect_json)
+                            offset = Rect(
+                                x0=rd["x0"],
+                                y0=rd["y0"],
+                                x1=rd["x1"],
+                                y1=rd["y1"],
+                            )
+                        else:
+                            offset = Rect(x0=0, y0=0, x1=50, y1=50)
+                        overlays.append(
+                            BakedOverlay(
+                                anchor=anchor_ref or "document_end",
+                                offset=offset,
+                                svg=svg_bytes,
+                            )
+                        )
+
+            # Render PDF with overlays
+            rendered = self._pdf_renderer.render(clean_doc, self._device_profile, overlays=overlays)
             page_count = len(rendered.word_map.pages)
 
             # Build PDF payload (I2)
@@ -411,9 +505,27 @@ class SyncEngine:
             )
             self.state.update_file_state(pushing_state)
 
-            # Mint ink clearance (I9)
+            # Ink clearance (I9): reuse stored clearance if valid,
+            # else mint if no ink, else raise unless discard_ink.
+            clearance: InkClearance
             if discard_ink:
                 clearance = self.cloud_sync.force_clearance(doc_uuid)
+            elif (
+                current_state is not None
+                and current_state.ink_clearance_hash is not None
+                and not self.state.has_deferred_clusters(vault.name, relative_path)
+            ):
+                # Stored clearance from a successful pull — verify it matches
+                current_cloud_hash = self.cloud_sync.get_document_index_hash(doc_uuid)
+                if current_cloud_hash == current_state.ink_clearance_hash:
+                    clearance = InkClearance(
+                        doc_uuid=doc_uuid,
+                        doc_index_hash=current_state.ink_clearance_hash,
+                    )
+                    logger.info(f"Reusing stored ink clearance for {doc_uuid}")
+                else:
+                    # Cloud changed since pull — try minting fresh
+                    clearance = self.cloud_sync.mint_clearance_if_no_ink(doc_uuid)
             else:
                 clearance = self.cloud_sync.mint_clearance_if_no_ink(doc_uuid)
 
@@ -425,7 +537,7 @@ class SyncEngine:
                 broadcast=broadcast,
             )
 
-            # Flip to synced
+            # Flip to synced; clear ink_clearance_hash (index changed by push)
             _, _, current_gen = self.cloud_sync.get_root_state()
             current_doc_hash = self.cloud_sync.get_document_index_hash(doc_uuid)
 
@@ -442,6 +554,7 @@ class SyncEngine:
                 pushed_pdf_sha256=rendered.pdf_sha256,
                 word_map=rendered.word_map.to_json(),
                 render_config_hash=render_cfg_hash,
+                ink_clearance_hash=None,  # Cleared: push changed the index
             )
             self.state.update_file_state(synced_state)
             self.state.log_sync_action(
@@ -460,7 +573,7 @@ class SyncEngine:
 
             logger.info(
                 f"Successfully synced {vault.name}:{markdown_path} -> {doc_uuid} "
-                f"({page_count} page(s), PDF)"
+                f"({page_count} page(s), PDF, {len(overlays)} overlay(s))"
             )
             return SyncResult(
                 vault_name=vault.name,
@@ -931,6 +1044,9 @@ class SyncEngine:
 
     def sync_all_changed(self, vault_name: str | None = None) -> list[SyncResult]:
         """Sync all files that have changed since last sync.
+
+        The caller (CLI) is responsible for holding ``sync_lock`` around
+        the entire sync run (pull + push).
 
         Uses state database to identify files with different content hashes.
         Errors in individual files don't stop the overall sync.

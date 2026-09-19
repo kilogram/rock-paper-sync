@@ -550,3 +550,70 @@ class TestAttachmentFolder:
 
         folder = get_attachment_folder(tmp_path)
         assert folder == tmp_path / "assets"
+
+
+# ---------------------------------------------------------------------------
+# I8: Transform cross-check — negative test (rects offset by 30 pt)
+# ---------------------------------------------------------------------------
+
+
+class TestI8TransformMismatch:
+    """I8: highlight rects that don't match word-map tokens raise TransformMismatchError."""
+
+    def test_offset_rects_fail_i8(self, simple_word_map, profile) -> None:
+        """GlyphRange rects offset by 30 pt from the true position fail I8."""
+        # Build device rects that are 30 pt off from where "Hello" is
+        # in the word map. "Hello" is at (36, 36, 100, 50) in PDF pts.
+        # In device coords, that's approximately (x_dev, y_dev) via pdf_to_device.
+        from rock_paper_sync.device_profile import pdf_to_device
+        from rock_paper_sync.ink.calibration import _DeviceRect, check_i8
+
+        # True PDF centre of the "Hello" token
+        true_cx = (36.0 + 100.0) / 2.0
+        true_cy = (36.0 + 50.0) / 2.0
+        # Convert to device coords
+        dev_x, dev_y = pdf_to_device(profile, true_cx, true_cy)
+        # Offset by 60 device px (30 pt / 0.5 scale) to guarantee a miss
+        bad_x = dev_x + 120.0
+        bad_y = dev_y + 120.0
+
+        device_rects = [_DeviceRect(x=bad_x, y=bad_y, w=20.0, h=10.0)]
+        result = check_i8("Hello", device_rects, simple_word_map, profile, page=0)
+        assert not result.i8_pass
+
+
+# ---------------------------------------------------------------------------
+# Process lock
+# ---------------------------------------------------------------------------
+
+
+class TestSyncLock:
+    """Process lock prevents concurrent sync invocations."""
+
+    def test_lock_prevents_concurrent(self, tmp_path: Path) -> None:
+        """Acquiring the lock twice raises SyncLockError."""
+        from rock_paper_sync.converter import SyncLockError, sync_lock
+
+        db_path = tmp_path / "state.db"
+        db_path.touch()
+
+        with sync_lock(db_path):
+            # Second attempt should fail immediately
+            with pytest.raises(SyncLockError) as exc_info:
+                with sync_lock(db_path):
+                    pass  # pragma: no cover
+            assert "Another sync is running" in str(exc_info.value)
+
+    def test_lock_released_after_context(self, tmp_path: Path) -> None:
+        """After the context exits, the lock can be reacquired."""
+        from rock_paper_sync.converter import sync_lock
+
+        db_path = tmp_path / "state.db"
+        db_path.touch()
+
+        with sync_lock(db_path):
+            pass
+
+        # Should succeed now
+        with sync_lock(db_path):
+            pass

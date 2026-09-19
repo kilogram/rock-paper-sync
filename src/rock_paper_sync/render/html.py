@@ -20,12 +20,15 @@ No imports of weasyprint, fitz, sync_v3, or rm_cloud_sync.
 
 from __future__ import annotations
 
+import hashlib
 import html as html_mod
 import re
 
 from rock_paper_sync.parser import BlockType, ContentBlock, FormatStyle
 
-__all__ = ["ast_to_html", "TOKEN_ATTR"]
+__all__ = ["ast_to_html", "ANCHOR_ATTR", "TOKEN_ATTR"]
+
+ANCHOR_ATTR = "data-anchor"
 
 TOKEN_ATTR = "data-token"
 
@@ -253,6 +256,18 @@ def ast_to_html(
     """
     token_counter = [0]  # mutable counter passed through
     body_parts: list[str] = []
+    # Track paragraph text counts for anchor ordinals
+    _anchor_counts: dict[str, int] = {}
+
+    def _anchor_attr(text: str) -> str:
+        """Compute a data-anchor attribute for a block's text."""
+        normalised = " ".join(text.split())
+        if not normalised:
+            return ""
+        text_hash = hashlib.sha256(normalised.encode("utf-8")).hexdigest()
+        ordinal = _anchor_counts.get(normalised, 0)
+        _anchor_counts[normalised] = ordinal + 1
+        return f' {ANCHOR_ATTR}="{text_hash}#{ordinal}"'
 
     for block in blocks:
         text = _strip_rps_markers(block.text) if block.text else ""
@@ -261,17 +276,20 @@ def ast_to_html(
 
         if block.type == BlockType.HEADER:
             tag = f"h{min(block.level, 6)}"
+            anchor = _anchor_attr(text)
             content = _render_block_tokens(
                 text, block.formatting, token_counter, block.type, block.level
             )
-            body_parts.append(f"<{tag}>{content}</{tag}>")
+            body_parts.append(f"<{tag}{anchor}>{content}</{tag}>")
 
         elif block.type == BlockType.PARAGRAPH:
+            anchor = _anchor_attr(text)
             content = _render_block_tokens(text, block.formatting, token_counter, block.type)
-            body_parts.append(f"<p>{content}</p>")
+            body_parts.append(f"<p{anchor}>{content}</p>")
 
         elif block.type == BlockType.LIST_ITEM:
             indent_class = f" rps-indent-{block.level}" if block.level > 1 else ""
+            anchor = _anchor_attr(text)
 
             # Task items (checkbox) get the box as their marker -- no bullet.
             is_task = text.startswith(_CHECKBOX_CHECKED) or text.startswith(_CHECKBOX_UNCHECKED)
@@ -283,7 +301,8 @@ def ast_to_html(
                     text, block.formatting, token_counter, block.type, block.level
                 )
                 body_parts.append(
-                    f'<div class="rps-list-item rps-task-item{indent_class}">{content}</div>'
+                    f'<div class="rps-list-item rps-task-item{indent_class}"{anchor}>'
+                    f"{content}</div>"
                 )
             else:
                 # Detect ordered-number prefix ("N. ") from parser
@@ -301,7 +320,7 @@ def ast_to_html(
                     text, block.formatting, token_counter, block.type, block.level
                 )
                 body_parts.append(
-                    f'<div class="rps-list-item{indent_class}">'
+                    f'<div class="rps-list-item{indent_class}"{anchor}>'
                     f'<span class="rps-marker">{marker_html}</span> {content}'
                     f"</div>"
                 )

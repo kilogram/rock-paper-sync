@@ -157,15 +157,24 @@ def sync(
         state.close()
         return
 
-    # Phase 1: Pull (if direction is 'both' or 'pull')
-    if direction in ("both", "pull"):
-        click.echo("\n--- Pull Phase: Fetching ink from device ---")
-        _run_pull_sync(config, state, vault_configs, dry_run)
+    # Acquire process lock for the entire sync run (pull + push)
+    from .converter import SyncLockError, sync_lock
 
-    # Phase 2: Push (if direction is 'both' or 'push')
-    if direction in ("both", "push") and engine is not None:
-        click.echo("\n--- Push Phase: Uploading changes to device ---")
-        _run_push_sync(engine, vault, vault_configs)
+    try:
+        with sync_lock(config.sync.state_database):
+            # Phase 1: Pull (if direction is 'both' or 'pull')
+            if direction in ("both", "pull"):
+                click.echo("\n--- Pull Phase: Fetching ink from device ---")
+                _run_pull_sync(config, state, vault_configs, dry_run)
+
+            # Phase 2: Push (if direction is 'both' or 'push')
+            if direction in ("both", "push") and engine is not None:
+                click.echo("\n--- Push Phase: Uploading changes to device ---")
+                _run_push_sync(engine, vault, vault_configs)
+    except SyncLockError as e:
+        click.echo(str(e), err=True)
+        state.close()
+        sys.exit(2)
 
     state.close()
 

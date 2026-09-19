@@ -45,6 +45,7 @@ from rock_paper_sync.ink.bake import (
     get_attachment_folder,
     render_cluster_to_png,
 )
+from rock_paper_sync.ink.calibration import check_i8
 from rock_paper_sync.ink.candidates import extract_candidates
 from rock_paper_sync.ink.classify import (
     Classification,
@@ -266,6 +267,20 @@ class PullSyncEngine:
         # Also extract glyph highlights (these are not stroke clusters)
         glyph_highlights = classify_glyph_highlights(rm_files, cpages_list, known_ids)
 
+        # I8: Cross-check every GlyphRange's transformed rects against the word map.
+        # Mismatch -> TransformMismatchError, pull aborted before any write.
+        from rock_paper_sync.ink.calibration import _DeviceRect
+
+        for gh in glyph_highlights:
+            device_rects = [_DeviceRect(x=r[0], y=r[1], w=r[2], h=r[3]) for r in gh.device_rects]
+            result = check_i8(gh.text, device_rects, word_map, self._profile, gh.page)
+            if not result.i8_pass:
+                raise TransformMismatchError(
+                    page=gh.page,
+                    expected_words=result.glyph_text_words,
+                    found_words=result.words_under_rects,
+                )
+
         if not candidates and not glyph_highlights:
             logger.debug(f"No new ink for {vault.name}:{obsidian_path}")
             return PullResult(
@@ -287,9 +302,9 @@ class PullSyncEngine:
 
         # Read snapshot text for edit computation
         snapshot_text = ""
-        snapshot = self.state.snapshots.get_latest_snapshot(vault.name, obsidian_path)
-        if snapshot is not None:
-            snapshot_text = snapshot.decode("utf-8") if isinstance(snapshot, bytes) else snapshot
+        snapshot_bytes = self.state.snapshots.restore_file(vault.name, obsidian_path)
+        if snapshot_bytes is not None:
+            snapshot_text = snapshot_bytes.decode("utf-8")
         if not snapshot_text:
             # Fall back to current file
             file_path = vault.path / obsidian_path
