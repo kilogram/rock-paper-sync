@@ -209,6 +209,35 @@ class TestRenderingRegression:
         assert "diagram.png" in html
         assert "[Image:" in html
 
+    def test_table_renders_html_table(self) -> None:
+        """Pipe table renders as <table> with header row bold and data cells."""
+        from rock_paper_sync.parser import parse_content
+        from rock_paper_sync.render.html import ast_to_html
+
+        blocks = parse_content("| Name | Value |\n|------|-------|\n| alpha | 1 |\n| beta | 2 |\n")
+        html, token_count = ast_to_html(blocks)
+
+        assert "<table" in html, f"Expected <table> in HTML:\n{html}"
+        assert "<th>" in html, "Header cells should use <th>"
+        assert "<td>" in html, "Data cells should use <td>"
+        assert "Name" in html
+        assert "alpha" in html
+        assert token_count >= 6  # 2 headers + 4 data cells
+
+    def test_footnote_ref_renders_superscript(self) -> None:
+        """Footnote reference [^1] renders as superscript number."""
+        from rock_paper_sync.parser import parse_content
+        from rock_paper_sync.render.html import ast_to_html
+
+        blocks = parse_content("Text with footnote[^1].\n\n[^1]: The footnote.\n")
+        html, _ = ast_to_html(blocks)
+
+        assert "<sup>" in html, f"Expected <sup> for footnote ref in HTML:\n{html}"
+        # The footnote definition should render as a numbered list item
+        assert "footnote." in html
+        # The definition marker "1." should appear
+        assert ">1.<" in html
+
 
 # ---------------------------------------------------------------------------
 # I2: PdfDocumentPayload produces exactly four keys, no .rm

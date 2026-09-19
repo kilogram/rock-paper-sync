@@ -159,17 +159,24 @@ del {{
 
 .rps-checkbox {{
     display: inline-block;
-    width: 0.7em;
-    height: 0.7em;
+    width: {font_size}pt;
+    height: {font_size}pt;
     border: 1.5pt solid #000;
     vertical-align: middle;
     text-align: center;
-    font-size: 0.65em;
-    line-height: 0.9em;
-    margin-right: 0.2em;
+    font-weight: bold;
+    font-size: {font_size * 0.9}pt;
+    line-height: {font_size}pt;
+    margin-right: 4pt;
+    color: transparent;
 }}
 .rps-checkbox-checked {{
-    background-color: #ddd;
+    color: #000;
+}}
+
+.rps-task-item {{
+    padding-left: 0;
+    text-indent: 0;
 }}
 
 pre.rps-code {{
@@ -194,6 +201,28 @@ hr {{
     border: none;
     border-top: 1pt solid #666;
     margin: 0.8em 0;
+}}
+
+table.rps-table {{
+    border-collapse: collapse;
+    margin: 0.5em 0;
+    font-size: {font_size * 0.9}pt;
+    width: 100%;
+}}
+table.rps-table th, table.rps-table td {{
+    border: 0.5pt solid #999;
+    padding: 3pt 5pt;
+    text-align: left;
+}}
+table.rps-table th {{
+    font-weight: bold;
+    background-color: #f0f0f0;
+}}
+
+sup {{
+    font-size: 0.7em;
+    vertical-align: super;
+    line-height: 0;
 }}
 
 .rps-blank-page {{
@@ -447,27 +476,30 @@ def _collect_token_texts(
 
     for block in doc.content:
         text = _strip_rps_markers(block.text) if block.text else ""
-        if not text and block.type not in (BlockType.HORIZONTAL_RULE,):
+        if not text and block.type not in (BlockType.HORIZONTAL_RULE, BlockType.TABLE):
             continue
 
         if block.type == BlockType.LIST_ITEM:
-            # Detect ordered-number prefix or use bullet as marker
-            ordered_match = _ORDERED_PREFIX_RE.match(text)
-            if ordered_match:
-                texts.append(f"{ordered_match.group(1)}.")
-            else:
-                texts.append("•")
+            is_task = text.startswith(_CHECKBOX_CHECKED) or text.startswith(_CHECKBOX_UNCHECKED)
 
-            # Handle checkboxes
-            remaining = text
-            if text.startswith(_CHECKBOX_CHECKED):
-                texts.append("[x]")
-                remaining = text[len(_CHECKBOX_CHECKED) :]
-            elif text.startswith(_CHECKBOX_UNCHECKED):
-                texts.append("[ ]")
-                remaining = text[len(_CHECKBOX_UNCHECKED) :]
-            elif ordered_match:
-                remaining = text[ordered_match.end() :]
+            if is_task:
+                # Task items: checkbox is the marker (no bullet token).
+                remaining = text
+                if text.startswith(_CHECKBOX_CHECKED):
+                    texts.append("[x]")
+                    remaining = text[len(_CHECKBOX_CHECKED) :]
+                else:
+                    texts.append("[ ]")
+                    remaining = text[len(_CHECKBOX_UNCHECKED) :]
+            else:
+                # Detect ordered-number prefix or use bullet as marker
+                ordered_match = _ORDERED_PREFIX_RE.match(text)
+                if ordered_match:
+                    texts.append(f"{ordered_match.group(1)}.")
+                    remaining = text[ordered_match.end() :]
+                else:
+                    texts.append("•")
+                    remaining = text
 
             # Word tokens
             texts.extend(_tokenise_text(remaining))
@@ -477,6 +509,13 @@ def _collect_token_texts(
             for line in text.split("\n"):
                 if line.strip():
                     texts.append(line)
+
+        elif block.type == BlockType.TABLE:
+            # Table cells: each cell's text is tokenised
+            for row in block.children:
+                for cell in row.children:
+                    if cell.text:
+                        texts.extend(_tokenise_text(cell.text))
 
         elif block.type == BlockType.HORIZONTAL_RULE:
             pass  # no tokens

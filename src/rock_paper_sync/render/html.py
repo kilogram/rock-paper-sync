@@ -107,6 +107,9 @@ def _apply_inline_formatting(
         elif fmt.style == FormatStyle.LINK:
             opens.setdefault(start, []).append('<span class="rps-link">')
             closes.setdefault(end, []).append("</span>")
+        elif fmt.style == FormatStyle.FOOTNOTE_REF:
+            opens.setdefault(start, []).append("<sup>")
+            closes.setdefault(end, []).append("</sup>")
 
     result: list[str] = []
     for i, ch in enumerate(chars):
@@ -164,9 +167,11 @@ def _render_block_tokens(
 
     if block_type == BlockType.LIST_ITEM:
         if text.startswith(_CHECKBOX_CHECKED):
+            # The checkbox box is its own token span so Phase 5 can
+            # find its rect for tick-gesture detection.
             prefix_html = (
                 f'<span {TOKEN_ATTR}="{token_counter[0]}">'
-                '<span class="rps-checkbox rps-checkbox-checked">x</span>'
+                '<span class="rps-checkbox rps-checkbox-checked">X</span>'
                 "</span> "
             )
             token_counter[0] += 1
@@ -175,7 +180,7 @@ def _render_block_tokens(
         elif text.startswith(_CHECKBOX_UNCHECKED):
             prefix_html = (
                 f'<span {TOKEN_ATTR}="{token_counter[0]}">'
-                '<span class="rps-checkbox"></span>'
+                '<span class="rps-checkbox"> </span>'
                 "</span> "
             )
             token_counter[0] += 1
@@ -251,7 +256,7 @@ def ast_to_html(
 
     for block in blocks:
         text = _strip_rps_markers(block.text) if block.text else ""
-        if not text and block.type not in (BlockType.HORIZONTAL_RULE,):
+        if not text and block.type not in (BlockType.HORIZONTAL_RULE, BlockType.TABLE):
             continue
 
         if block.type == BlockType.HEADER:
@@ -268,25 +273,38 @@ def ast_to_html(
         elif block.type == BlockType.LIST_ITEM:
             indent_class = f" rps-indent-{block.level}" if block.level > 1 else ""
 
-            # Detect ordered-number prefix ("N. ") from parser
-            ordered_match = _ORDERED_PREFIX_RE.match(text)
-            if ordered_match:
-                marker = f"{ordered_match.group(1)}."
+            # Task items (checkbox) get the box as their marker -- no bullet.
+            is_task = text.startswith(_CHECKBOX_CHECKED) or text.startswith(_CHECKBOX_UNCHECKED)
+
+            if is_task:
+                # No separate marker token; the checkbox span inside
+                # _render_block_tokens IS the marker (its own token).
+                content = _render_block_tokens(
+                    text, block.formatting, token_counter, block.type, block.level
+                )
+                body_parts.append(
+                    f'<div class="rps-list-item rps-task-item{indent_class}">' f"{content}</div>"
+                )
             else:
-                marker = "•"  # bullet
+                # Detect ordered-number prefix ("N. ") from parser
+                ordered_match = _ORDERED_PREFIX_RE.match(text)
+                if ordered_match:
+                    marker = f"{ordered_match.group(1)}."
+                else:
+                    marker = "•"  # bullet
 
-            # The marker is a token in the word map.
-            marker_html = _wrap_token(token_counter[0], html_mod.escape(marker))
-            token_counter[0] += 1
+                # The marker is a token in the word map.
+                marker_html = _wrap_token(token_counter[0], html_mod.escape(marker))
+                token_counter[0] += 1
 
-            content = _render_block_tokens(
-                text, block.formatting, token_counter, block.type, block.level
-            )
-            body_parts.append(
-                f'<div class="rps-list-item{indent_class}">'
-                f'<span class="rps-marker">{marker_html}</span> {content}'
-                f"</div>"
-            )
+                content = _render_block_tokens(
+                    text, block.formatting, token_counter, block.type, block.level
+                )
+                body_parts.append(
+                    f'<div class="rps-list-item{indent_class}">'
+                    f'<span class="rps-marker">{marker_html}</span> {content}'
+                    f"</div>"
+                )
 
         elif block.type == BlockType.CODE_BLOCK:
             # Code blocks: each line is a token
@@ -304,6 +322,30 @@ def ast_to_html(
         elif block.type == BlockType.BLOCKQUOTE:
             content = _render_block_tokens(text, block.formatting, token_counter, block.type)
             body_parts.append(f"<blockquote>{content}</blockquote>")
+
+        elif block.type == BlockType.TABLE:
+            # Table: children = rows; each row's children = cells.
+            # Row level=1 means header row; cell level=1 means header cell.
+            table_parts: list[str] = ['<table class="rps-table">']
+            for row in block.children:
+                is_header_row = row.level == 1
+                tag = "th" if is_header_row else "td"
+                row_tag = "thead" if is_header_row else "tbody"
+                if is_header_row:
+                    table_parts.append(f"<{row_tag}><tr>")
+                else:
+                    table_parts.append("<tr>")
+                for cell in row.children:
+                    cell_content = _render_block_tokens(
+                        cell.text, cell.formatting, token_counter, block.type
+                    )
+                    table_parts.append(f"<{tag}>{cell_content}</{tag}>")
+                if is_header_row:
+                    table_parts.append(f"</tr></{row_tag}>")
+                else:
+                    table_parts.append("</tr>")
+            table_parts.append("</table>")
+            body_parts.append("".join(table_parts))
 
         elif block.type == BlockType.HORIZONTAL_RULE:
             body_parts.append("<hr>")

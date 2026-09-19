@@ -73,6 +73,7 @@ class BlockType(Enum):
     CODE_BLOCK = "code"
     BLOCKQUOTE = "blockquote"
     HORIZONTAL_RULE = "hr"
+    TABLE = "table"
 
 
 class FormatStyle(Enum):
@@ -84,6 +85,7 @@ class FormatStyle(Enum):
     LINK = "link"
     STRIKETHROUGH = "strikethrough"
     MARK = "mark"
+    FOOTNOTE_REF = "footnote_ref"
 
 
 @dataclass
@@ -265,7 +267,11 @@ def parse_content(markdown_text: str) -> list[ContentBlock]:
     # "mark" parses ==text== into <mark> (highlights).
     # "task_lists" parses - [ ] / - [x] into task_list_item nodes.
     # "strikethrough" parses ~~text~~ into strikethrough nodes.
-    md = mistune.create_markdown(renderer="ast", plugins=["mark", "task_lists", "strikethrough"])
+    # "table" parses pipe tables.  "footnotes" parses [^N] references.
+    md = mistune.create_markdown(
+        renderer="ast",
+        plugins=["mark", "task_lists", "strikethrough", "table", "footnotes"],
+    )
     try:
         ast = md(markdown_text)
     except Exception as e:
@@ -401,6 +407,79 @@ def ast_node_to_block(
 
     elif node_type == "thematic_break":
         return ContentBlock(type=BlockType.HORIZONTAL_RULE, level=0, text="---", formatting=[])
+
+    elif node_type == "table":
+        # Tables are stored as a TABLE ContentBlock.  Children represent
+        # rows; each row's children represent cells.  The `level` field
+        # on a cell is 1 if it is a header cell, 0 otherwise.
+        rows: list[ContentBlock] = []
+        for section in node.get("children", []):
+            section_type = section.get("type")
+            row_nodes = section.get("children", [])
+            if section_type == "table_head":
+                # Header is a single implicit row
+                cells: list[ContentBlock] = []
+                for cell_node in row_nodes:
+                    cell_text, cell_fmt = extract_text_and_formatting(cell_node.get("children", []))
+                    cells.append(
+                        ContentBlock(
+                            type=BlockType.PARAGRAPH, level=1, text=cell_text, formatting=cell_fmt
+                        )
+                    )
+                rows.append(
+                    ContentBlock(type=BlockType.PARAGRAPH, level=1, text="", children=cells)
+                )
+            elif section_type == "table_body":
+                for row_node in row_nodes:
+                    cells = []
+                    for cell_node in row_node.get("children", []):
+                        cell_text, cell_fmt = extract_text_and_formatting(
+                            cell_node.get("children", [])
+                        )
+                        cells.append(
+                            ContentBlock(
+                                type=BlockType.PARAGRAPH,
+                                level=0,
+                                text=cell_text,
+                                formatting=cell_fmt,
+                            )
+                        )
+                    rows.append(
+                        ContentBlock(type=BlockType.PARAGRAPH, level=0, text="", children=cells)
+                    )
+        return ContentBlock(type=BlockType.TABLE, level=0, text="", children=rows)
+
+    elif node_type == "footnotes":
+        # Footnote definitions: rendered as a numbered list at the body's end.
+        # Each footnote_item becomes a LIST_ITEM with "N. " prefix.
+        items: list[ContentBlock] = []
+        for fn_item in node.get("children", []):
+            if fn_item.get("type") != "footnote_item":
+                continue
+            fn_index = fn_item.get("attrs", {}).get("index", 1)
+            # Extract text from the first paragraph child
+            fn_children = fn_item.get("children", [])
+            fn_text = ""
+            fn_fmt: list[TextFormat] = []
+            for child in fn_children:
+                if child.get("type") in ("paragraph", "block_text"):
+                    fn_text, fn_fmt = extract_text_and_formatting(child.get("children", []))
+                    break
+            prefix = f"{fn_index}. "
+            fn_text = prefix + fn_text
+            fn_fmt = [
+                TextFormat(
+                    start=f.start + len(prefix),
+                    end=f.end + len(prefix),
+                    style=f.style,
+                    metadata=f.metadata,
+                )
+                for f in fn_fmt
+            ]
+            items.append(
+                ContentBlock(type=BlockType.LIST_ITEM, level=1, text=fn_text, formatting=fn_fmt)
+            )
+        return items if items else None
 
     # Unknown or unhandled node type
     logger.debug(f"Unhandled AST node type: {node_type}")
@@ -590,6 +669,21 @@ def extract_text_and_formatting(children: list[dict[str, Any]]) -> tuple[str, li
                 )
 
             current_pos += len(inner_text)
+
+        elif child_type == "footnote_ref":
+            # Footnote reference: render as superscript number
+            fn_index = child.get("attrs", {}).get("index", child.get("raw", "?"))
+            ref_text = str(fn_index)
+            start_pos = current_pos
+            text_parts.append(ref_text)
+            formatting.append(
+                TextFormat(
+                    start=start_pos,
+                    end=start_pos + len(ref_text),
+                    style=FormatStyle.FOOTNOTE_REF,
+                )
+            )
+            current_pos += len(ref_text)
 
         elif child_type == "linebreak" or child_type == "softbreak":
             # Line breaks
