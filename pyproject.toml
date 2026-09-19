@@ -172,6 +172,18 @@ forbidden_modules = [
 ]
 
 [[tool.importlinter.contracts]]
+name = "ink is renderer-agnostic"
+type = "forbidden"
+source_modules = ["rock_paper_sync.ink"]
+forbidden_modules = [
+    "weasyprint",
+    "fitz",
+    "pymupdf",
+    "rock_paper_sync.sync_v3",
+    "rock_paper_sync.rm_cloud_sync",
+]
+
+[[tool.importlinter.contracts]]
 name = "production does not import native_layout"
 type = "forbidden"
 source_modules = ["rock_paper_sync"]
