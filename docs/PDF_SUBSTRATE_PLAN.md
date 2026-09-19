@@ -1,6 +1,6 @@
 # PDF substrate plan
 
-Status: APPROVED (architecture + design review, re-review 2026-09-19). Progress: Phase 1 done (e4cd45b), Phase 3a done (7ef09fe). Supersedes the native typed-text direction in
+Status: APPROVED (architecture + design review, re-review 2026-09-19). Progress: Phase 1 done (e4cd45b), Phase 3a done (7ef09fe), Phase 2 prepared (3c79b06, online session NOT yet run), Phase 4 done (f5a82a4). Supersedes the native typed-text direction in
 `docs/LAYOUT_VERIFICATION_PLAN.md`, `docs/DEVICE_REPLICA_DESIGN.md` and
 Milestones 5.5/7 of `docs/PRODUCT_ROADMAP.md`.
 
