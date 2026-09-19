@@ -40,6 +40,7 @@ from rmscene import (
     PageInfoBlock,
     SceneGlyphItemBlock,
     SceneGroupItemBlock,
+    SceneLineItemBlock,
     SceneTreeBlock,
     TreeNodeBlock,
 )
@@ -565,6 +566,31 @@ class TestPdfSubstrateReplay:
                         )
                         lines.append("")
 
+        # Ink overlay — the primary visual artefact
+        if rm_files:
+            rendered = rendered if "rendered" in dir() else _render_fixture()
+            # Build page_files mapping: page_index -> rm_bytes
+            page_files: dict[int, bytes] = {}
+            for page_idx, page_uuid in enumerate(sorted(rm_files.keys())):
+                page_files[page_idx] = rm_files[page_uuid]
+
+            from tools.ink_overlay import overlay_ink
+
+            png_paths = overlay_ink(
+                rendered.pdf,
+                page_files,
+                _PROFILE,
+                word_map=rendered.word_map,
+                out_dir=diag_dir,
+            )
+            lines.append("## Overlay PNGs\n")
+            for png_path in png_paths:
+                lines.append(f"- {png_path.name}")
+            lines.append("")
+            print(f"  Overlay: {diag_dir / 'overlay.pdf'}")
+            for p in png_paths:
+                print(f"  PNG: {p}")
+
         report_path = diag_dir / "report.md"
         report_path.write_text("\n".join(lines))
         print(f"\nReport written to {report_path}")
@@ -692,6 +718,89 @@ def _build_synthetic_rm(
     buf = io.BytesIO()
     rmscene.write_blocks(buf, blocks)
     return buf.getvalue()
+
+
+def _build_synthetic_rm_with_stroke(
+    glyph_text: str,
+    device_rects: list[Rectangle],
+    stroke: object,
+) -> bytes:
+    """Build a minimal .rm with one GlyphRange highlight AND one stroke.
+
+    Args:
+        glyph_text: Highlight text.
+        device_rects: Highlight rectangles in device coordinates.
+        stroke: An ``rmscene.scene_items.Line`` instance.
+
+    Returns:
+        .rm file bytes.
+    """
+    import uuid as uuid_mod
+
+    author_uuid = uuid_mod.UUID("00000000-0000-4000-8000-000000000001")
+
+    blocks = [
+        AuthorIdsBlock(author_uuids={1: author_uuid}),
+        MigrationInfoBlock(migration_id=CrdtId(1, 1), is_device=True),
+        PageInfoBlock(loads_count=1, merges_count=0, text_chars_count=0, text_lines_count=0),
+        SceneTreeBlock(
+            tree_id=CrdtId(0, 11),
+            node_id=CrdtId(0, 0),
+            is_update=True,
+            parent_id=CrdtId(0, 1),
+        ),
+        TreeNodeBlock(Group(node_id=CrdtId(0, 1))),
+        TreeNodeBlock(
+            Group(
+                node_id=CrdtId(0, 11),
+                label=LwwValue(timestamp=CrdtId(0, 12), value="Layer 1"),
+            )
+        ),
+        SceneGroupItemBlock(
+            parent_id=CrdtId(0, 1),
+            item=CrdtSequenceItem(
+                item_id=CrdtId(0, 13),
+                left_id=CrdtId(0, 0),
+                right_id=CrdtId(0, 0),
+                deleted_length=0,
+                value=CrdtId(0, 11),
+            ),
+        ),
+        SceneGlyphItemBlock(
+            parent_id=CrdtId(0, 11),
+            item=CrdtSequenceItem(
+                item_id=CrdtId(1, 20),
+                left_id=CrdtId(0, 0),
+                right_id=CrdtId(0, 0),
+                deleted_length=0,
+                value=GlyphRange(
+                    start=0,
+                    length=len(glyph_text),
+                    text=glyph_text,
+                    color=PenColor.HIGHLIGHT,
+                    rectangles=device_rects,
+                ),
+            ),
+        ),
+        SceneLineItemBlock(
+            parent_id=CrdtId(0, 11),
+            item=CrdtSequenceItem(
+                item_id=CrdtId(1, 30),
+                left_id=CrdtId(0, 0),
+                right_id=CrdtId(0, 0),
+                deleted_length=0,
+                value=stroke,
+            ),
+        ),
+    ]
+
+    buf = io.BytesIO()
+    rmscene.write_blocks(buf, blocks)
+    return buf.getvalue()
+
+
+# PNG DPI used by overlay_ink — imported here for pixel calculations
+_PNG_DPI = 110
 
 
 class TestCalibrationSynthetic:
@@ -886,3 +995,76 @@ class TestCalibrationSynthetic:
         assert gr.text == "test"
         assert len(gr.rectangles) == 1
         assert abs(gr.rectangles[0].x - 100.0) < 1e-6
+
+    def test_overlay_ink_synthetic(self, tmp_path: Path) -> None:
+        """overlay_ink draws highlight and stroke onto a PDF; yellow pixel check."""
+        from PIL import Image
+
+        from tools.ink_overlay import overlay_ink
+
+        profile = PROFILES["paper_pro_move"]
+
+        # Render a tiny markdown to get a real PDF
+        md_file = tmp_path / "tiny.md"
+        md_file.write_text("# Tiny\n\nHello world.\n")
+
+        from rock_paper_sync.config import LayoutConfig
+        from rock_paper_sync.parser import parse_markdown_file
+        from rock_paper_sync.render.pdf import PdfRenderer
+
+        doc = parse_markdown_file(md_file)
+        renderer = PdfRenderer(LayoutConfig())
+        rendered = renderer.render(doc, profile)
+
+        # Build a synthetic .rm with a highlight rect at a known
+        # device-coordinate position, and a stroke.
+        # Highlight rect: centred at device (0, 200) -> PDF (238.5, 100)
+        highlight_rects = [Rectangle(x=-60.0, y=190.0, w=120.0, h=24.0)]
+
+        from rmscene.scene_items import Line, Pen, Point
+
+        stroke_line = Line(
+            color=PenColor.BLACK,
+            tool=Pen.BALLPOINT_1,
+            points=[
+                Point(x=-200.0, y=300.0, speed=0, direction=0, width=5, pressure=100),
+                Point(x=200.0, y=300.0, speed=0, direction=0, width=5, pressure=100),
+            ],
+            thickness_scale=1.0,
+            starting_length=0.0,
+        )
+        rm_bytes = _build_synthetic_rm_with_stroke("Hello", highlight_rects, stroke_line)
+
+        out_dir = tmp_path / "overlay_out"
+        pngs = overlay_ink(
+            rendered.pdf,
+            {0: rm_bytes},
+            profile,
+            word_map=rendered.word_map,
+            out_dir=out_dir,
+        )
+
+        # Assertions: overlay.pdf and at least one PNG exist
+        assert (out_dir / "overlay.pdf").exists()
+        assert len(pngs) >= 1
+        assert pngs[0].exists()
+
+        # Check that the highlight region has yellow-ish pixels.
+        # The highlight rect at device (-60, 190) w=120 h=24 transforms to:
+        #   top-left: device_to_pdf(profile, -60, 190) = ((-60 + 477)*0.5, 190*0.5) = (208.5, 95)
+        #   bot-right: device_to_pdf(profile, 60, 214) = ((60 + 477)*0.5, 214*0.5) = (268.5, 107)
+        # At 110 dpi, PDF point -> pixel: px = pt * (110/72)
+        scale = _PNG_DPI / 72.0
+        sample_x = int(238.5 * scale)  # centre of highlight in PDF pts
+        sample_y = int(100.0 * scale)
+        img = Image.open(pngs[0])
+
+        # Ensure the sample point is within bounds
+        if sample_x < img.width and sample_y < img.height:
+            r, g, b = img.getpixel((sample_x, sample_y))[:3]
+            # Yellow-ish: R and G high, B lower (the overlay blends
+            # yellow onto white, so all channels are high but B < R)
+            assert r > 200, f"Red channel {r} too low at ({sample_x}, {sample_y})"
+            assert g > 200, f"Green channel {g} too low at ({sample_x}, {sample_y})"
+            # B should be noticeably lower than R due to yellow fill
+            assert b < r, f"Blue {b} >= Red {r}: not yellow-ish at ({sample_x}, {sample_y})"

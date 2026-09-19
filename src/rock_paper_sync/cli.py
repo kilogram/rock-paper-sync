@@ -1124,5 +1124,86 @@ def bench_render(file: str, overlay: bool) -> None:
         click.echo(f"Overlay: {overlay_path}")
 
 
+@bench.command("overlay")
+@click.argument("pdf_file", type=click.Path(exists=True))
+@click.argument("rm_dir", type=click.Path(exists=True))
+@click.option(
+    "--word-map",
+    "-w",
+    type=click.Path(exists=True),
+    default=None,
+    help="Word-map JSON file; draws token rects in red",
+)
+@click.option(
+    "--out",
+    "-o",
+    type=click.Path(),
+    default=None,
+    help="Output directory (default: _diagnostic/ next to rm_dir)",
+)
+def bench_overlay(pdf_file: str, rm_dir: str, word_map: str | None, out: str | None) -> None:
+    """Overlay device ink (.rm files) onto a PDF for visual inspection.
+
+    Reads every .rm file in RM_DIR, transforms ink through the device
+    profile, draws strokes (blue) and highlights (yellow) onto the PDF,
+    and writes overlay.pdf + one PNG per page.
+
+    \b
+    Examples:
+        rock-paper-sync bench overlay doc.pdf rm_files/
+        rock-paper-sync bench overlay doc.pdf rm_files/ --word-map wm.json -o out/
+    """
+    from .device_profile import PROFILES
+    from .render.wordmap import WordMap
+
+    profile = PROFILES["paper_pro_move"]
+
+    pdf_path = Path(pdf_file).resolve()
+    rm_path = Path(rm_dir).resolve()
+
+    # Collect .rm files, keyed by page index (filename stem must be
+    # numeric or a page UUID; we sort and enumerate for now)
+    rm_files_by_page: dict[int, bytes] = {}
+    rm_file_list = sorted(rm_path.glob("*.rm"))
+    if not rm_file_list:
+        click.echo(f"No .rm files found in {rm_path}", err=True)
+        sys.exit(1)
+
+    for i, rm_file_path in enumerate(rm_file_list):
+        rm_files_by_page[i] = rm_file_path.read_bytes()
+
+    # Load word map if provided
+    wm: WordMap | None = None
+    if word_map is not None:
+        wm = WordMap.from_json(Path(word_map).read_bytes())
+
+    # Output directory
+    out_dir = Path(out) if out else rm_path / "_diagnostic"
+
+    try:
+        from tools.ink_overlay import overlay_ink
+    except ImportError:
+        # Fallback: add repo root to path
+        import importlib.util
+
+        repo_root = Path(__file__).parent.parent.parent
+        spec = importlib.util.spec_from_file_location(
+            "tools.ink_overlay", repo_root / "tools" / "ink_overlay.py"
+        )
+        if spec is None or spec.loader is None:
+            click.echo("Error: cannot find tools/ink_overlay.py", err=True)
+            sys.exit(1)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        overlay_ink = mod.overlay_ink
+
+    pdf_bytes = pdf_path.read_bytes()
+    pngs = overlay_ink(pdf_bytes, rm_files_by_page, profile, word_map=wm, out_dir=out_dir)
+
+    click.echo(f"Overlay PDF: {out_dir / 'overlay.pdf'}")
+    for png in pngs:
+        click.echo(f"  PNG: {png}")
+
+
 if __name__ == "__main__":
     main()
