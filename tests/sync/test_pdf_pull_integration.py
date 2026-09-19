@@ -36,6 +36,7 @@ from rock_paper_sync.state import StateManager
 from tests.helpers.rm_synthetic import (
     build_stroke_only_rm,
     build_synthetic_rm_with_stroke,
+    build_two_highlights_rm,
     make_line,
 )
 
@@ -331,5 +332,375 @@ class TestPdfPullIntegration:
         entries_after = _read_document_index(cloud_sync, doc_uuid)
         rm_after = [e for e in entries_after if e.entry_name.endswith(".rm")]
         assert len(rm_after) == 0, f"After re-push, .rm entries should be gone, got {len(rm_after)}"
+
+        state.close()
+
+    def test_pull_twice_is_idempotent(self, pdf_pull_env):
+        """Pull twice without changing device state: second pull is a no-op.
+
+        After push -> inject -> pull, a second pull on the same document
+        with no new device ink must report zero new highlights/notes/drawings,
+        leave the markdown byte-identical, and add no new ink_strokes rows.
+        """
+        config = pdf_pull_env["config"]
+        vault = pdf_pull_env["vault"]
+        cloud_sync = pdf_pull_env["cloud_sync"]
+        cache_dir = pdf_pull_env["cache_dir"]
+
+        state = StateManager(config.sync.state_database)
+        engine = SyncEngine(config, state, cloud_sync=cloud_sync)
+        vault_config = config.sync.vaults[0]
+
+        # --- (a) Push ---
+        test_file = vault / "test-idem.md"
+        test_file.write_text(_TEST_MD)
+
+        result = engine.sync_file(vault_config, test_file)
+        assert result.success, f"Push failed: {result.error}"
+        doc_uuid = result.remarkable_uuid
+
+        file_state = state.get_file_state("test-vault", "test-idem.md")
+        from rock_paper_sync.render.wordmap import WordMap
+
+        word_map = WordMap.from_json(file_state.word_map)
+
+        # --- (b) Inject highlight + stroke ---
+        target_words = ["purple", "monkey", "dishwasher", "engine"]
+        from rock_paper_sync.device_profile import PROFILES, pdf_to_device
+
+        profile = PROFILES["paper_pro_move"]
+        highlight_rects = []
+        for word in target_words:
+            for pw in word_map.pages:
+                for tid, rect in pw.tokens:
+                    if word_map.texts[tid] == word:
+                        cx = (rect.x0 + rect.x1) / 2.0
+                        cy = (rect.y0 + rect.y1) / 2.0
+                        dev_x, dev_y = pdf_to_device(profile, cx, cy)
+                        w_dev = (rect.x1 - rect.x0) / 0.5
+                        h_dev = (rect.y1 - rect.y0) / 0.5
+                        highlight_rects.append(
+                            Rectangle(x=dev_x - w_dev / 2, y=dev_y - h_dev / 2, w=w_dev, h=h_dev)
+                        )
+                        break
+
+        margin_stroke = make_line(
+            [(-400.0, 600.0), (-380.0, 610.0), (-360.0, 620.0), (-340.0, 630.0)]
+        )
+        glyph_text = "purple monkey dishwasher engine"
+        page0_rm = build_synthetic_rm_with_stroke(glyph_text, highlight_rects, margin_stroke)
+
+        page0_uuid = "page-0000-0000-0000-000000000011"
+
+        cloud_sync.invalidate_root_cache()
+        current_entries = _read_document_index(cloud_sync, doc_uuid)
+        current_files: dict[str, bytes] = {}
+        for entry in current_entries:
+            current_files[entry.entry_name] = cloud_sync.sync_client.download_blob(entry.hash)
+
+        current_files[f"{doc_uuid}/{page0_uuid}.rm"] = page0_rm
+        content_with_cpages = {
+            "cPages": {"pages": [{"id": page0_uuid, "redir": {"value": 0}}]},
+            "fileType": "pdf",
+        }
+        current_files[f"{doc_uuid}.content"] = json.dumps(content_with_cpages).encode()
+
+        cloud_sync.sync_client.upload_document(
+            doc_uuid=doc_uuid, files=current_files, broadcast=False
+        )
+        cloud_sync.invalidate_root_cache()
+
+        # --- (c) First pull ---
+        class MockOCR:
+            def process_image(self, png_bytes: bytes) -> str:
+                return "ocr text"
+
+        pull_engine = PullSyncEngine(
+            state=state,
+            cloud_reader=cloud_sync,
+            layout=config.layout,
+            cache_dir=cache_dir,
+            ocr_processor=MockOCR(),
+        )
+        pull1 = pull_engine.pull_file(vault_config, "test-idem.md")
+        assert pull1.success, f"First pull failed: {pull1.error}"
+        assert pull1.highlights_added >= 1
+
+        md_after_pull1 = test_file.read_text(encoding="utf-8")
+        strokes_after_pull1 = state.get_known_stroke_ids("test-vault", "test-idem.md")
+
+        # --- (d) Second pull — must be a no-op ---
+        pull2 = pull_engine.pull_file(vault_config, "test-idem.md")
+        assert pull2.success, f"Second pull failed: {pull2.error}"
+        assert pull2.highlights_added == 0, (
+            f"Expected 0 new highlights, got {pull2.highlights_added}"
+        )
+        assert pull2.notes_appended == 0
+        assert pull2.drawings_saved == 0
+
+        md_after_pull2 = test_file.read_text(encoding="utf-8")
+        assert md_after_pull2 == md_after_pull1, (
+            "Markdown should be byte-identical after second pull"
+        )
+
+        strokes_after_pull2 = state.get_known_stroke_ids("test-vault", "test-idem.md")
+        assert strokes_after_pull2 == strokes_after_pull1, "No new stroke rows after second pull"
+
+        state.close()
+
+    def test_two_highlights_same_phrase(self, pdf_pull_env):
+        """Two GlyphRanges over the same phrase with distinct item_ids.
+
+        Pull must produce two ledger rows, the phrase wrapped exactly
+        twice in the markdown, and no IntegrityError.
+        """
+        config = pdf_pull_env["config"]
+        vault = pdf_pull_env["vault"]
+        cloud_sync = pdf_pull_env["cloud_sync"]
+        cache_dir = pdf_pull_env["cache_dir"]
+
+        # Markdown with the target word appearing twice
+        two_phrase_md = """\
+---
+title: Two Highlights Test
+---
+
+# Two Highlights Test
+
+The word target appears here in the first paragraph.
+
+The word target appears here in the second paragraph.
+"""
+        state = StateManager(config.sync.state_database)
+        engine = SyncEngine(config, state, cloud_sync=cloud_sync)
+        vault_config = config.sync.vaults[0]
+
+        test_file = vault / "test-two-hl.md"
+        test_file.write_text(two_phrase_md)
+
+        result = engine.sync_file(vault_config, test_file)
+        assert result.success, f"Push failed: {result.error}"
+        doc_uuid = result.remarkable_uuid
+
+        file_state = state.get_file_state("test-vault", "test-two-hl.md")
+        from rock_paper_sync.render.wordmap import WordMap
+
+        word_map = WordMap.from_json(file_state.word_map)
+
+        # Find both occurrences of "target" in the word map
+        from rock_paper_sync.device_profile import PROFILES, pdf_to_device
+
+        profile = PROFILES["paper_pro_move"]
+        target_rects_list: list[list[Rectangle]] = []
+        for pw in word_map.pages:
+            for tid, rect in pw.tokens:
+                if word_map.texts[tid] == "target":
+                    cx = (rect.x0 + rect.x1) / 2.0
+                    cy = (rect.y0 + rect.y1) / 2.0
+                    dev_x, dev_y = pdf_to_device(profile, cx, cy)
+                    w_dev = (rect.x1 - rect.x0) / 0.5
+                    h_dev = (rect.y1 - rect.y0) / 0.5
+                    target_rects_list.append(
+                        [Rectangle(x=dev_x - w_dev / 2, y=dev_y - h_dev / 2, w=w_dev, h=h_dev)]
+                    )
+
+        assert len(target_rects_list) >= 2, (
+            f"Expected at least 2 occurrences of 'target', found {len(target_rects_list)}"
+        )
+
+        # Build .rm with two GlyphRanges over "target" with distinct item_ids
+        page0_rm = build_two_highlights_rm(
+            "target",
+            target_rects_list[0],
+            target_rects_list[1],
+            item_id_a=20,
+            item_id_b=21,
+        )
+
+        page0_uuid = "page-0000-0000-0000-000000000021"
+
+        cloud_sync.invalidate_root_cache()
+        current_entries = _read_document_index(cloud_sync, doc_uuid)
+        current_files: dict[str, bytes] = {}
+        for entry in current_entries:
+            current_files[entry.entry_name] = cloud_sync.sync_client.download_blob(entry.hash)
+
+        current_files[f"{doc_uuid}/{page0_uuid}.rm"] = page0_rm
+        content_with_cpages = {
+            "cPages": {"pages": [{"id": page0_uuid, "redir": {"value": 0}}]},
+            "fileType": "pdf",
+        }
+        current_files[f"{doc_uuid}.content"] = json.dumps(content_with_cpages).encode()
+
+        cloud_sync.sync_client.upload_document(
+            doc_uuid=doc_uuid, files=current_files, broadcast=False
+        )
+        cloud_sync.invalidate_root_cache()
+
+        # Pull
+        pull_engine = PullSyncEngine(
+            state=state,
+            cloud_reader=cloud_sync,
+            layout=config.layout,
+            cache_dir=cache_dir,
+        )
+        pull_result = pull_engine.pull_file(vault_config, "test-two-hl.md")
+        assert pull_result.success, f"Pull failed: {pull_result.error}"
+        assert pull_result.highlights_added == 2, (
+            f"Expected 2 highlights, got {pull_result.highlights_added}"
+        )
+
+        # Check markdown: "target" wrapped twice
+        content = test_file.read_text(encoding="utf-8")
+        assert content.count("==target==") == 2, (
+            f"Expected 2 ==target== occurrences, got {content.count('==target==')}"
+        )
+
+        # Check ledger: two distinct stroke rows for the two glyph_ids
+        known_ids = state.get_known_stroke_ids("test-vault", "test-two-hl.md")
+        # Both glyph_ids should be recorded: "1:20" and "1:21"
+        assert "1:20" in known_ids, f"glyph_id 1:20 not in {known_ids}"
+        assert "1:21" in known_ids, f"glyph_id 1:21 not in {known_ids}"
+
+        state.close()
+
+    def test_third_pull_after_repush_with_new_ink(self, pdf_pull_env):
+        """After push -> inject -> pull -> re-push, a third pull with new ink works.
+
+        Exercises the clearance path a second time. The new drawing must
+        appear and the previous attachment must remain on disk.
+        """
+        config = pdf_pull_env["config"]
+        vault = pdf_pull_env["vault"]
+        cloud_sync = pdf_pull_env["cloud_sync"]
+        cache_dir = pdf_pull_env["cache_dir"]
+
+        state = StateManager(config.sync.state_database)
+        engine = SyncEngine(config, state, cloud_sync=cloud_sync)
+        vault_config = config.sync.vaults[0]
+
+        # --- (a) Push ---
+        test_file = vault / "test-3pull.md"
+        test_file.write_text(_TEST_MD)
+
+        result = engine.sync_file(vault_config, test_file)
+        assert result.success, f"Push failed: {result.error}"
+        doc_uuid = result.remarkable_uuid
+
+        file_state = state.get_file_state("test-vault", "test-3pull.md")
+        from rock_paper_sync.render.wordmap import WordMap
+
+        word_map = WordMap.from_json(file_state.word_map)
+        from rock_paper_sync.device_profile import PROFILES, pdf_to_device
+
+        profile = PROFILES["paper_pro_move"]
+
+        # --- (b) Inject highlight + margin stroke ---
+        target_words = ["purple", "monkey", "dishwasher", "engine"]
+        highlight_rects = []
+        for word in target_words:
+            for pw in word_map.pages:
+                for tid, rect in pw.tokens:
+                    if word_map.texts[tid] == word:
+                        cx = (rect.x0 + rect.x1) / 2.0
+                        cy = (rect.y0 + rect.y1) / 2.0
+                        dev_x, dev_y = pdf_to_device(profile, cx, cy)
+                        w_dev = (rect.x1 - rect.x0) / 0.5
+                        h_dev = (rect.y1 - rect.y0) / 0.5
+                        highlight_rects.append(
+                            Rectangle(x=dev_x - w_dev / 2, y=dev_y - h_dev / 2, w=w_dev, h=h_dev)
+                        )
+                        break
+
+        margin_stroke = make_line(
+            [(-400.0, 600.0), (-380.0, 610.0), (-360.0, 620.0), (-340.0, 630.0)]
+        )
+        glyph_text = "purple monkey dishwasher engine"
+        page0_uuid = "page-0000-0000-0000-000000000031"
+        page0_rm = build_synthetic_rm_with_stroke(glyph_text, highlight_rects, margin_stroke)
+
+        cloud_sync.invalidate_root_cache()
+        current_entries = _read_document_index(cloud_sync, doc_uuid)
+        current_files: dict[str, bytes] = {}
+        for entry in current_entries:
+            current_files[entry.entry_name] = cloud_sync.sync_client.download_blob(entry.hash)
+
+        current_files[f"{doc_uuid}/{page0_uuid}.rm"] = page0_rm
+        content_with_cpages = {
+            "cPages": {"pages": [{"id": page0_uuid, "redir": {"value": 0}}]},
+            "fileType": "pdf",
+        }
+        current_files[f"{doc_uuid}.content"] = json.dumps(content_with_cpages).encode()
+        cloud_sync.sync_client.upload_document(
+            doc_uuid=doc_uuid, files=current_files, broadcast=False
+        )
+        cloud_sync.invalidate_root_cache()
+
+        # --- (c) First pull ---
+        class MockOCR:
+            def process_image(self, png_bytes: bytes) -> str:
+                return "hello world"
+
+        pull_engine = PullSyncEngine(
+            state=state,
+            cloud_reader=cloud_sync,
+            layout=config.layout,
+            cache_dir=cache_dir,
+            ocr_processor=MockOCR(),
+        )
+        pull1 = pull_engine.pull_file(vault_config, "test-3pull.md")
+        assert pull1.success, f"First pull failed: {pull1.error}"
+
+        svg_files_after_pull1 = set(p.name for p in vault.rglob("*.svg"))
+        assert len(svg_files_after_pull1) >= 1, "Expected at least 1 SVG after first pull"
+
+        # --- (d) Re-push ---
+        updated_content = test_file.read_text(encoding="utf-8")
+        test_file.write_text(updated_content + "\n\nAdded paragraph for re-push.\n")
+        engine2 = SyncEngine(config, state, cloud_sync=cloud_sync)
+        result2 = engine2.sync_file(vault_config, test_file)
+        assert result2.success, f"Re-push failed: {result2.error}"
+
+        # --- (e) Inject new stroke (different stroke_id) ---
+        new_stroke = make_line([(-300.0, 400.0), (-280.0, 420.0), (-260.0, 400.0), (-240.0, 420.0)])
+        # stroke_id=70 to avoid collision with the first pull's strokes (30, 50)
+        new_page_uuid = "page-0000-0000-0000-000000000032"
+        new_rm = build_stroke_only_rm(new_stroke, stroke_id=70)
+
+        cloud_sync.invalidate_root_cache()
+        entries2 = _read_document_index(cloud_sync, doc_uuid)
+        files2: dict[str, bytes] = {}
+        for entry in entries2:
+            files2[entry.entry_name] = cloud_sync.sync_client.download_blob(entry.hash)
+
+        files2[f"{doc_uuid}/{new_page_uuid}.rm"] = new_rm
+        content2 = {
+            "cPages": {"pages": [{"id": new_page_uuid, "redir": {"value": 0}}]},
+            "fileType": "pdf",
+        }
+        files2[f"{doc_uuid}.content"] = json.dumps(content2).encode()
+        cloud_sync.sync_client.upload_document(doc_uuid=doc_uuid, files=files2, broadcast=False)
+        cloud_sync.invalidate_root_cache()
+
+        # --- (f) Third pull with new ink ---
+        pull_engine2 = PullSyncEngine(
+            state=state,
+            cloud_reader=cloud_sync,
+            layout=config.layout,
+            cache_dir=cache_dir,
+        )
+        pull3 = pull_engine2.pull_file(vault_config, "test-3pull.md")
+        assert pull3.success, f"Third pull failed: {pull3.error}"
+        assert pull3.drawings_saved >= 1, f"Expected at least 1 drawing, got {pull3.drawings_saved}"
+
+        # Previous SVG attachments still on disk
+        svg_files_after_pull3 = set(p.name for p in vault.rglob("*.svg"))
+        assert svg_files_after_pull1.issubset(svg_files_after_pull3), (
+            f"Previous attachments missing: {svg_files_after_pull1 - svg_files_after_pull3}"
+        )
+        # At least one new SVG
+        assert len(svg_files_after_pull3) > len(svg_files_after_pull1), (
+            "Expected a new SVG attachment after third pull"
+        )
 
         state.close()

@@ -250,6 +250,97 @@ def build_stroke_only_rm(stroke_line: Line, stroke_id: int = 30) -> bytes:
     return buf.getvalue()
 
 
+def build_two_highlights_rm(
+    glyph_text: str,
+    rects_a: list[Rectangle],
+    rects_b: list[Rectangle],
+    *,
+    item_id_a: int = 20,
+    item_id_b: int = 21,
+) -> bytes:
+    """Build a minimal .rm with two GlyphRange highlights over the same phrase.
+
+    Each highlight gets a distinct ``item_id`` (CrdtId part2) so they
+    produce separate ledger rows.
+
+    Args:
+        glyph_text: Highlight text (same for both).
+        rects_a: Rectangles for the first highlight.
+        rects_b: Rectangles for the second highlight.
+        item_id_a: CrdtId part2 for highlight A (default 20).
+        item_id_b: CrdtId part2 for highlight B (default 21).
+
+    Returns:
+        .rm file bytes.
+    """
+    author_uuid = uuid_mod.UUID("00000000-0000-4000-8000-000000000001")
+
+    blocks: list[object] = [
+        AuthorIdsBlock(author_uuids={1: author_uuid}),
+        MigrationInfoBlock(migration_id=CrdtId(1, 1), is_device=True),
+        PageInfoBlock(loads_count=1, merges_count=0, text_chars_count=0, text_lines_count=0),
+        SceneTreeBlock(
+            tree_id=CrdtId(0, 11),
+            node_id=CrdtId(0, 0),
+            is_update=True,
+            parent_id=CrdtId(0, 1),
+        ),
+        TreeNodeBlock(Group(node_id=CrdtId(0, 1))),
+        TreeNodeBlock(
+            Group(
+                node_id=CrdtId(0, 11),
+                label=LwwValue(timestamp=CrdtId(0, 12), value="Layer 1"),
+            )
+        ),
+        SceneGroupItemBlock(
+            parent_id=CrdtId(0, 1),
+            item=CrdtSequenceItem(
+                item_id=CrdtId(0, 13),
+                left_id=CrdtId(0, 0),
+                right_id=CrdtId(0, 0),
+                deleted_length=0,
+                value=CrdtId(0, 11),
+            ),
+        ),
+        SceneGlyphItemBlock(
+            parent_id=CrdtId(0, 11),
+            item=CrdtSequenceItem(
+                item_id=CrdtId(1, item_id_a),
+                left_id=CrdtId(0, 0),
+                right_id=CrdtId(0, 0),
+                deleted_length=0,
+                value=GlyphRange(
+                    start=0,
+                    length=len(glyph_text),
+                    text=glyph_text,
+                    color=PenColor.HIGHLIGHT,
+                    rectangles=rects_a,
+                ),
+            ),
+        ),
+        SceneGlyphItemBlock(
+            parent_id=CrdtId(0, 11),
+            item=CrdtSequenceItem(
+                item_id=CrdtId(1, item_id_b),
+                left_id=CrdtId(0, 0),
+                right_id=CrdtId(0, 0),
+                deleted_length=0,
+                value=GlyphRange(
+                    start=0,
+                    length=len(glyph_text),
+                    text=glyph_text,
+                    color=PenColor.HIGHLIGHT,
+                    rectangles=rects_b,
+                ),
+            ),
+        ),
+    ]
+
+    buf = io.BytesIO()
+    rmscene.write_blocks(buf, blocks)
+    return buf.getvalue()
+
+
 def make_line(
     points: list[tuple[float, float]],
     *,
