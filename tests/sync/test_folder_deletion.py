@@ -163,9 +163,9 @@ class TestFolderDeletion:
 
         # Verify folder was also deleted (should happen automatically when empty)
         folders_remaining = state.get_all_folders("test-vault")
-        assert (
-            len(folders_remaining) == 0
-        ), f"Expected no folders, found {len(folders_remaining)}: {folders_remaining}"
+        assert len(folders_remaining) == 0, (
+            f"Expected no folders, found {len(folders_remaining)}: {folders_remaining}"
+        )
 
         state.close()
 

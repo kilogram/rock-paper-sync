@@ -200,9 +200,7 @@ def validate_rm_file(
                     errors.append(
                         ValidationError(
                             error_type="ANCHOR_OUT_OF_RANGE",
-                            message=(
-                                f"Anchor {char_offset} > page text length " f"{page_text_len}"
-                            ),
+                            message=(f"Anchor {char_offset} > page text length {page_text_len}"),
                             node_id=node_id,
                             details={
                                 "anchor": anchor_offset,
@@ -216,9 +214,7 @@ def validate_rm_file(
                     warnings.append(
                         ValidationError(
                             error_type="ANCHOR_NEAR_END",
-                            message=(
-                                f"Anchor {char_offset} is near end of text " f"({page_text_len})"
-                            ),
+                            message=(f"Anchor {char_offset} is near end of text ({page_text_len})"),
                             node_id=node_id,
                             details={
                                 "anchor": anchor_offset,
@@ -341,7 +337,7 @@ def validate_rm_bytes(
                         ValidationError(
                             error_type="ANCHOR_OUT_OF_RANGE",
                             message=(
-                                f"Anchor {char_offset} > page text length " f"{effective_text_len}"
+                                f"Anchor {char_offset} > page text length {effective_text_len}"
                             ),
                             node_id=node_id,
                             details={

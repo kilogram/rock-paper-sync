@@ -162,9 +162,9 @@ nostrud exercitation ullamco laboris.
     print(f"\nTrip 2: {trip2_highlight_count} highlights after insertion")
 
     # All highlights should be preserved
-    assert (
-        trip2_highlight_count == trip1_highlight_count
-    ), f"Highlights lost during insertion: {trip1_highlight_count} -> {trip2_highlight_count}"
+    assert trip2_highlight_count == trip1_highlight_count, (
+        f"Highlights lost during insertion: {trip1_highlight_count} -> {trip2_highlight_count}"
+    )
 
     # Verify "will move" highlight is still present
     trip2_texts = extract_highlight_texts(trip2_state.rm_files)
@@ -206,9 +206,9 @@ nostrud exercitation ullamco laboris.
 
     # The "edit me" highlight may become orphan or reanchor to similar text
     # At minimum, other highlights should be preserved
-    assert (
-        trip3_highlight_count >= trip1_highlight_count - 1
-    ), f"Too many highlights lost: {trip1_highlight_count} -> {trip3_highlight_count}"
+    assert trip3_highlight_count >= trip1_highlight_count - 1, (
+        f"Too many highlights lost: {trip1_highlight_count} -> {trip3_highlight_count}"
+    )
 
     device.observe_result(
         "TRIP 3: The text 'edit me' was changed to 'EDITED TEXT'.\n"
@@ -306,9 +306,9 @@ nostrud exercitation ullamco laboris.
 
     # The "duplicate" highlight should follow its paragraph
     trip5_texts = extract_highlight_texts(trip5_state.rm_files)
-    assert any(
-        "duplicate" in t for t in trip5_texts
-    ), "'duplicate' highlight lost after restructure"
+    assert any("duplicate" in t for t in trip5_texts), (
+        "'duplicate' highlight lost after restructure"
+    )
 
     device.observe_result(
         "TRIP 5: Section 5 (Duplicate Text) was moved before Section 3.\n"
@@ -329,9 +329,9 @@ nostrud exercitation ullamco laboris.
     print(f"\nTrip 6: {trip6_highlight_count} highlights (was {trip5_highlight_count})")
 
     # Should have at least as many as before (ideally more from new annotations)
-    assert (
-        trip6_highlight_count >= trip5_highlight_count
-    ), f"Highlights lost in cumulative round: {trip5_highlight_count} -> {trip6_highlight_count}"
+    assert trip6_highlight_count >= trip5_highlight_count, (
+        f"Highlights lost in cumulative round: {trip5_highlight_count} -> {trip6_highlight_count}"
+    )
 
     if trip6_highlight_count > trip5_highlight_count:
         print(f"   Added {trip6_highlight_count - trip5_highlight_count} new highlight(s)")
@@ -391,9 +391,9 @@ nostrud exercitation ullamco laboris.
     final_texts = extract_highlight_texts(trip6_state.rm_files)
 
     # "stable anchor" should have survived all modifications
-    assert any(
-        "stable anchor" in t for t in final_texts
-    ), "'stable anchor' highlight was lost - this should never happen!"
+    assert any("stable anchor" in t for t in final_texts), (
+        "'stable anchor' highlight was lost - this should never happen!"
+    )
     print("\n   'stable anchor' survived all modifications")
 
     # "first target" should have survived
@@ -401,9 +401,9 @@ nostrud exercitation ullamco laboris.
     print("   'first target' survived all modifications")
 
     # "duplicate" should have followed restructure
-    assert any(
-        "duplicate" in t for t in final_texts
-    ), "'duplicate' highlight was lost after restructure"
+    assert any("duplicate" in t for t in final_texts), (
+        "'duplicate' highlight was lost after restructure"
+    )
     print("   'duplicate' survived restructure")
 
     print("\nComprehensive highlight test PASSED")

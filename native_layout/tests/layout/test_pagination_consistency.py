@@ -124,9 +124,9 @@ class TestPaginationConsistency:
             block_sum = sum(estimate_block_lines(b, engine) for b in page)
             rendered = _page_text(page)
             engine_count = len(engine.calculate_line_breaks(rendered, engine.text_width))
-            assert (
-                block_sum == engine_count
-            ), f"{doc_id} page {i}: block-line sum {block_sum} != engine count {engine_count}"
+            assert block_sum == engine_count, (
+                f"{doc_id} page {i}: block-line sum {block_sum} != engine count {engine_count}"
+            )
 
     def test_nonfinal_pages_fill_to_capacity(self, doc_id, markdown, allow_split):
         """(b) non-final pages fill above lines_per_page - X.

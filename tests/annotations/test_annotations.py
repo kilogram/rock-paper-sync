@@ -60,12 +60,12 @@ class TestReadAnnotations:
 
             # Bounding box should contain all points
             for point in stroke.points:
-                assert (
-                    bbox.x <= point.x <= bbox.x + bbox.w
-                ), f"Point x={point.x} outside bbox x=[{bbox.x}, {bbox.x + bbox.w}]"
-                assert (
-                    bbox.y <= point.y <= bbox.y + bbox.h
-                ), f"Point y={point.y} outside bbox y=[{bbox.y}, {bbox.y + bbox.h}]"
+                assert bbox.x <= point.x <= bbox.x + bbox.w, (
+                    f"Point x={point.x} outside bbox x=[{bbox.x}, {bbox.x + bbox.w}]"
+                )
+                assert bbox.y <= point.y <= bbox.y + bbox.h, (
+                    f"Point y={point.y} outside bbox y=[{bbox.y}, {bbox.y + bbox.h}]"
+                )
 
     def test_read_highlights_from_file(self):
         """Test reading text highlights from a real .rm file."""
@@ -102,9 +102,9 @@ class TestReadAnnotations:
 
         actual_texts = [h.highlight.text for h in highlights]
 
-        assert (
-            actual_texts == expected_texts
-        ), f"Expected texts {expected_texts} but got {actual_texts}"
+        assert actual_texts == expected_texts, (
+            f"Expected texts {expected_texts} but got {actual_texts}"
+        )
 
     def test_highlight_rectangles(self):
         """Test that highlight rectangles are extracted correctly."""

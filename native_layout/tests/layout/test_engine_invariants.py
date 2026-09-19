@@ -132,9 +132,9 @@ def _assert_round_trip(engine: WordWrapLayoutEngine, text: str) -> None:
             f"round-trip changed line: offset={offset!r} -> ({x},{y}) -> "
             f"{recovered} at y={ry} (text={text!r})"
         )
-        assert rx == pytest.approx(
-            x, abs=0.5
-        ), f"round-trip changed x: offset={offset} x={x} recovered_x={rx} (text={text!r})"
+        assert rx == pytest.approx(x, abs=0.5), (
+            f"round-trip changed x: offset={offset} x={x} recovered_x={rx} (text={text!r})"
+        )
 
 
 @pytest.mark.parametrize("text", EDGE_CASE_TEXTS)
@@ -161,9 +161,9 @@ def _assert_monotonic(engine: WordWrapLayoutEngine, text: str) -> None:
         (x0, y0), (x1, y1) = positions[i], positions[i + 1]
         # Reading order: strictly later means a greater y, or same y with a
         # strictly greater x.
-        assert (y1 > y0) or (
-            y1 == y0 and x1 > x0
-        ), f"non-monotonic at offset {i}->{i + 1}: ({x0},{y0}) then ({x1},{y1}) (text={text!r})"
+        assert (y1 > y0) or (y1 == y0 and x1 > x0), (
+            f"non-monotonic at offset {i}->{i + 1}: ({x0},{y0}) then ({x1},{y1}) (text={text!r})"
+        )
 
 
 @pytest.mark.parametrize("text", EDGE_CASE_TEXTS)
@@ -194,9 +194,9 @@ def _assert_line_width_bound(engine: WordWrapLayoutEngine, text: str) -> None:
         if is_single_word and line_width > width:
             # Allowed exception (W2): an unbreakable word wider than the line.
             continue
-        assert (
-            line_width <= width + 0.5
-        ), f"line exceeds layout width {width}: {line_width} for {line!r} (text={text!r})"
+        assert line_width <= width + 0.5, (
+            f"line exceeds layout width {width}: {line_width} for {line!r} (text={text!r})"
+        )
 
 
 @pytest.mark.parametrize("text", EDGE_CASE_TEXTS)

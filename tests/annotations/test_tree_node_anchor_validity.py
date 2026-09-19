@@ -179,9 +179,9 @@ def test_tree_node_anchors_within_page_bounds(multi_trip_testdata):
         with open(rm_file, "rb") as f:
             input_strokes += count_strokes(f.read())
 
-    assert (
-        total_strokes >= input_strokes
-    ), f"Strokes lost during generation: input={input_strokes}, output={total_strokes}"
+    assert total_strokes >= input_strokes, (
+        f"Strokes lost during generation: input={input_strokes}, output={total_strokes}"
+    )
 
 
 def test_tree_node_anchor_delta_not_applied_to_cross_page():
@@ -256,9 +256,9 @@ def test_tree_node_anchor_delta_not_applied_to_cross_page():
             # The bug would show anchors that are: original_anchor + delta
             # These would exceed page_text_len
             assert char_offset is not None, f"Page {i}: TreeNodeBlock {node_id} has no anchor"
-            assert (
-                char_offset >= 0
-            ), f"Page {i}: TreeNodeBlock {node_id} has negative anchor {char_offset}"
+            assert char_offset >= 0, (
+                f"Page {i}: TreeNodeBlock {node_id} has negative anchor {char_offset}"
+            )
             assert char_offset <= page_text_len, (
                 f"Page {i}: TreeNodeBlock {node_id} anchor={char_offset} exceeds "
                 f"page_text_len={page_text_len}.\n"
@@ -423,9 +423,9 @@ def test_anchor_validity_with_positive_delta():
             pytest.fail(msg)
 
         # Verify strokes weren't lost
-        assert (
-            total_strokes >= input_strokes
-        ), f"Strokes lost during generation: input={input_strokes}, output={total_strokes}"
+        assert total_strokes >= input_strokes, (
+            f"Strokes lost during generation: input={input_strokes}, output={total_strokes}"
+        )
 
     finally:
         modified_md_path.unlink()

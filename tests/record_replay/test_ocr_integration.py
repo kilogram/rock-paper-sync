@@ -229,9 +229,9 @@ def test_ocr_integration(device, workspace, fixtures_dir, tmp_path):
 
     # Verify corrections stored
     pending = state_manager.get_pending_ocr_corrections()
-    assert (
-        len(pending) == corrections_detected
-    ), f"Expected {corrections_detected} stored corrections, got {len(pending)}"
+    assert len(pending) == corrections_detected, (
+        f"Expected {corrections_detected} stored corrections, got {len(pending)}"
+    )
     print(f"   Corrections stored in database: {len(pending)}")
 
     # Test anchor creation from actual device strokes

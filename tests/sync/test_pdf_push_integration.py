@@ -174,9 +174,9 @@ class TestPdfPushIntegration:
         pdf_entry = next(e for e in entries if e.entry_name.endswith(".pdf"))
         pdf_blob = cloud_sync.sync_client.download_blob(pdf_entry.hash)
         actual_pdf_sha256 = hashlib.sha256(pdf_blob).hexdigest()
-        assert (
-            actual_pdf_sha256 == file_state.pushed_pdf_sha256
-        ), f"PDF hash mismatch: state={file_state.pushed_pdf_sha256}, cloud={actual_pdf_sha256}"
+        assert actual_pdf_sha256 == file_state.pushed_pdf_sha256, (
+            f"PDF hash mismatch: state={file_state.pushed_pdf_sha256}, cloud={actual_pdf_sha256}"
+        )
 
         initial_index_hash = _get_doc_index_hash(cloud_sync, doc_uuid)
         assert initial_index_hash is not None
@@ -205,15 +205,15 @@ class TestPdfPushIntegration:
 
         # Index hash should have changed
         hash_after_config = _get_doc_index_hash(cloud_sync, doc_uuid)
-        assert (
-            hash_after_config != initial_index_hash
-        ), "Index hash should change after config re-push"
+        assert hash_after_config != initial_index_hash, (
+            "Index hash should change after config re-push"
+        )
 
         # New pdf hash should differ
         state_after = state2.get_file_state("test-vault", "test-pdf-push.md")
-        assert (
-            state_after.pushed_pdf_sha256 != file_state.pushed_pdf_sha256
-        ), "PDF hash should change after font_size_pt change"
+        assert state_after.pushed_pdf_sha256 != file_state.pushed_pdf_sha256, (
+            "PDF hash should change after font_size_pt change"
+        )
 
         # --- (d) Inject fake .rm, verify ink guard ---
         # Upload a fake .rm entry into the document's index
@@ -251,9 +251,9 @@ class TestPdfPushIntegration:
         result4 = engine3.sync_file(vault_config, test_file)
         assert not result4.success, "Push should fail when ink is present"
         assert result4.error is not None
-        assert (
-            "discard-ink" in result4.error.lower()
-        ), f"Error should mention --discard-ink: {result4.error}"
+        assert "discard-ink" in result4.error.lower(), (
+            f"Error should mention --discard-ink: {result4.error}"
+        )
 
         # With discard_ink=True, push should succeed
         result5 = engine3.sync_file(vault_config, test_file, discard_ink=True)
@@ -263,9 +263,9 @@ class TestPdfPushIntegration:
         cloud_sync.invalidate_root_cache()
         entries_after_discard = _read_document_index(cloud_sync, doc_uuid)
         rm_after = [e for e in entries_after_discard if e.entry_name.endswith(".rm")]
-        assert (
-            len(rm_after) == 0
-        ), f"After discard_ink push, .rm entries should be gone, got {len(rm_after)}"
+        assert len(rm_after) == 0, (
+            f"After discard_ink push, .rm entries should be gone, got {len(rm_after)}"
+        )
 
         state.close()
         state2.close()

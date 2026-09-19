@@ -122,13 +122,13 @@ class TestIssue3ResyncRequiredContextLoss:
             }
 
             # Verify essential context is present
-            assert context_items[
-                "vault_name"
-            ], "ResyncRequired should include vault_name for proper handling"
+            assert context_items["vault_name"], (
+                "ResyncRequired should include vault_name for proper handling"
+            )
             assert context_items["reason"], "ResyncRequired should include reason for debugging"
-            assert context_items[
-                "conflict_error"
-            ], "ResyncRequired should include original conflict_error for context"
+            assert context_items["conflict_error"], (
+                "ResyncRequired should include original conflict_error for context"
+            )
 
 
 class TestIssue4StateDivergenceOnFinalizeFailure:

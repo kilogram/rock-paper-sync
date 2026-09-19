@@ -163,9 +163,9 @@ incididunt ut labore et dolore magna.
     print(f"\nTrip 2: {trip2_stroke_count} strokes after insertion")
 
     # All strokes should be preserved
-    assert (
-        trip2_stroke_count == trip1_stroke_count
-    ), f"Strokes lost during insertion: {trip1_stroke_count} -> {trip2_stroke_count}"
+    assert trip2_stroke_count == trip1_stroke_count, (
+        f"Strokes lost during insertion: {trip1_stroke_count} -> {trip2_stroke_count}"
+    )
 
     device.observe_result(
         "TRIP 2: Content was inserted before Section 5.\n"
@@ -240,9 +240,9 @@ incididunt ut labore et dolore magna.
     print(f"\nTrip 4: {trip4_stroke_count} strokes after text modification")
 
     # Strokes should stay anchored to their paragraphs
-    assert (
-        trip4_stroke_count >= trip3_stroke_count - 1
-    ), f"Too many strokes lost: {trip3_stroke_count} -> {trip4_stroke_count}"
+    assert trip4_stroke_count >= trip3_stroke_count - 1, (
+        f"Too many strokes lost: {trip3_stroke_count} -> {trip4_stroke_count}"
+    )
 
     device.observe_result(
         "TRIP 4: Text near the 'hello' stroke was modified.\n"
@@ -265,9 +265,9 @@ incididunt ut labore et dolore magna.
     print(f"\nTrip 5: {trip5_stroke_count} strokes (was {trip4_stroke_count})")
 
     # Should have at least as many as before
-    assert (
-        trip5_stroke_count >= trip4_stroke_count
-    ), f"Strokes lost in cumulative round: {trip4_stroke_count} -> {trip5_stroke_count}"
+    assert trip5_stroke_count >= trip4_stroke_count, (
+        f"Strokes lost in cumulative round: {trip4_stroke_count} -> {trip5_stroke_count}"
+    )
 
     if trip5_stroke_count > trip4_stroke_count:
         print(f"   Added {trip5_stroke_count - trip4_stroke_count} new stroke(s)")

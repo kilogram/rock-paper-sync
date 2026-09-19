@@ -147,8 +147,7 @@ class AnnotationTracer:
             lines.append("ANCHOR CALCULATIONS:")
             for event in anchor_events:
                 lines.append(
-                    f"  {event.annotation_id} @ {event.phase}: "
-                    f"anchor={event.data.get('anchor')}"
+                    f"  {event.annotation_id} @ {event.phase}: anchor={event.data.get('anchor')}"
                 )
             lines.append("")
 

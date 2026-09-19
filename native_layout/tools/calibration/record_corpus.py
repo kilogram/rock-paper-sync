@@ -237,13 +237,12 @@ def print_checklist(device: str, device_folder: str) -> None:
     print(f"{b}  OPERATOR CHECKLIST — do this on the device now{e}")
     print(f"{b}{'=' * 70}{e}")
     print(
-        f"\nOpen the folder {y}{device_folder}{e} on the device. It contains "
-        f"{len(docs)} documents:"
+        f"\nOpen the folder {y}{device_folder}{e} on the device. It contains {len(docs)} documents:"
     )
     for d in docs:
         print(f"    - {d}")
     print(f"\n{b}1. Highlight every sentinel token.{e}")
-    print(f"   There are {y}{len(sentinels)}{e} sentinels: " f"{sentinels[0]}…{sentinels[-1]}.")
+    print(f"   There are {y}{len(sentinels)}{e} sentinels: {sentinels[0]}…{sentinels[-1]}.")
     print("   Use the highlighter tool. Drag over exactly the ZEBRAnn word so")
     print("   the highlight covers those glyphs and nothing else. One highlight")
     print("   per sentinel. Highlight ALL of them — a missed sentinel is a hole")

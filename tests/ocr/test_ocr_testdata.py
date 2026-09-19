@@ -239,9 +239,9 @@ class TestParagraphMapping:
                     )
 
                     if result is not None:
-                        assert (
-                            0 <= result < len(markdown_blocks)
-                        ), f"Invalid paragraph index {result} (max {len(markdown_blocks) - 1})"
+                        assert 0 <= result < len(markdown_blocks), (
+                            f"Invalid paragraph index {result} (max {len(markdown_blocks) - 1})"
+                        )
 
     def test_mappings_to_expected_sections(self, rm_files, markdown_blocks, testdata_manifest):
         """Verify mappings correlate with expected test sections."""
@@ -294,9 +294,9 @@ class TestCoordinateTransformation:
             # Map may be empty if no text-relative annotations
             # But if populated, should have valid X anchors
             for parent_id, anchor_x in anchor_x_map.items():
-                assert isinstance(
-                    anchor_x, float
-                ), f"anchor_x should be float, got {type(anchor_x)}"
+                assert isinstance(anchor_x, float), (
+                    f"anchor_x should be float, got {type(anchor_x)}"
+                )
 
     def test_annotations_load_with_coordinates(self, rm_files):
         """Verify annotations load with valid coordinates via DocumentModel."""

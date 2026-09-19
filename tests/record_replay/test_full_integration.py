@@ -84,9 +84,9 @@ def test_full_integration(device, workspace, fixtures_dir, tmp_path):
             doc_uuid = device.upload_document(workspace.test_doc)
 
             initial_state = device.wait_for_annotations(doc_uuid)
-            assert (
-                initial_state.has_annotations
-            ), "Need comprehensive annotations for integration test"
+            assert initial_state.has_annotations, (
+                "Need comprehensive annotations for integration test"
+            )
 
             anno_state = AnnotationState.from_document_state(initial_state)
             assert anno_state.highlights, "Need highlights for integration test"
@@ -175,9 +175,9 @@ def test_full_integration(device, workspace, fixtures_dir, tmp_path):
             device.trigger_sync()
 
             updated_state = device.get_document_state(doc_uuid)
-            assert (
-                updated_state.has_annotations
-            ), "Annotations should survive markdown modifications"
+            assert updated_state.has_annotations, (
+                "Annotations should survive markdown modifications"
+            )
 
             new_state = AnnotationState.from_document_state(updated_state)
 
@@ -383,8 +383,8 @@ def test_integration_conflict_stress(device, workspace, fixtures_dir):
     retention_rate = updated_count / initial_count if initial_count > 0 else 0
     print(f"\n📊 Stress test retention: {updated_count}/{initial_count} ({retention_rate:.1%})")
 
-    assert (
-        retention_rate > 0.5
-    ), f"Excessive annotation loss under stress: {retention_rate:.1%} < 50%"
+    assert retention_rate > 0.5, (
+        f"Excessive annotation loss under stress: {retention_rate:.1%} < 50%"
+    )
 
     device.end_test(test_id)

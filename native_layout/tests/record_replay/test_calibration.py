@@ -445,9 +445,9 @@ class TestEngineCalibration:
         profile_line_height = profile["line_height"]
         engine_line_height = layout_engine.line_height
 
-        assert (
-            abs(profile_line_height - engine_line_height) < 1.0
-        ), f"Line height mismatch: profile={profile_line_height}, engine={engine_line_height}"
+        assert abs(profile_line_height - engine_line_height) < 1.0, (
+            f"Line height mismatch: profile={profile_line_height}, engine={engine_line_height}"
+        )
 
     @pytest.mark.parametrize("device", list(CalibrableDevice), ids=lambda d: d.value)
     def test_layout_width_matches_profile(self, device: CalibrableDevice, layout_engine):
@@ -459,9 +459,9 @@ class TestEngineCalibration:
         profile_width = profile["layout_text_width"]
         engine_width = layout_engine.text_width
 
-        assert (
-            abs(profile_width - engine_width) < 5.0
-        ), f"Layout width mismatch: profile={profile_width}, engine={engine_width}"
+        assert abs(profile_width - engine_width) < 5.0, (
+            f"Layout width mismatch: profile={profile_width}, engine={engine_width}"
+        )
 
 
 # =============================================================================
@@ -500,9 +500,9 @@ class TestStructuralSpacing:
         bullet_indent = structural.get("bullet_indent_px", 30.0)
         list_indent = structural.get("list_indent_px", 30.0)
 
-        assert (
-            10.0 <= bullet_indent <= 100.0
-        ), f"Bullet indent {bullet_indent} outside expected range"
+        assert 10.0 <= bullet_indent <= 100.0, (
+            f"Bullet indent {bullet_indent} outside expected range"
+        )
         assert 10.0 <= list_indent <= 100.0, f"List indent {list_indent} outside expected range"
 
 

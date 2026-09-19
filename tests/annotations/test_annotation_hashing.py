@@ -222,9 +222,9 @@ More content in a subsection.
         doc2 = parse_markdown_file(markdown_file)
         hash_after_markers = compute_semantic_hash(doc2.content)
 
-        assert (
-            hash_initial == hash_after_markers
-        ), "Semantic hash MUST be unchanged after adding markers (prevents loop!)"
+        assert hash_initial == hash_after_markers, (
+            "Semantic hash MUST be unchanged after adding markers (prevents loop!)"
+        )
 
     def test_file_hash_changes_but_semantic_hash_stable(self, markdown_file):
         """File hash changes but semantic hash doesn't."""

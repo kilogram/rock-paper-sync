@@ -90,9 +90,9 @@ class TestAnnotationDetection:
             total_annotations += len(annotations)
 
         # Stage1 should be clean
-        assert (
-            total_annotations == 0
-        ), f"Expected no annotations in stage1, found {total_annotations}"
+        assert total_annotations == 0, (
+            f"Expected no annotations in stage1, found {total_annotations}"
+        )
 
     def test_stage2_has_annotations(self, stage2_rm_files):
         """Verify stage2 files have annotations (user added them)."""
@@ -111,9 +111,9 @@ class TestAnnotationDetection:
         stage2_count = sum(len(read_annotations(f)) for f in stage2_rm_files)
 
         # Stage2 should have more annotations
-        assert (
-            stage2_count > stage1_count
-        ), f"Stage2 ({stage2_count}) should have more annotations than stage1 ({stage1_count})"
+        assert stage2_count > stage1_count, (
+            f"Stage2 ({stage2_count}) should have more annotations than stage1 ({stage1_count})"
+        )
 
 
 class TestAnnotationContent:
@@ -146,9 +146,9 @@ class TestAnnotationContent:
             for ann in annotations:
                 if ann.type == AnnotationType.HIGHLIGHT:
                     assert ann.highlight is not None, "Highlight annotation missing highlight data"
-                    assert (
-                        len(ann.highlight.rectangles) >= 1
-                    ), "Highlight needs at least 1 rectangle"
+                    assert len(ann.highlight.rectangles) >= 1, (
+                        "Highlight needs at least 1 rectangle"
+                    )
 
 
 class TestTextBlockExtraction:

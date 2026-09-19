@@ -1245,9 +1245,9 @@ class TestMultiOccurrenceFuzzyThresholdP2:
         _, _, _, scores = self._build_anchor_and_new_doc()
         best, worst = max(scores), min(scores)
         assert best > worst + 0.2, f"Scores too similar: {scores}"
-        assert (
-            best < 1.0
-        ), "Best score is 1.0; introduce context mutations to allow threshold above it"
+        assert best < 1.0, (
+            "Best score is 1.0; introduce context mutations to allow threshold above it"
+        )
 
     # --- Surface A: _fuzzy_match() called directly ---
 
@@ -1260,15 +1260,15 @@ class TestMultiOccurrenceFuzzyThresholdP2:
 
         result = anchor._fuzzy_match(new_doc, threshold_below)  # type: ignore[attr-defined]
 
-        assert (
-            result is not None
-        ), f"Expected match at threshold {threshold_below:.4f} (best_score={best_score:.4f})"
-        assert (
-            result.start_offset == offsets[best_idx]
-        ), f"Expected offset {offsets[best_idx]}, got {result.start_offset}. Scores: {scores}"
-        assert (
-            abs(result.confidence - best_score) < 0.001
-        ), f"confidence {result.confidence:.4f} should equal best_score {best_score:.4f}"
+        assert result is not None, (
+            f"Expected match at threshold {threshold_below:.4f} (best_score={best_score:.4f})"
+        )
+        assert result.start_offset == offsets[best_idx], (
+            f"Expected offset {offsets[best_idx]}, got {result.start_offset}. Scores: {scores}"
+        )
+        assert abs(result.confidence - best_score) < 0.001, (
+            f"confidence {result.confidence:.4f} should equal best_score {best_score:.4f}"
+        )
 
     def test_fuzzy_match_multi_occurrence_returns_none_above_threshold(self):
         """_fuzzy_match returns None when fuzzy_threshold exceeds the best context score."""

@@ -77,9 +77,9 @@ class TestCharacterWidths:
 
         # Ratios should be within 10% of each other
         ratio_diff = abs(qt_ratio - our_ratio) / qt_ratio
-        assert (
-            ratio_diff < 0.10
-        ), f"Width ratio mismatch: Qt m/i={qt_ratio:.2f}, ours={our_ratio:.2f}"
+        assert ratio_diff < 0.10, (
+            f"Width ratio mismatch: Qt m/i={qt_ratio:.2f}, ours={our_ratio:.2f}"
+        )
 
     def test_string_width_scaling_consistent(self, qt_ref, layout_engine):
         """String widths should scale consistently (Qt is ~32% larger at same pt)."""
@@ -146,9 +146,9 @@ class TestWordWrap:
         wide_breaks = layout_engine.calculate_line_breaks(wide, 758.0)
 
         # Wide characters should need more lines (have more breaks)
-        assert (
-            len(wide_breaks) >= len(narrow_breaks)
-        ), f"Wide should need at least as many lines: narrow={len(narrow_breaks)}, wide={len(wide_breaks)}"
+        assert len(wide_breaks) >= len(narrow_breaks), (
+            f"Wide should need at least as many lines: narrow={len(narrow_breaks)}, wide={len(wide_breaks)}"
+        )
 
 
 class TestFontInfo:

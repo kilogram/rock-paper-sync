@@ -316,9 +316,9 @@ class TestIntegrationWithRealData:
 
                     if result is not None:
                         mapped_count += 1
-                        assert (
-                            0 <= result < len(markdown_blocks)
-                        ), f"Invalid paragraph index {result}"
+                        assert 0 <= result < len(markdown_blocks), (
+                            f"Invalid paragraph index {result}"
+                        )
 
                 # At least some annotations should map (not all, as some may be margin notes)
                 # We just verify the mapper doesn't crash and returns valid indices when it does map

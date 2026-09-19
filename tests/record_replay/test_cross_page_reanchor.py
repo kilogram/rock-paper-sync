@@ -244,15 +244,15 @@ adipisci velit, sed quia non numquam eius modi tempora incidunt.
 
     # 2. Highlights should still exist (may be on different pages)
     if target_hl:
-        assert (
-            target_hl_after is not None
-        ), "HIGHLIGHT LOST: 'target' highlight disappeared after modification"
+        assert target_hl_after is not None, (
+            "HIGHLIGHT LOST: 'target' highlight disappeared after modification"
+        )
         print("✅ 'target' highlight preserved")
 
     if bottom_hl:
-        assert (
-            bottom_hl_after is not None
-        ), "HIGHLIGHT LOST: 'bottom' highlight disappeared after modification"
+        assert bottom_hl_after is not None, (
+            "HIGHLIGHT LOST: 'bottom' highlight disappeared after modification"
+        )
         print("✅ 'bottom' highlight preserved")
 
     # 3. If document grew, annotations may have moved to new pages

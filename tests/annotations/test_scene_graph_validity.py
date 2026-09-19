@@ -354,9 +354,9 @@ class TestStrokeBundle:
 
                     # Should return 3 + len(strokes) blocks
                     expected_count = 3 + len(bundle.strokes)
-                    assert (
-                        len(raw_blocks) == expected_count
-                    ), f"Expected {expected_count} raw blocks, got {len(raw_blocks)}"
+                    assert len(raw_blocks) == expected_count, (
+                        f"Expected {expected_count} raw blocks, got {len(raw_blocks)}"
+                    )
 
                     # First should be SceneTreeBlock
                     assert type(raw_blocks[0]).__name__ == "SceneTreeBlock"
@@ -366,9 +366,9 @@ class TestStrokeBundle:
                     assert type(raw_blocks[2]).__name__ == "SceneGroupItemBlock"
                     # Rest should be line blocks
                     for i, stroke_block in enumerate(raw_blocks[3:]):
-                        assert (
-                            "Line" in type(stroke_block).__name__
-                        ), f"Block {i + 3} should be a Line block"
+                        assert "Line" in type(stroke_block).__name__, (
+                            f"Block {i + 3} should be a Line block"
+                        )
                     return  # Found at least one complete bundle
 
     def test_incomplete_bundle_reports_missing_blocks(self):
@@ -411,9 +411,9 @@ class TestStrokeBundle:
                 if bundle.tree_node and bundle.anchor_offset is not None:
                     found_with_anchor = True
                     # Anchor should be a valid character offset
-                    assert (
-                        bundle.anchor_offset >= 0
-                    ), f"Anchor offset should be non-negative, got {bundle.anchor_offset}"
+                    assert bundle.anchor_offset >= 0, (
+                        f"Anchor offset should be non-negative, got {bundle.anchor_offset}"
+                    )
 
         # We should find at least one bundle with an anchor in the test data
         assert found_with_anchor, "Expected at least one bundle with anchor_offset"

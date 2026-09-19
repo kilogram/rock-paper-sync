@@ -770,6 +770,6 @@ class TestGeneratorOrphanBlobsIntegration:
         # Spatial-only migration should be routed to preservation, not visible layer.
         # The fake_anno has no original_rm_block so it won't be in any StrokePlacement.
         # The blob should be on the preservation layer.
-        assert rm_doc.pages[0].orphan_blobs == [
-            blob
-        ], "Spatial-only migration must appear on preservation layer"
+        assert rm_doc.pages[0].orphan_blobs == [blob], (
+            "Spatial-only migration must appear on preservation layer"
+        )

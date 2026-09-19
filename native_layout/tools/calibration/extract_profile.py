@@ -815,7 +815,7 @@ def main():
     parser.add_argument(
         "--input",
         required=True,
-        help="Corpus dir (with src/ + rm_files/) " "or legacy dir of golden .rm files",
+        help="Corpus dir (with src/ + rm_files/) or legacy dir of golden .rm files",
     )
     parser.add_argument("--output", help="Output path for profile.json")
     parser.add_argument("--print", action="store_true", help="Print profile to stdout")

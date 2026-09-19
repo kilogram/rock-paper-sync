@@ -248,9 +248,9 @@ class TestDeviceNativeRef:
         similarity = calculate_similarity(viewport_scaled, device_thumbnail)
 
         # This is our primary reference document - should be very similar
-        assert (
-            similarity > 0.85
-        ), f"Device-native reference similarity {similarity:.2%} below 85% threshold"
+        assert similarity > 0.85, (
+            f"Device-native reference similarity {similarity:.2%} below 85% threshold"
+        )
 
     def test_text_is_visible(self, device_native_rm: Path) -> None:
         """Rendered document contains visible text (non-white pixels)."""

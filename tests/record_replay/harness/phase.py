@@ -137,13 +137,13 @@ class AnnotationState:
         """
         suffix = f" — {msg}" if msg else ""
         if check in ("highlights", "both") and self.highlights:
-            assert len(after.highlights) == len(
-                self.highlights
-            ), f"Highlights lost: {len(self.highlights)} → {len(after.highlights)}{suffix}"
+            assert len(after.highlights) == len(self.highlights), (
+                f"Highlights lost: {len(self.highlights)} → {len(after.highlights)}{suffix}"
+            )
         if check in ("strokes", "both") and self.strokes:
-            assert len(after.strokes) == len(
-                self.strokes
-            ), f"Strokes lost: {len(self.strokes)} → {len(after.strokes)}{suffix}"
+            assert len(after.strokes) == len(self.strokes), (
+                f"Strokes lost: {len(self.strokes)} → {len(after.strokes)}{suffix}"
+            )
 
     def assert_positions_match(
         self,

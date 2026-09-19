@@ -962,9 +962,9 @@ class TestCrossPageHighlightPositioning:
                     {"page-uuid-0": fake_rm_path},
                 )
 
-        assert (
-            captured.get("old_text") == "target word"
-        ), "Same-page highlight should receive old_text for delta positioning"
+        assert captured.get("old_text") == "target word", (
+            "Same-page highlight should receive old_text for delta positioning"
+        )
         assert captured.get("old_origin") is not None
 
     def test_cross_page_highlight_uses_layout_based(self, gen: RemarkableGenerator) -> None:

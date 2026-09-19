@@ -168,9 +168,9 @@ def test_hidden_layer_orphans(device, workspace, fixtures_dir):
     assert has_annotation_markers, "Pull sync should render annotation markers"
 
     # No preservation layer yet (no orphans)
-    assert not has_preservation_layer(
-        trip1_state.rm_files
-    ), "Trip 1: no PRESERVATION layer expected before any orphans"
+    assert not has_preservation_layer(trip1_state.rm_files), (
+        "Trip 1: no PRESERVATION layer expected before any orphans"
+    )
 
     # =========================================================================
     # TRIP 2: Delete Section 1 → single orphan → push produces hidden layer
@@ -212,15 +212,15 @@ def test_hidden_layer_orphans(device, workspace, fixtures_dir):
         "'preserved forever'"
     )
     assert is_invisible, "Trip 2: PRESERVATION layer TreeNodeBlock must have visible=False"
-    assert (
-        block_count >= 1
-    ), f"Trip 2: expected ≥1 block on the preservation layer, got {block_count}"
+    assert block_count >= 1, (
+        f"Trip 2: expected ≥1 block on the preservation layer, got {block_count}"
+    )
 
     # Control highlight must still be on the content layer
     trip2_texts = extract_highlight_texts(trip2_state.rm_files)
-    assert any(
-        "control" in t for t in trip2_texts
-    ), "Trip 2: 'control highlight' should still be anchored after Section 1 deletion"
+    assert any("control" in t for t in trip2_texts), (
+        "Trip 2: 'control highlight' should still be anchored after Section 1 deletion"
+    )
 
     # PNG golden comparison: content + preservation layer renders
     device.assert_trip_png_goldens(
@@ -277,15 +277,15 @@ def test_hidden_layer_orphans(device, workspace, fixtures_dir):
     print(f"  Blocks on preservation layer:      {trip3_block_count}")
 
     assert trip3_hidden, "Trip 3: PRESERVATION layer must still be present"
-    assert (
-        trip3_block_count >= block_count
-    ), f"Trip 3: preservation layer should have grown (was {block_count}, now {trip3_block_count})"
+    assert trip3_block_count >= block_count, (
+        f"Trip 3: preservation layer should have grown (was {block_count}, now {trip3_block_count})"
+    )
 
     # Control still present
     trip3_texts = extract_highlight_texts(trip3_state.rm_files)
-    assert any(
-        "control" in t for t in trip3_texts
-    ), "Trip 3: 'control highlight' should survive Sections 2 & 3 deletion"
+    assert any("control" in t for t in trip3_texts), (
+        "Trip 3: 'control highlight' should survive Sections 2 & 3 deletion"
+    )
 
     # PNG golden comparison: preservation layer should be larger than trip 2
     device.assert_trip_png_goldens(
@@ -342,9 +342,9 @@ def test_hidden_layer_orphans(device, workspace, fixtures_dir):
 
     # Control still present
     trip4_texts = extract_highlight_texts(trip4_state.rm_files)
-    assert any(
-        "control" in t for t in trip4_texts
-    ), "Trip 4: 'control highlight' must survive through recovery trip"
+    assert any("control" in t for t in trip4_texts), (
+        "Trip 4: 'control highlight' must survive through recovery trip"
+    )
 
     # PNG golden comparison: orphan recovery — "preserved forever" back on content layer
     device.assert_trip_png_goldens(
@@ -373,9 +373,9 @@ def test_hidden_layer_orphans(device, workspace, fixtures_dir):
     assert is_invisible, "PRESERVATION layer must be invisible (hidden from user)"
 
     # Control highlight survived all modifications
-    assert any(
-        "control" in t for t in trip4_texts
-    ), "'control highlight' was lost — non-orphaned annotations must survive all modifications"
+    assert any("control" in t for t in trip4_texts), (
+        "'control highlight' was lost — non-orphaned annotations must survive all modifications"
+    )
 
     print("  PRESERVATION layer created after first orphan:      PASS")
     print("  PRESERVATION layer is invisible:                    PASS")

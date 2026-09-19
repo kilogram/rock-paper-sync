@@ -123,6 +123,6 @@ def test_content_mismatch_is_detected():
     moved = compare_rm_files_visually({"page": ST_PHASE3.read_bytes()}, golden)
     matched = [m for m in moved.matches if m.test_cluster is not None]
     assert matched, "no clusters paired between phase-3 and golden captures"
-    assert all(
-        m.hash_distance is not None for m in matched
-    ), "verdict path skipped pHash computation on paired clusters"
+    assert all(m.hash_distance is not None for m in matched), (
+        "verdict path skipped pHash computation on paired clusters"
+    )

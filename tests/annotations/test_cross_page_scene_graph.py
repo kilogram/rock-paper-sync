@@ -156,9 +156,9 @@ class TestInputValidation:
             bundles = StrokeBundle.from_index(index)
 
             for bundle in bundles:
-                assert (
-                    bundle.is_complete
-                ), f"Trip 1 file {rm_path.name} has incomplete bundle: {bundle}"
+                assert bundle.is_complete, (
+                    f"Trip 1 file {rm_path.name} has incomplete bundle: {bundle}"
+                )
 
 
 class TestDocumentModelMigration:
@@ -208,9 +208,9 @@ class TestDocumentModelMigration:
             if anno.annotation_type == "stroke":
                 assert anno.original_tree_node is not None, "Stroke missing TreeNodeBlock"
                 assert anno.original_scene_tree_block is not None, "Stroke missing SceneTreeBlock"
-                assert (
-                    anno.original_scene_group_item is not None
-                ), "Stroke missing SceneGroupItemBlock"
+                assert anno.original_scene_group_item is not None, (
+                    "Stroke missing SceneGroupItemBlock"
+                )
 
 
 class TestGeneratedRmFileValidity:
@@ -276,12 +276,12 @@ class TestGeneratedRmFileValidity:
             output_strokes += counts["strokes"]
             output_highlights += counts["highlights"]
 
-        assert (
-            output_strokes == input_strokes
-        ), f"Stroke count changed: {input_strokes} -> {output_strokes}"
-        assert (
-            output_highlights == input_highlights
-        ), f"Highlight count changed: {input_highlights} -> {output_highlights}"
+        assert output_strokes == input_strokes, (
+            f"Stroke count changed: {input_strokes} -> {output_strokes}"
+        )
+        assert output_highlights == input_highlights, (
+            f"Highlight count changed: {input_highlights} -> {output_highlights}"
+        )
 
     def test_stroke_bundles_are_complete_after_generation(
         self, trip1_rm_files, page_uuids, new_markdown, generator

@@ -38,9 +38,9 @@ class TestFontMetricsBasics:
         """Different characters should have different widths (proportional)."""
         width_i = char_width("i")  # Narrow
         width_m = char_width("m")  # Wide
-        assert (
-            width_m > width_i * 2
-        ), f"Proportional check failed: 'm'={width_m}px should be > 2x 'i'={width_i}px"
+        assert width_m > width_i * 2, (
+            f"Proportional check failed: 'm'={width_m}px should be > 2x 'i'={width_i}px"
+        )
 
     def test_text_width_empty(self):
         """Empty string should have zero width."""
@@ -95,9 +95,9 @@ class TestFontCalibration:
         for char, expected_width in expected.items():
             actual = char_width(char)
             tolerance = expected_width * 0.1  # 10% tolerance
-            assert (
-                abs(actual - expected_width) < tolerance
-            ), f"Char '{char}' width {actual:.1f}px far from expected {expected_width}px"
+            assert abs(actual - expected_width) < tolerance, (
+                f"Char '{char}' width {actual:.1f}px far from expected {expected_width}px"
+            )
 
 
 class TestLayoutEngineWithFontMetrics:
@@ -187,6 +187,6 @@ class TestDeltaCalculation:
         actual_delta = new_pos[0] - old_pos[0]
 
         # Very tight tolerance since it's the same model
-        assert (
-            abs(actual_delta - expected_delta) < 0.1
-        ), f"Delta calculation error: {actual_delta:.2f}px vs {expected_delta:.2f}px"
+        assert abs(actual_delta - expected_delta) < 0.1, (
+            f"Delta calculation error: {actual_delta:.2f}px vs {expected_delta:.2f}px"
+        )
