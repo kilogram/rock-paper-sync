@@ -431,7 +431,7 @@ class TestdataStore:
             return test_path
 
         raise FileNotFoundError(
-            f"Test artifacts not found: {test_id}\n" f"Searched in: {self.base_dir}"
+            f"Test artifacts not found: {test_id}\nSearched in: {self.base_dir}"
         )
 
     def list_available_tests(self, include_curated: bool = True) -> list[TestManifest]:
@@ -682,7 +682,7 @@ class TestdataStore:
 
         if not phases_dir.exists():
             raise FileNotFoundError(
-                f"No phases directory found for test '{test_id}'. " f"Expected at {phases_dir}"
+                f"No phases directory found for test '{test_id}'. Expected at {phases_dir}"
             )
 
         # Load all phases from phases directory
@@ -1002,7 +1002,7 @@ class TestdataStore:
 
         if not trips_dir.exists():
             raise FileNotFoundError(
-                f"No trips directory found for test '{test_id}'. " f"Expected at {trips_dir}"
+                f"No trips directory found for test '{test_id}'. Expected at {trips_dir}"
             )
 
         trips: list[TripData] = []

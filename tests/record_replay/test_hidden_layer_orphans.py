@@ -277,10 +277,9 @@ def test_hidden_layer_orphans(device, workspace, fixtures_dir):
     print(f"  Blocks on preservation layer:      {trip3_block_count}")
 
     assert trip3_hidden, "Trip 3: PRESERVATION layer must still be present"
-    assert trip3_block_count >= block_count, (
-        f"Trip 3: preservation layer should have grown (was {block_count}, "
-        f"now {trip3_block_count})"
-    )
+    assert (
+        trip3_block_count >= block_count
+    ), f"Trip 3: preservation layer should have grown (was {block_count}, now {trip3_block_count})"
 
     # Control still present
     trip3_texts = extract_highlight_texts(trip3_state.rm_files)

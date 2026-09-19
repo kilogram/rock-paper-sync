@@ -210,7 +210,7 @@ incididunt ut labore et dolore magna.
         print("   No orphan comment found (may not be rendered yet)")
 
     device.observe_result(
-        "TRIP 3: Section 6 was deleted.\n" "The 'delete me' stroke should now be orphaned."
+        "TRIP 3: Section 6 was deleted.\nThe 'delete me' stroke should now be orphaned."
     )
 
     # =========================================================================
@@ -273,7 +273,7 @@ incididunt ut labore et dolore magna.
         print(f"   Added {trip5_stroke_count - trip4_stroke_count} new stroke(s)")
 
     device.observe_result(
-        f"TRIP 5: You should have added new strokes.\n" f"Total strokes: {trip5_stroke_count}"
+        f"TRIP 5: You should have added new strokes.\nTotal strokes: {trip5_stroke_count}"
     )
 
     # =========================================================================

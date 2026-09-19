@@ -102,7 +102,7 @@ class TestRoundtripMultiPage:
         md_file = tmp_path / "long.md"
         sections = []
         for i in range(10):
-            sections.append(f"## Section {i+1}\n\n" + "Lorem ipsum dolor sit amet. " * 20)
+            sections.append(f"## Section {i + 1}\n\n" + "Lorem ipsum dolor sit amet. " * 20)
         md_file.write_text("\n\n".join(sections))
 
         # Parse and generate
@@ -134,7 +134,7 @@ class TestRoundtripMultiPage:
 
         # Verify sections are present
         for i in range(10):
-            assert f"Section {i+1}" in combined_text
+            assert f"Section {i + 1}" in combined_text
 
     def test_empty_page_roundtrip(self, tmp_path: Path) -> None:
         """Test empty page can be written and read back."""

@@ -314,8 +314,7 @@ class PullSyncEngine:
             else:
                 orphaned.append(annotation)
                 logger.debug(
-                    f"Orphaned {annotation.annotation_type}: "
-                    f"anchor text not found in new content"
+                    f"Orphaned {annotation.annotation_type}: anchor text not found in new content"
                 )
 
         return migrated, orphaned

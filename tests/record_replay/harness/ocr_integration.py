@@ -343,7 +343,7 @@ class OCRIntegrationMixin:
             verified_count / len(self.ocr_expected_texts) if self.ocr_expected_texts else 0
         )
         self.bench.observe(
-            f"OCR verification: {verified_count}/{len(self.ocr_expected_texts)} ({success_rate*100:.0f}%)"
+            f"OCR verification: {verified_count}/{len(self.ocr_expected_texts)} ({success_rate * 100:.0f}%)"
         )
 
         if success_rate < 1.0:

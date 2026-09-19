@@ -56,8 +56,7 @@ class RectangleMatch:
     def format_diff(self) -> str:
         """Format a human-readable diff for this match."""
         lines = [
-            f"  Δx={self.x_delta:+.1f}, Δy={self.y_delta:+.1f} "
-            f"(distance={self.distance:.1f}px)",
+            f"  Δx={self.x_delta:+.1f}, Δy={self.y_delta:+.1f} (distance={self.distance:.1f}px)",
             f"    reanchored: x={self.reanchored.x:.1f}, y={self.reanchored.y:.1f} "
             f"('{self.reanchored_text[:20]}...')",
             f"    golden:     x={self.golden.x:.1f}, y={self.golden.y:.1f} "
@@ -404,8 +403,7 @@ class StrokeMatch:
         ra = self.reanchored_bbox
         g = self.golden_bbox
         lines = [
-            f"  Δx={self.x_delta:+.1f}, Δy={self.y_delta:+.1f} "
-            f"(distance={self.distance:.1f}px)",
+            f"  Δx={self.x_delta:+.1f}, Δy={self.y_delta:+.1f} (distance={self.distance:.1f}px)",
             f"    reanchored: bbox=({ra.x:.1f}, {ra.y:.1f}, {ra.w:.1f}, {ra.h:.1f})",
             f"    golden:     bbox=({g.x:.1f}, {g.y:.1f}, {g.w:.1f}, {g.h:.1f})",
         ]

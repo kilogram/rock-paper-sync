@@ -927,7 +927,7 @@ print("hello")
     print(f"Hash: {doc.content_hash[:16]}...")
     print("\nContent blocks:")
     for i, block in enumerate(doc.content):
-        print(f"{i+1}. {block.type.value} (level {block.level}): {block.text[:50]}...")
+        print(f"{i + 1}. {block.type.value} (level {block.level}): {block.text[:50]}...")
         if block.formatting:
             print(f"   Formatting: {len(block.formatting)} ranges")
             for fmt in block.formatting:

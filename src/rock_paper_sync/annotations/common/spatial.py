@@ -379,8 +379,7 @@ class VisualModelStrategy:
         # 2. Run visual model to detect semantic groups
         # 3. Return cluster assignments
         raise NotImplementedError(
-            "Visual model clustering not yet implemented. "
-            "Use 'kdtree_proximity' strategy instead."
+            "Visual model clustering not yet implemented. Use 'kdtree_proximity' strategy instead."
         )
 
 

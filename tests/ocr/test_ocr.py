@@ -699,7 +699,7 @@ class TestOCRConfigValidation:
         config_path = tmp_path / "config.toml"
         config_content = f"""
 [paths]
-state_database = "{tmp_path / 'state.db'}"
+state_database = "{tmp_path / "state.db"}"
 
 [[vaults]]
 name = "test-vault"
@@ -713,7 +713,7 @@ base_url = "http://localhost:3000"
 
 [logging]
 level = "info"
-file = "{tmp_path / 'sync.log'}"
+file = "{tmp_path / "sync.log"}"
 
 [ocr]
 enabled = true

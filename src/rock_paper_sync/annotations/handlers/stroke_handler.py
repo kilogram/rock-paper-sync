@@ -507,7 +507,7 @@ class StrokeHandler:
             return []
 
         logger.debug(
-            f"Extracted {len(extracted)} strokes from paragraph " f"(style={config.stroke_style})"
+            f"Extracted {len(extracted)} strokes from paragraph (style={config.stroke_style})"
         )
 
         return extracted

@@ -85,7 +85,7 @@ def ensure_calibration_docs_exist():
             missing.append(doc)
     if missing:
         raise FileNotFoundError(
-            f"Missing calibration documents: {missing}\n" f"Expected at: {CALIBRATION_FIXTURES}"
+            f"Missing calibration documents: {missing}\nExpected at: {CALIBRATION_FIXTURES}"
         )
 
 
@@ -444,9 +444,9 @@ class TestEngineCalibration:
         profile_line_height = profile["line_height"]
         engine_line_height = layout_engine.line_height
 
-        assert abs(profile_line_height - engine_line_height) < 1.0, (
-            f"Line height mismatch: profile={profile_line_height}, " f"engine={engine_line_height}"
-        )
+        assert (
+            abs(profile_line_height - engine_line_height) < 1.0
+        ), f"Line height mismatch: profile={profile_line_height}, engine={engine_line_height}"
 
     @pytest.mark.parametrize("device", list(CalibrableDevice), ids=lambda d: d.value)
     def test_layout_width_matches_profile(self, device: CalibrableDevice, layout_engine):

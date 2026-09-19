@@ -230,9 +230,9 @@ class GoldenComparison:
         """
         if result.matches:
             if result.is_first_run:
-                print(f"\n{'='*70}")
+                print(f"\n{'=' * 70}")
                 print(f"NO GOLDEN FILE (First run): {self.golden_file.name}")
-                print(f"{'='*70}")
+                print(f"{'=' * 70}")
                 print("\nTo capture this output as golden, run:")
                 print(f"  cp {self.actual_file} {self.golden_file}")
                 if verbose:
@@ -244,9 +244,9 @@ class GoldenComparison:
             else:
                 print(f"✓ {self.golden_file.name} matches golden")
         else:
-            print(f"\n{'='*70}")
+            print(f"\n{'=' * 70}")
             print(f"OUTPUT MISMATCH: {self.golden_file.name}")
-            print(f"{'='*70}")
+            print(f"{'=' * 70}")
 
             if verbose and result.diff_lines:
                 print("\nDiff (first 50 lines):")

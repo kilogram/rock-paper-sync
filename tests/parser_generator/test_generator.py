@@ -534,7 +534,7 @@ class TestGenerateRmFile:
         # Create markdown with known newline count
         md_file = tmp_path / "test.md"
         # This will create text with exactly 3 newlines after processing
-        md_file.write_text("First paragraph.\n\n" "Second paragraph.\n\n" "Third paragraph.")
+        md_file.write_text("First paragraph.\n\nSecond paragraph.\n\nThird paragraph.")
 
         # Parse and generate
         md_doc = parse_markdown_file(md_file)

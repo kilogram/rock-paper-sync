@@ -147,11 +147,11 @@ def test_paragraph_pagination(config_name, device, workspace, testdata_store, de
 
     from rock_paper_sync.layout import DEFAULT_DEVICE
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Config: {config_name}")
     print(f"  lines_per_page={DEFAULT_DEVICE.lines_per_page} (calculated from device geometry)")
     print(f"  allow_paragraph_splitting={config.allow_paragraph_splitting}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     # Configure workspace to use our layout settings
     workspace.set_layout_config(allow_paragraph_splitting=config.allow_paragraph_splitting)

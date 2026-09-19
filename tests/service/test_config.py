@@ -106,7 +106,7 @@ class TestLoadConfig:
         config_path = tmp_path / "incomplete.toml"
         config_path.write_text(f"""
 [paths]
-state_database = "{tmp_path / 'state.db'}"
+state_database = "{tmp_path / "state.db"}"
 
 [[vaults]]
 name = "test"

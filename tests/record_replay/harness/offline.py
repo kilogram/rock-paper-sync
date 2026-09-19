@@ -481,8 +481,7 @@ class OfflineEmulator(DeviceInteractionManager):
                     page_order=self._cached_page_order,
                 )
                 self.bench.observe(
-                    f"Trip {trip_number}: Saved diagnostic "
-                    f"({len(uploaded_rm)} uploaded .rm files)"
+                    f"Trip {trip_number}: Saved diagnostic ({len(uploaded_rm)} uploaded .rm files)"
                 )
 
     def capture_phase(self, phase_name: str, action: str = "capture") -> None:

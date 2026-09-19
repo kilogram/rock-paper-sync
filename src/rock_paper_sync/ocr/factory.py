@@ -49,5 +49,5 @@ def create_ocr_service(config: "OCRConfig") -> OCRServiceProtocol:
 
     else:
         raise OCRServiceError(
-            f"Unknown OCR provider: {provider}. " f"Valid providers are: 'local', 'runpods'"
+            f"Unknown OCR provider: {provider}. Valid providers are: 'local', 'runpods'"
         )

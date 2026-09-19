@@ -590,6 +590,5 @@ class AnnotationSyncHelper:
         )
         self.state.update_pull_state(pull_state)
         logger.debug(
-            f"Updated pull state for {vault_name}:{obsidian_path} "
-            f"(hash={annotation_hash[:8]}...)"
+            f"Updated pull state for {vault_name}:{obsidian_path} (hash={annotation_hash[:8]}...)"
         )

@@ -38,7 +38,7 @@ class TestMultiVaultLoading:
         config_path = tmp_path / "config.toml"
         config_path.write_text(f"""
 [paths]
-state_database = "{tmp_path / 'state.db'}"
+state_database = "{tmp_path / "state.db"}"
 
 [sync]
 debounce_seconds = 5
@@ -54,7 +54,7 @@ margin_right = 50
 
 [logging]
 level = "info"
-file = "{tmp_path / 'sync.log'}"
+file = "{tmp_path / "sync.log"}"
 """)
 
         with pytest.raises(ConfigError, match="Missing required \\[\\[vaults\\]\\] section"):
@@ -65,7 +65,7 @@ file = "{tmp_path / 'sync.log'}"
         config_path = tmp_path / "config.toml"
         config_path.write_text(f"""
 [paths]
-state_database = "{tmp_path / 'state.db'}"
+state_database = "{tmp_path / "state.db"}"
 
 [[vaults]]
 path = "{temp_vault}"
@@ -87,7 +87,7 @@ margin_right = 50
 
 [logging]
 level = "info"
-file = "{tmp_path / 'sync.log'}"
+file = "{tmp_path / "sync.log"}"
 """)
 
         with pytest.raises(ConfigError, match="missing required 'name' field"):
@@ -98,7 +98,7 @@ file = "{tmp_path / 'sync.log'}"
         config_path = tmp_path / "config.toml"
         config_path.write_text(f"""
 [paths]
-state_database = "{tmp_path / 'state.db'}"
+state_database = "{tmp_path / "state.db"}"
 
 [[vaults]]
 name = "test"
@@ -120,7 +120,7 @@ margin_right = 50
 
 [logging]
 level = "info"
-file = "{tmp_path / 'sync.log'}"
+file = "{tmp_path / "sync.log"}"
 """)
 
         with pytest.raises(ConfigError, match="missing required 'path' field"):
@@ -131,7 +131,7 @@ file = "{tmp_path / 'sync.log'}"
         config_path = tmp_path / "config.toml"
         config_path.write_text(f"""
 [paths]
-state_database = "{tmp_path / 'state.db'}"
+state_database = "{tmp_path / "state.db"}"
 
 [[vaults]]
 name = "test"
@@ -154,7 +154,7 @@ margin_right = 50
 
 [logging]
 level = "info"
-file = "{tmp_path / 'sync.log'}"
+file = "{tmp_path / "sync.log"}"
 """)
 
         config = load_config(config_path)
@@ -175,7 +175,7 @@ class TestMultiVaultValidation:
         config_path = tmp_path / "config.toml"
         config_path.write_text(f"""
 [paths]
-state_database = "{tmp_path / 'state.db'}"
+state_database = "{tmp_path / "state.db"}"
 
 [[vaults]]
 name = "test"
@@ -198,7 +198,7 @@ margin_right = 50
 
 [logging]
 level = "info"
-file = "{tmp_path / 'sync.log'}"
+file = "{tmp_path / "sync.log"}"
 """)
 
         config = load_config(config_path)
@@ -218,7 +218,7 @@ file = "{tmp_path / 'sync.log'}"
         config_path = tmp_path / "config.toml"
         config_path.write_text(f"""
 [paths]
-state_database = "{tmp_path / 'state.db'}"
+state_database = "{tmp_path / "state.db"}"
 
 [[vaults]]
 name = "personal"
@@ -248,7 +248,7 @@ margin_right = 50
 
 [logging]
 level = "info"
-file = "{tmp_path / 'sync.log'}"
+file = "{tmp_path / "sync.log"}"
 """)
 
         config = load_config(config_path)
@@ -262,7 +262,7 @@ file = "{tmp_path / 'sync.log'}"
         config_path = tmp_path / "config.toml"
         config_path.write_text(f"""
 [paths]
-state_database = "{tmp_path / 'state.db'}"
+state_database = "{tmp_path / "state.db"}"
 
 [[vaults]]
 name = "personal"
@@ -292,7 +292,7 @@ margin_right = 50
 
 [logging]
 level = "info"
-file = "{tmp_path / 'sync.log'}"
+file = "{tmp_path / "sync.log"}"
 """)
 
         config = load_config(config_path)
@@ -310,7 +310,7 @@ file = "{tmp_path / 'sync.log'}"
         config_path = tmp_path / "config.toml"
         config_path.write_text(f"""
 [paths]
-state_database = "{tmp_path / 'state.db'}"
+state_database = "{tmp_path / "state.db"}"
 
 [[vaults]]
 name = "test"
@@ -340,7 +340,7 @@ margin_right = 50
 
 [logging]
 level = "info"
-file = "{tmp_path / 'sync.log'}"
+file = "{tmp_path / "sync.log"}"
 """)
 
         config = load_config(config_path)
@@ -355,7 +355,7 @@ file = "{tmp_path / 'sync.log'}"
 
         config_path.write_text(f"""
 [paths]
-state_database = "{tmp_path / 'state.db'}"
+state_database = "{tmp_path / "state.db"}"
 
 [[vaults]]
 name = "test"
@@ -378,7 +378,7 @@ margin_right = 50
 
 [logging]
 level = "info"
-file = "{tmp_path / 'sync.log'}"
+file = "{tmp_path / "sync.log"}"
 """)
 
         config = load_config(config_path)
@@ -394,7 +394,7 @@ file = "{tmp_path / 'sync.log'}"
 
         config_path.write_text(f"""
 [paths]
-state_database = "{tmp_path / 'state.db'}"
+state_database = "{tmp_path / "state.db"}"
 
 [[vaults]]
 name = "test"
@@ -417,7 +417,7 @@ margin_right = 50
 
 [logging]
 level = "info"
-file = "{tmp_path / 'sync.log'}"
+file = "{tmp_path / "sync.log"}"
 """)
 
         config = load_config(config_path)
@@ -430,7 +430,7 @@ file = "{tmp_path / 'sync.log'}"
         config_path = tmp_path / "config.toml"
         config_path.write_text(f"""
 [paths]
-state_database = "{tmp_path / 'state.db'}"
+state_database = "{tmp_path / "state.db"}"
 
 [[vaults]]
 name = "test"
@@ -453,7 +453,7 @@ margin_right = 50
 
 [logging]
 level = "info"
-file = "{tmp_path / 'sync.log'}"
+file = "{tmp_path / "sync.log"}"
 """)
 
         config = load_config(config_path)

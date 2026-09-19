@@ -337,8 +337,7 @@ nostrud exercitation ullamco laboris.
         print(f"   Added {trip6_highlight_count - trip5_highlight_count} new highlight(s)")
 
     device.observe_result(
-        "TRIP 6: You should have added new highlights.\n"
-        f"Total highlights: {trip6_highlight_count}"
+        f"TRIP 6: You should have added new highlights.\nTotal highlights: {trip6_highlight_count}"
     )
 
     # =========================================================================

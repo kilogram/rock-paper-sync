@@ -42,7 +42,7 @@ def config_file(tmp_path: Path, temp_vault: Path) -> Path:
     config_path = tmp_path / "config.toml"
     config_content = f"""
 [paths]
-state_database = "{tmp_path / 'state.db'}"
+state_database = "{tmp_path / "state.db"}"
 
 [[vaults]]
 name = "test-vault"
@@ -65,7 +65,7 @@ margin_right = 50
 
 [logging]
 level = "info"
-file = "{tmp_path / 'test.log'}"
+file = "{tmp_path / "test.log"}"
 """
     config_path.write_text(config_content)
     return config_path
@@ -355,7 +355,7 @@ class TestMainGroup:
 [paths]
 obsidian_vault = "/nonexistent/vault"
 remarkable_output = "/nonexistent/output"
-state_database = "{tmp_path / 'state.db'}"
+state_database = "{tmp_path / "state.db"}"
 
 [sync]
 include_patterns = ["**/*.md"]
@@ -370,7 +370,7 @@ margin_right = 50
 
 [logging]
 level = "info"
-file = "{tmp_path / 'test.log'}"
+file = "{tmp_path / "test.log"}"
 """
         config_path.write_text(config_content)
 

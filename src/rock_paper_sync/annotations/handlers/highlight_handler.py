@@ -457,8 +457,7 @@ class HighlightHandler:
         if len(candidates) == 1:
             idx = candidates[0][0]
             logger.debug(
-                f"Matched highlight via text (unique): '{highlight_text[:30]}...' "
-                f"→ paragraph {idx}"
+                f"Matched highlight via text (unique): '{highlight_text[:30]}...' → paragraph {idx}"
             )
             return idx
 
@@ -870,8 +869,7 @@ class HighlightHandler:
             )
 
         logger.debug(
-            f"Extracted {len(extracted)} highlights from paragraph "
-            f"(style={config.highlight_style})"
+            f"Extracted {len(extracted)} highlights from paragraph (style={config.highlight_style})"
         )
 
         return extracted

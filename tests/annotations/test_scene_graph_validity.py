@@ -366,7 +366,7 @@ class TestStrokeBundle:
                     for i, stroke_block in enumerate(raw_blocks[3:]):
                         assert (
                             "Line" in type(stroke_block).__name__
-                        ), f"Block {i+3} should be a Line block"
+                        ), f"Block {i + 3} should be a Line block"
                     return  # Found at least one complete bundle
 
     def test_incomplete_bundle_reports_missing_blocks(self):
