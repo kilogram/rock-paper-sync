@@ -66,10 +66,9 @@ def bake_cluster(
         stroke_pts: list[tuple[float, float, float]] = []
         for pt in cs.stroke.points:
             px, py = device_to_pdf(profile, pt.x, pt.y)
+            pt_w = getattr(pt, "width", None)
             width = (
-                pt.width * _PEN_THICKNESS_SCALE
-                if hasattr(pt, "width")
-                else _DEFAULT_STROKE_WIDTH_PT
+                float(pt_w) * _PEN_THICKNESS_SCALE if pt_w is not None else _DEFAULT_STROKE_WIDTH_PT
             )
             stroke_pts.append((px, py, width))
         all_points_pdf.append(stroke_pts)

@@ -84,7 +84,7 @@ class OrphanedAnnotation:
 class StateManager:
     """Manages sync state using SQLite database."""
 
-    SCHEMA_VERSION = 10  # Schema v10: ink_strokes + ink_clusters tables (Phase 4)
+    SCHEMA_VERSION = 11  # Schema v11: word_map format includes blocks/token_block
 
     def __init__(self, db_path: Path) -> None:
         """Initialize state manager with database at given path.
@@ -298,6 +298,8 @@ class StateManager:
             self._migrate_to_v9()
         if current_version < 10:
             self._migrate_to_v10()
+        if current_version < 11:
+            self._migrate_to_v11()
 
     def _migrate_to_v7(self) -> None:
         """Migrate from v5/v6 to v7: Add pull_state and orphaned_annotations tables."""
@@ -376,6 +378,22 @@ class StateManager:
             self.conn.execute("DELETE FROM schema_version")
             self.conn.execute("INSERT INTO schema_version (version) VALUES (10)")
         logger.info("Database schema migrated to v10")
+
+    def _migrate_to_v11(self) -> None:
+        """Migrate from v10 to v11: clear word_map to force re-push.
+
+        The word-map JSON format now includes ``blocks`` and
+        ``token_block`` fields (populated from the renderer's
+        ``data-anchor`` box-tree walk).  Existing stored maps are
+        dev-only; clearing them forces a re-push that produces the
+        new format.
+        """
+        logger.info("Migrating database schema to v11...")
+        with self.conn:
+            self.conn.execute("UPDATE sync_state SET word_map = NULL")
+            self.conn.execute("DELETE FROM schema_version")
+            self.conn.execute("INSERT INTO schema_version (version) VALUES (11)")
+        logger.info("Database schema migrated to v11 (word_map cleared; re-push required)")
 
     def get_file_state(self, vault_name: str, obsidian_path: str) -> SyncRecord | None:
         """Get sync state for a file.

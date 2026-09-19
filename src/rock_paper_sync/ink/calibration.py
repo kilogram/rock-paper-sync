@@ -31,6 +31,7 @@ __all__ = [
     "CalibrationResult",
     "CPageEntry",
     "CPageReport",
+    "DeviceRect",
     "HighlightCalibration",
     "TransformFit",
     "calibrate_highlight",
@@ -140,13 +141,20 @@ class HighlightCalibration:
 
 
 @dataclass(frozen=True, slots=True)
-class _DeviceRect:
-    """A highlight rectangle in device coordinates (from GlyphRange)."""
+class DeviceRect:
+    """A highlight rectangle in device coordinates (from GlyphRange).
+
+    Previously ``_DeviceRect``; made public for import by ``pull_sync``.
+    """
 
     x: float
     y: float
     w: float
     h: float
+
+
+# Backward-compatible alias (internal callers may still use the old name).
+_DeviceRect = DeviceRect
 
 
 def calibrate_highlight(

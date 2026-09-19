@@ -20,10 +20,10 @@ No imports of weasyprint, fitz, sync_v3, or rm_cloud_sync.
 
 from __future__ import annotations
 
-import hashlib
 import html as html_mod
 import re
 
+from rock_paper_sync.ink.dispositions import paragraph_anchor_ref
 from rock_paper_sync.parser import BlockType, ContentBlock, FormatStyle
 
 __all__ = ["ast_to_html", "ANCHOR_ATTR", "TOKEN_ATTR"]
@@ -260,14 +260,18 @@ def ast_to_html(
     _anchor_counts: dict[str, int] = {}
 
     def _anchor_attr(text: str) -> str:
-        """Compute a data-anchor attribute for a block's text."""
+        """Compute a data-anchor attribute for a block's text.
+
+        Uses ``paragraph_anchor_ref`` from ``ink.dispositions`` so the
+        anchor identity scheme is shared between render and pull.
+        """
         normalised = " ".join(text.split())
         if not normalised:
             return ""
-        text_hash = hashlib.sha256(normalised.encode("utf-8")).hexdigest()
         ordinal = _anchor_counts.get(normalised, 0)
         _anchor_counts[normalised] = ordinal + 1
-        return f' {ANCHOR_ATTR}="{text_hash}#{ordinal}"'
+        ref = paragraph_anchor_ref(normalised, ordinal)
+        return f' {ANCHOR_ATTR}="{ref}"'
 
     for block in blocks:
         text = _strip_rps_markers(block.text) if block.text else ""

@@ -27,6 +27,8 @@ if TYPE_CHECKING:
 
 __all__ = [
     "BakedOverlay",
+    "BlockBox",
+    "DocumentIndexEntry",
     "DocumentRenderer",
     "PageWords",
     "Placed",
@@ -59,6 +61,36 @@ class Rect:
 
 
 @dataclass(frozen=True, slots=True)
+class BlockBox:
+    """A block-level element's bounding box on a specific page.
+
+    Published by the renderer so that ``ink/`` can resolve paragraph
+    anchors by geometry alone, without fuzzy text matching.
+
+    Attributes:
+        anchor_ref: The ``data-anchor`` value (``paragraph_anchor_ref`` output).
+        page: Zero-based PDF page index.
+        rect: Bounding box in PDF points.
+    """
+
+    anchor_ref: str
+    page: int
+    rect: Rect
+
+
+@dataclass(frozen=True, slots=True)
+class DocumentIndexEntry:
+    """Lightweight entry from a document's cloud index.
+
+    Used by ``CloudReader.get_document_index_entries`` so callers can
+    inspect entry hashes without downloading blobs.
+    """
+
+    entry_name: str
+    hash: str
+
+
+@dataclass(frozen=True, slots=True)
 class TokenMatch:
     """A token located on a specific page."""
 
@@ -85,11 +117,19 @@ class WordMap:
         - Every token id in ``texts`` has at least one box in some page.
         - ``rects_of`` returns a non-empty tuple; raises ``KeyError``
           on unknown id.
+
+    Attributes:
+        blocks: Block-level element boxes from the renderer's ``data-anchor``
+            walk.  Each block carries the anchor ref and its laid-out rect.
+        token_block: Per-token index into ``blocks`` (same length as ``texts``).
+            ``-1`` for tokens not inside any anchored block.
     """
 
     page_size: tuple[float, float]
     pages: tuple[PageWords, ...]
     texts: tuple[str, ...]
+    blocks: tuple[BlockBox, ...] = ()
+    token_block: tuple[int, ...] = ()
 
     def token_at(self, page: int, x: float, y: float) -> TokenMatch | None:
         """Find the token whose bounding box contains the given point."""
@@ -132,9 +172,30 @@ class WordMap:
             raise KeyError(token)
         return tuple(matches)
 
+    def nearest_block(self, page: int, x: float, y: float) -> BlockBox | None:
+        """Find the block nearest to a point on the given page.
+
+        Uses Euclidean distance from the point to each block's centre.
+
+        Returns:
+            The nearest ``BlockBox``, or ``None`` if no blocks exist on the page.
+        """
+        best: BlockBox | None = None
+        best_dist = float("inf")
+        for blk in self.blocks:
+            if blk.page != page:
+                continue
+            cx = (blk.rect.x0 + blk.rect.x1) / 2.0
+            cy = (blk.rect.y0 + blk.rect.y1) / 2.0
+            dist = ((x - cx) ** 2 + (y - cy) ** 2) ** 0.5
+            if dist < best_dist:
+                best_dist = dist
+                best = blk
+        return best
+
     def to_json(self) -> bytes:
         """Serialise to compact JSON bytes."""
-        data = {
+        data: dict[str, object] = {
             "page_size": list(self.page_size),
             "pages": [
                 {
@@ -145,11 +206,22 @@ class WordMap:
             ],
             "texts": list(self.texts),
         }
+        if self.blocks:
+            data["blocks"] = [
+                {"anchor_ref": b.anchor_ref, "page": b.page, "rect": b.rect.to_dict()}
+                for b in self.blocks
+            ]
+        if self.token_block:
+            data["token_block"] = list(self.token_block)
         return json.dumps(data, separators=(",", ":")).encode("utf-8")
 
     @classmethod
     def from_json(cls, data: bytes) -> WordMap:
-        """Deserialise from JSON bytes."""
+        """Deserialise from JSON bytes.
+
+        Handles word maps serialised before the ``blocks`` / ``token_block``
+        fields were added (they default to empty tuples).
+        """
         d = json.loads(data)
         pages = tuple(
             PageWords(
@@ -158,10 +230,22 @@ class WordMap:
             )
             for p in d["pages"]
         )
+        blocks_raw = d.get("blocks", [])
+        blocks = tuple(
+            BlockBox(
+                anchor_ref=b["anchor_ref"],
+                page=b["page"],
+                rect=Rect.from_dict(b["rect"]),
+            )
+            for b in blocks_raw
+        )
+        token_block = tuple(d.get("token_block", []))
         return cls(
             page_size=tuple(d["page_size"]),  # type: ignore[arg-type]
             pages=pages,
             texts=tuple(d["texts"]),
+            blocks=blocks,
+            token_block=token_block,
         )
 
 

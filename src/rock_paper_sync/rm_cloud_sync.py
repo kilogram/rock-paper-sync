@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .audit import get_audit_logger
+from .render.wordmap import DocumentIndexEntry
 from .rm_cloud_client import RmCloudClient
 from .sync_v3 import SyncV3Client
 
@@ -783,6 +784,23 @@ class RmCloudSync:
             if entry.entry_name == entry_name:
                 return self.sync_client.download_blob(entry.hash)
         return None
+
+    def get_document_index_entries(self, doc_uuid: str) -> list[DocumentIndexEntry] | None:
+        """Get document index entries as lightweight name+hash pairs.
+
+        Used by pull to compare the ``.pdf`` entry hash with
+        ``pushed_pdf_sha256`` (I10) without downloading blobs.
+
+        Args:
+            doc_uuid: Document UUID.
+
+        Returns:
+            List of ``DocumentIndexEntry``, or ``None`` if document not found.
+        """
+        raw = self._get_document_index_entries(doc_uuid)
+        if raw is None:
+            return None
+        return [DocumentIndexEntry(entry_name=e.entry_name, hash=e.hash) for e in raw]
 
     def mint_clearance_if_no_ink(self, doc_uuid: str) -> InkClearance:
         """Mint an ink clearance if the document has no un-pulled .rm files.

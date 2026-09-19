@@ -1,7 +1,7 @@
 # Rock-Paper-Sync task runner
 
-# Full check: format, lint, import boundaries, tests
-check: format-check lint-check imports test
+# Full check: format, lint, types (new modules), import boundaries, tests
+check: format-check lint-check types imports test
 
 # Fast check: format + lint only (no tests)
 check-fast: format-check lint-check
@@ -13,6 +13,10 @@ format-check:
 # Check lint
 lint-check:
     uv run ruff check src tests
+
+# Type-check new modules (Phase 1+4 scope)
+types:
+    uv run mypy --ignore-missing-imports src/rock_paper_sync/device_profile.py src/rock_paper_sync/cloud_reader.py src/rock_paper_sync/render/ src/rock_paper_sync/ink/ src/rock_paper_sync/pull_sync.py src/rock_paper_sync/errors.py
 
 # Check import boundaries
 imports:

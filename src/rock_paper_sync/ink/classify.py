@@ -17,7 +17,9 @@ Import restrictions (enforced by import-linter):
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 from rock_paper_sync.device_profile import DeviceProfile, device_to_pdf
@@ -44,12 +46,15 @@ class Classification:
         nearest_anchor_page: For ``'drawing'``: the redir page.
         nearest_anchor_rect: For ``'drawing'``: the bbox of the nearest paragraph
             on the same page, in PDF points.
+        nearest_anchor_ref: For ``'drawing'``: the ``paragraph_anchor_ref``
+            of the nearest block (from ``WordMap.blocks``), or ``None``.
     """
 
     kind: Literal["appended", "drawing"]
     cluster: InkCluster
     nearest_anchor_page: int | None = None
     nearest_anchor_rect: Rect | None = None
+    nearest_anchor_ref: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,11 +65,15 @@ class GlyphHighlight:
     not by spatial clustering.
 
     Attributes:
+        glyph_id: Stable ``"part1:part2"`` from the ``item_id`` of the
+            ``SceneGlyphItemBlock``.  Used as the ``ink_strokes.stroke_id``
+            so the same device highlight is never processed twice (I4).
         text: The highlighted text from ``GlyphRange.text``.
         page: PDF page index (from cPages redir).
         device_rects: Rectangles in device coordinates.
     """
 
+    glyph_id: str
     text: str
     page: int
     device_rects: list[tuple[float, float, float, float]]  # (x, y, w, h)
@@ -97,38 +106,44 @@ def classify_cluster(
         return Classification(kind="appended", cluster=cluster)
 
     # Stroke cluster on a content page → drawing
-    # Find the nearest paragraph box on this page
+    # Find the nearest block on this page
     page_redir = cluster.redir
-    nearest_rect = _find_nearest_paragraph_box(cluster, word_map, profile, page_redir)
+    nearest_rect, anchor_ref = _find_nearest_block(cluster, word_map, profile, page_redir)
 
     return Classification(
         kind="drawing",
         cluster=cluster,
         nearest_anchor_page=page_redir,
         nearest_anchor_rect=nearest_rect,
+        nearest_anchor_ref=anchor_ref,
     )
 
 
-def _find_nearest_paragraph_box(
+def _find_nearest_block(
     cluster: InkCluster,
     word_map: WordMap,
     profile: DeviceProfile,
     page: int,
-) -> Rect | None:
-    """Find the paragraph box nearest to the cluster's centre on the given page.
+) -> tuple[Rect | None, str | None]:
+    """Find the ``BlockBox`` nearest to the cluster's centre on the given page.
 
-    Groups tokens by their vertical position (y-band) to approximate paragraph boxes,
-    then finds the one nearest to the cluster's centre.
+    Uses ``WordMap.blocks`` (geometry from the renderer's ``data-anchor``
+    walk) instead of token y-band heuristics.  Falls back to the old
+    token-band approach only when ``blocks`` is empty (pre-v11 word maps).
 
     Returns:
-        The nearest paragraph's bounding ``Rect`` in PDF points, or None.
+        ``(block_rect, anchor_ref)`` or ``(None, None)``.
     """
-    # Transform cluster centre from device coords to PDF coords
     cx_dev = (cluster.bbox[0] + cluster.bbox[2]) / 2.0
     cy_dev = (cluster.bbox[1] + cluster.bbox[3]) / 2.0
     cx_pdf, cy_pdf = device_to_pdf(profile, cx_dev, cy_dev)
 
-    # Collect all token rects on this page
+    # Prefer the renderer-published block geometry.
+    blk = word_map.nearest_block(page, cx_pdf, cy_pdf)
+    if blk is not None:
+        return blk.rect, blk.anchor_ref
+
+    # Fallback: group tokens by y-band (for word maps without blocks).
     page_tokens: list[Rect] = []
     for pw in word_map.pages:
         if pw.page == page:
@@ -136,10 +151,8 @@ def _find_nearest_paragraph_box(
                 page_tokens.append(rect)
 
     if not page_tokens:
-        return None
+        return None, None
 
-    # Group tokens into y-bands (paragraphs) using a tolerance
-    # Tokens within 5pt of each other vertically are in the same band
     y_tolerance = 15.0
     bands: list[list[Rect]] = []
     sorted_tokens = sorted(page_tokens, key=lambda r: r.y0)
@@ -157,7 +170,6 @@ def _find_nearest_paragraph_box(
             band_y_max = rect.y1
     bands.append(current_band)
 
-    # Compute each band's bounding box and find the nearest one
     best_rect: Rect | None = None
     best_dist = float("inf")
 
@@ -168,7 +180,6 @@ def _find_nearest_paragraph_box(
         by1 = max(r.y1 for r in band)
         band_rect = Rect(x0=bx0, y0=by0, x1=bx1, y1=by1)
 
-        # Distance from cluster centre to band centre
         band_cx = (bx0 + bx1) / 2.0
         band_cy = (by0 + by1) / 2.0
         dist = ((cx_pdf - band_cx) ** 2 + (cy_pdf - band_cy) ** 2) ** 0.5
@@ -177,11 +188,11 @@ def _find_nearest_paragraph_box(
             best_dist = dist
             best_rect = band_rect
 
-    return best_rect
+    return best_rect, None
 
 
 def classify_glyph_highlights(
-    rm_files: dict[str, object],
+    rm_files: Mapping[str, Path | object],
     cpages_entries: list[dict[str, object]],
     known_stroke_ids: frozenset[str],
 ) -> list[GlyphHighlight]:
@@ -243,6 +254,7 @@ def classify_glyph_highlights(
                     rects = [(r.x, r.y, r.w, r.h) for r in glyph.rectangles]
                     highlights.append(
                         GlyphHighlight(
+                            glyph_id=glyph_id,
                             text=glyph.text,
                             page=redir,
                             device_rects=rects,

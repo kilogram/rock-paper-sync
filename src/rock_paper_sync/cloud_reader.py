@@ -19,6 +19,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
+from rock_paper_sync.render.wordmap import DocumentIndexEntry
+
 __all__ = ["CloudReader"]
 
 
@@ -89,5 +91,19 @@ class CloudReader(Protocol):
 
         Returns:
             Raw blob bytes, or ``None`` if not found.
+        """
+        ...
+
+    def get_document_index_entries(self, doc_uuid: str) -> list[DocumentIndexEntry] | None:
+        """Get the document index entries (names and hashes) without downloading blobs.
+
+        Used by pull to compare the ``.pdf`` entry hash with
+        ``pushed_pdf_sha256`` (I10).
+
+        Args:
+            doc_uuid: Document UUID.
+
+        Returns:
+            List of ``DocumentIndexEntry``, or ``None`` if document not found.
         """
         ...

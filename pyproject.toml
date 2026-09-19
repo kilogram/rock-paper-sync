@@ -143,6 +143,7 @@ dev = [
     "hypothesis>=6.0.0",
     "import-linter>=2.0",
     "pymupdf>=1.24.0",
+    "mypy>=1.18.2",
 ]
 
 [tool.importlinter]
