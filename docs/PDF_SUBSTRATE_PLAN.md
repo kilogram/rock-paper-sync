@@ -1,6 +1,6 @@
 # PDF substrate plan
 
-Status: APPROVED (architecture + design review, re-review 2026-09-19). Supersedes the native typed-text direction in
+Status: APPROVED (architecture + design review, re-review 2026-09-19). Progress: Phase 1 done (e4cd45b), Phase 3a done (7ef09fe). Supersedes the native typed-text direction in
 `docs/LAYOUT_VERIFICATION_PLAN.md`, `docs/DEVICE_REPLICA_DESIGN.md` and
 Milestones 5.5/7 of `docs/PRODUCT_ROADMAP.md`.
 
@@ -147,10 +147,10 @@ Changed:
 | `cli.py` | No `--backend` flag. New `bench render <file> [--overlay]`. `--direction push` keeps the I9 check; `--discard-ink` is the only override and prints what it discards. Pull reports `N drawing(s) saved as attachments (not interpreted)` and `N cluster(s) deferred: <reason>` on stderr. |
 | `pyproject.toml` | add `weasyprint` (pinned), `pymupdf`, `import-linter`; `justfile` with `check` (ruff, mypy, import-linter, pytest). |
 
-Removed in Phase 3 (3a moves, 3b deletes):
+Removed from production in Phase 3 (3a moves the layout engine, 3b moves the rest of the native backend):
 
 - 3a (move to `native_layout/`): `layout/`, `font_metrics.py`, `fonts/device/`, `tools/rmlib/`, `tools/calibration/`, `tests/layout/`, layout-specific record/replay tests + goldens, `LAYOUT_*` / replica docs.
-- 3b (delete): `generator.py` text-item generation, pagination, `_apply_annotations_to_page`, `_build_transform_plan`; `annotations/scene_adapter/{executor,translator,bundle}.py` (**`scene_index.py` and `block_registry.py` move to `annotations/common/`** — `stroke.py`, `stroke_cluster.py`, `rm_file_extractor.py` and `compute_annotation_hash` depend on `SceneGraphIndex`; import-linter pins them to rmscene-only), `annotations/services/crdt_service.py`, stroke re-anchoring in `annotations/handlers/stroke_handler.py`, `AnchorContext` migration; `coordinates.py` `AnchorResolver` and anchor-relative point types; `ocr/paragraph_mapper.py`; `annotations/common/text_extraction.py`; `RmCloudSync.upload_document` (notebook).
+- 3b (move to `native_layout/backend/`, delete only what nothing under `native_layout/` uses): `generator.py` text-item generation, pagination, `_apply_annotations_to_page`, `_build_transform_plan`; `annotations/scene_adapter/{executor,translator,bundle}.py` (**`scene_index.py` and `block_registry.py` move to `annotations/common/`** — `stroke.py`, `stroke_cluster.py`, `rm_file_extractor.py` and `compute_annotation_hash` depend on `SceneGraphIndex`; import-linter pins them to rmscene-only), `annotations/services/crdt_service.py`, stroke re-anchoring in `annotations/handlers/stroke_handler.py`, `AnchorContext` migration; `coordinates.py` `AnchorResolver` and anchor-relative point types; `ocr/paragraph_mapper.py`; `annotations/common/text_extraction.py`; `RmCloudSync.upload_document` (notebook); the `src/rock_paper_sync/layout/` sentinel stubs left by 3a. Rationale: after 3a, 18 tests under `native_layout/` fail only because they reach these production modules through `rm_file_extractor`/`RemarkableGenerator`; moving them makes `native_layout/` the complete native backend the user wants to keep.
 
 ## 6. Vault conventions (what the user sees)
 
@@ -228,8 +228,11 @@ reports measured scale/offset vs profile, checks I8 on the recorded
 highlight, dumps `cPages`. **Stops and reports to the user before any
 online run.**
 
-**Phase 3b — delete the notebook push path** (any time after the device
-opens our PDF; not a prerequisite for Phase 4).
+**Phase 3b — move the notebook push path and re-anchoring code into
+`native_layout/backend/`** (any time after the device opens our PDF; not a
+prerequisite for Phase 4). Acceptance: `uv run pytest native_layout/` has no
+failures caused by the split (the 18 from 3a included), and `src/` has no
+sentinel stubs left.
 
 **Phase 4 — pull on word boxes.** `ink/candidates`, `clusters`,
 `classify` (highlight / appended / drawing), `bake`, `apply`,
