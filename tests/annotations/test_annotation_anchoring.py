@@ -12,6 +12,8 @@ import pytest
 from rock_paper_sync.annotations import WordWrapLayoutEngine
 from rock_paper_sync.annotations.document_model import CONTEXT_WINDOW_SIZE, AnchorContext
 
+pytestmark = pytest.mark.native_layout
+
 
 class TestAnchorContext:
     """Tests for AnchorContext resolution."""

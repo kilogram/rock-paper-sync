@@ -32,6 +32,8 @@ from rock_paper_sync.annotations.handlers.stroke_handler import StrokeHandler
 from rock_paper_sync.annotations.ocr_corrections import detect_single_ocr_correction
 from rock_paper_sync.state import StateManager
 
+pytestmark = pytest.mark.native_layout
+
 
 def count_strokes(rm_files: dict[str, bytes]) -> int:
     """Count total strokes across all .rm files."""

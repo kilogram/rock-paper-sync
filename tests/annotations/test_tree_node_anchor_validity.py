@@ -24,6 +24,8 @@ from rock_paper_sync.config import LayoutConfig
 from rock_paper_sync.generator import RemarkableGenerator
 from rock_paper_sync.parser import parse_markdown_file
 
+pytestmark = pytest.mark.native_layout
+
 # Path to multi_trip test data
 TESTDATA_DIR = Path(__file__).parent.parent / "record_replay" / "testdata" / "multi_trip"
 

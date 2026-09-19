@@ -7,6 +7,8 @@ Tests the new layered architecture components:
 - PageTransformExecutor (single code path)
 """
 
+import pytest
+
 from rock_paper_sync.annotations.domain import (
     HighlightPlacement,
     LayerPlan,
@@ -27,6 +29,8 @@ from rock_paper_sync.annotations.scene_adapter import (
     is_known_block,
     is_sentinel_anchor,
 )
+
+pytestmark = pytest.mark.native_layout
 
 
 class TestBlockRegistry:

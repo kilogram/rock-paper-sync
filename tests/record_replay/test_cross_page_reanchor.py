@@ -19,6 +19,8 @@ import pytest
 
 from rock_paper_sync.annotations import AnnotationType, read_annotations
 
+pytestmark = pytest.mark.native_layout
+
 
 def extract_annotations_by_page(rm_files: dict[str, bytes]) -> dict[str, list]:
     """Extract annotations grouped by page UUID.

@@ -21,6 +21,8 @@ from rock_paper_sync.config import (
 from rock_paper_sync.parser import BlockType, FormatStyle, parse_markdown_file
 from rock_paper_sync.state import StateManager, SyncRecord
 
+pytestmark = pytest.mark.native_layout
+
 
 @pytest.fixture
 def integration_env(tmp_path: Path):

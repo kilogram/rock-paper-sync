@@ -38,6 +38,8 @@ from rock_paper_sync.generator import RemarkableGenerator
 from rock_paper_sync.layout import PAPER_PRO_MOVE
 from rock_paper_sync.parser import parse_markdown_file
 
+pytestmark = pytest.mark.native_layout
+
 # Test data paths
 TESTDATA_DIR = Path(__file__).parent.parent / "record_replay" / "testdata" / "cross_page_reanchor"
 TRIP1_DIR = TESTDATA_DIR / "trips" / "1"

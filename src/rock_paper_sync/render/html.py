@@ -283,7 +283,7 @@ def ast_to_html(
                     text, block.formatting, token_counter, block.type, block.level
                 )
                 body_parts.append(
-                    f'<div class="rps-list-item rps-task-item{indent_class}">' f"{content}</div>"
+                    f'<div class="rps-list-item rps-task-item{indent_class}">{content}</div>'
                 )
             else:
                 # Detect ordered-number prefix ("N. ") from parser

@@ -189,9 +189,22 @@ class SyncEngine:
         """
         self.config = config
         self.state = state
-        self.generator = generator or RemarkableGenerator(
-            config.layout, geometry=config.layout.get_device_geometry()
-        )
+
+        # Native layout generator (notebook push path, Phase 3b deletes).
+        # NativeLayoutUnavailableError is expected after Phase 3a; the PDF
+        # push path does not use the generator.
+        from .errors import NativeLayoutUnavailableError
+
+        if generator is not None:
+            self.generator: RemarkableGenerator | None = generator
+        else:
+            try:
+                self.generator = RemarkableGenerator(
+                    config.layout, geometry=config.layout.get_device_geometry()
+                )
+            except NativeLayoutUnavailableError:
+                self.generator = None
+                logger.debug("Native layout unavailable; notebook push path disabled")
 
         # PDF renderer (Phase 1)
         self._pdf_renderer = PdfRenderer(config.layout)

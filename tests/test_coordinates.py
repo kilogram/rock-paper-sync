@@ -31,6 +31,8 @@ from rock_paper_sync.coordinates import (
     is_root_layer,
 )
 
+pytestmark = pytest.mark.native_layout
+
 
 class TestPaginationPolicy:
     """Tests for PaginationPolicy enum."""

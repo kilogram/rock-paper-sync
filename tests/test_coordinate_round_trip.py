@@ -23,6 +23,8 @@ from rock_paper_sync.coordinates import (
 )
 from rock_paper_sync.layout import LayoutContext
 
+pytestmark = pytest.mark.native_layout
+
 
 class TestDocumentPageLocalRoundTrip:
     """Tests for DocumentPoint ↔ PageLocalPoint round-trips."""

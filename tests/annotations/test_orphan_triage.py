@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 
+import pytest
 import rmscene
 
 from rock_paper_sync.annotations.services.orphan_triage import (
@@ -11,6 +12,8 @@ from rock_paper_sync.annotations.services.orphan_triage import (
     OrphanRecord,
     OrphanTriage,
 )
+
+pytestmark = pytest.mark.native_layout
 
 # =============================================================================
 # Helpers

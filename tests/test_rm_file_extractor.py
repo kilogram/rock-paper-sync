@@ -11,6 +11,8 @@ import pytest
 from rock_paper_sync.annotations.core.types import TextBlock
 from rock_paper_sync.rm_file_extractor import RmFileExtractor, TextOriginInfo
 
+pytestmark = pytest.mark.native_layout
+
 # Test data paths
 TESTDATA_DIR = Path(__file__).parent / "annotations" / "testdata" / "rmscene"
 RECORD_REPLAY_DIR = Path(__file__).parent / "record_replay" / "testdata"

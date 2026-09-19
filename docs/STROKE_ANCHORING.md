@@ -1,3 +1,5 @@
+> Superseded by `docs/PDF_SUBSTRATE_PLAN.md` for the current design.
+
 # Stroke Anchoring in reMarkable .rm Files
 
 This document describes how handwritten stroke annotations are anchored to text in reMarkable v6 .rm files, and the implications for re-anchoring strokes when document text is modified.

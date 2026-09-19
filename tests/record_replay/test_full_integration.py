@@ -45,6 +45,8 @@ from rock_paper_sync.annotations.handlers.stroke_handler import StrokeHandler
 from rock_paper_sync.annotations.ocr_corrections import detect_single_ocr_correction
 from tests.record_replay.harness.phase import AnnotationState, PhaseContext, extract_annotations
 
+pytestmark = pytest.mark.native_layout
+
 
 @pytest.mark.device
 def test_full_integration(device, workspace, fixtures_dir, tmp_path):

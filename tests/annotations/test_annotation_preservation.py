@@ -36,7 +36,10 @@ def has_testdata() -> bool:
     )
 
 
-pytestmark = pytest.mark.skipif(not has_testdata(), reason="Annotation testdata not available")
+pytestmark = [
+    pytest.mark.native_layout,
+    pytest.mark.skipif(not has_testdata(), reason="Annotation testdata not available"),
+]
 
 
 @pytest.fixture

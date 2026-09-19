@@ -15,6 +15,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+pytestmark = pytest.mark.native_layout
+
 
 class TestOCRMarkersParsing:
     """Tests for OCR marker parsing and generation."""

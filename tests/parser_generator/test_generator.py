@@ -32,6 +32,8 @@ from rock_paper_sync.parser import (
     parse_markdown_file,
 )
 
+pytestmark = pytest.mark.native_layout
+
 TEXT_POS_Y = DEFAULT_DEVICE.text_pos_y
 
 

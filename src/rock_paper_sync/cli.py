@@ -124,7 +124,9 @@ def sync(
     config: AppConfig = ctx.obj["config"]
 
     state = StateManager(config.sync.state_database)
-    engine = SyncEngine(config, state)
+    engine: SyncEngine | None = None
+    if direction in ("both", "push"):
+        engine = SyncEngine(config, state)
 
     # Validate vault name if specified
     if vault:
@@ -157,11 +159,22 @@ def sync(
 
     # Phase 1: Pull (if direction is 'both' or 'pull')
     if direction in ("both", "pull"):
+        from .errors import NativeLayoutUnavailableError
+
         click.echo("\n--- Pull Phase: Fetching annotations from device ---")
-        _run_pull_sync(config, state, vault_configs, dry_run)
+        try:
+            _run_pull_sync(config, state, vault_configs, dry_run)
+        except NativeLayoutUnavailableError:
+            click.echo(
+                "Pull sync is unavailable until the PDF-substrate pull "
+                "lands (Phase 4); use --direction push",
+                err=True,
+            )
+            state.close()
+            sys.exit(1)
 
     # Phase 2: Push (if direction is 'both' or 'push')
-    if direction in ("both", "push"):
+    if direction in ("both", "push") and engine is not None:
         click.echo("\n--- Push Phase: Uploading changes to device ---")
         _run_push_sync(engine, vault, vault_configs)
 
@@ -175,6 +188,8 @@ def _run_pull_sync(
     dry_run: bool,
 ) -> None:
     """Run pull sync phase."""
+    from .errors import NativeLayoutUnavailableError
+
     try:
         from .annotation_renderer import RenderConfig
         from .annotation_sync_helper import AnnotationSyncHelper
@@ -235,6 +250,8 @@ def _run_pull_sync(
 
     except ImportError as e:
         click.echo(f"Warning: Pull sync not available: {e}", err=True)
+    except NativeLayoutUnavailableError:
+        raise  # Let the caller handle this with a clean message
     except Exception as e:
         click.echo(f"Error during pull sync: {e}", err=True)
 

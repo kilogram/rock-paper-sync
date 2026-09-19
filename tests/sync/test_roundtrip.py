@@ -10,6 +10,7 @@ generator output can be correctly parsed by rmscene.
 import io
 from pathlib import Path
 
+import pytest
 import rmscene
 
 from rock_paper_sync.config import LayoutConfig
@@ -21,6 +22,8 @@ from rock_paper_sync.parser import (
     MarkdownDocument,
     parse_markdown_file,
 )
+
+pytestmark = pytest.mark.native_layout
 
 
 class TestRoundtripBasic:

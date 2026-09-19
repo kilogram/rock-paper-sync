@@ -28,6 +28,8 @@ from rock_paper_sync.config import LayoutConfig
 from rock_paper_sync.generator import RemarkableGenerator
 from rock_paper_sync.parser import parse_markdown_file
 
+pytestmark = pytest.mark.native_layout
+
 # Path to cross_page_reanchor test data (has cross-page stroke movement)
 CROSS_PAGE_TESTDATA = (
     Path(__file__).parent.parent / "record_replay" / "testdata" / "cross_page_reanchor"

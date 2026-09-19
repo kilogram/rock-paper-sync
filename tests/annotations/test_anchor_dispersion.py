@@ -18,11 +18,14 @@ text was rewritten, exactly like the trip-2 edit.
 
 from dataclasses import dataclass, field
 
+import pytest
 from rmscene.tagged_block_common import CrdtId
 
 from rock_paper_sync.annotations.document_model import AnchorContext
 from rock_paper_sync.annotations.handlers.stroke_handler import StrokeHandler
 from rock_paper_sync.layout.device import DEFAULT_DEVICE
+
+pytestmark = pytest.mark.native_layout
 
 TEXT_BASE = 16
 

@@ -42,14 +42,27 @@ if TYPE_CHECKING:
 
 # =============================================================================
 # Page Constants (from DeviceGeometry - single source of truth)
+# After Phase 3a the native layout is a sentinel; constants become sentinels
+# too.  Code that uses them is the pull path (Phase 3b deletes it).
 # =============================================================================
 
-PAGE_WIDTH = DEFAULT_DEVICE.page_width
-PAGE_HEIGHT = float(DEFAULT_DEVICE.page_height)
-PAGE_CENTER_X = DEFAULT_DEVICE.page_width / 2.0
-DEFAULT_TEXT_POS_X = DEFAULT_DEVICE.text_pos_x
-DEFAULT_TEXT_POS_Y = DEFAULT_DEVICE.text_pos_y
-NEGATIVE_Y_OFFSET = DEFAULT_DEVICE.negative_y_offset
+try:
+    PAGE_WIDTH = DEFAULT_DEVICE.page_width
+    PAGE_HEIGHT = float(DEFAULT_DEVICE.page_height)
+    PAGE_CENTER_X = DEFAULT_DEVICE.page_width / 2.0
+    DEFAULT_TEXT_POS_X = DEFAULT_DEVICE.text_pos_x
+    DEFAULT_TEXT_POS_Y = DEFAULT_DEVICE.text_pos_y
+    NEGATIVE_Y_OFFSET = DEFAULT_DEVICE.negative_y_offset
+except Exception:
+    # Native layout unavailable — these constants are sentinels.  Any code
+    # path that uses them will raise NativeLayoutUnavailableError via the
+    # sentinel's arithmetic operators.
+    PAGE_WIDTH = DEFAULT_DEVICE.page_width
+    PAGE_HEIGHT = DEFAULT_DEVICE.page_height
+    PAGE_CENTER_X = DEFAULT_DEVICE.page_center_x
+    DEFAULT_TEXT_POS_X = DEFAULT_DEVICE.text_pos_x
+    DEFAULT_TEXT_POS_Y = DEFAULT_DEVICE.text_pos_y
+    NEGATIVE_Y_OFFSET = DEFAULT_DEVICE.negative_y_offset
 
 # Special markers
 END_OF_DOC_MARKER = 281474976710655  # 0xFFFFFFFFFFFF - anchor at end of document

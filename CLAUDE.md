@@ -90,8 +90,11 @@ This ensures the virtual environment managed by `uv` is used with all dependenci
 # Core tests
 uv run pytest tests/test_state.py tests/test_converter.py tests/test_multi_vault_config.py -v
 
-# All tests
+# All tests (native_layout tests are deselected by default)
 uv run pytest
+
+# Native layout tests only (isolated engine, not part of production)
+uv run pytest native_layout/
 
 # With coverage
 uv run pytest --cov=src/rock_paper_sync --cov-report=term-missing
@@ -221,19 +224,18 @@ level = "debug"
 - `docs/MULTI_VAULT.md` - Multi-vault configuration guide
 
 ### Technical Documentation
-- `docs/LAYOUT_PRINCIPLES.md` - Principles governing all layout work (read first)
-- `docs/LAYOUT_SPEC.md` - Layout invariants and expectations (falsifiable)
-- `docs/LAYOUT_TESTBENCH_PLAN.md` - Plan for local layout iteration without device round trips
-- `docs/LAYOUT_VERIFICATION_PLAN.md` - Device-grounded layout & annotation verification system plan
-- `docs/LAYOUT_COVERAGE.md` - Which layout constructs are device-measured vs engine-modelled only
+- `docs/PDF_SUBSTRATE_PLAN.md` - Current design (PDF push/pull, supersedes native layout)
 - `docs/SYNC_PROTOCOL.md` - reMarkable Sync v3 protocol (reverse engineered)
 - `docs/RMSCENE_FINDINGS.md` - rmscene library integration notes
-- `docs/STROKE_ANCHORING.md` - Coordinate transformation and stroke anchoring
-- `docs/RENDERER_COORDINATE_MODEL.md` - Current coordinate system model
-- `docs/ANNOTATION_ARCHITECTURE_V2.md` - AnchorContext design document
+- `docs/STROKE_ANCHORING.md` - Coordinate transformation (superseded for current design)
+- `docs/ANNOTATION_ARCHITECTURE_V2.md` - AnchorContext design (superseded for current design)
 - `docs/OCR_SYSTEM.md` - OCR integration architecture
 - `docs/RECORD_REPLAY_FRAMEWORK.md` - Device testing framework
 - `docs/TODO.md` - Technical debt and deferred items
+
+### Native Layout (isolated, not part of production)
+- `native_layout/README.md` - What it is, how to run tests, subtree split recipe
+- `native_layout/docs/` - Layout principles, specs, verification plans, calibration archive
 
 ### Product Planning
 - `docs/PRODUCT_ROADMAP.md` - Product roadmap with future milestones
@@ -242,9 +244,6 @@ level = "debug"
 - `src/rock_paper_sync/annotations/README.md` - Annotation system overview
 - `src/rock_paper_sync/annotations/docs/STROKES.md` - Stroke handling details
 - `src/rock_paper_sync/annotations/docs/HIGHLIGHTS.md` - Highlight handling details
-
-### Historical Reference
-- `docs/archive/` - Historical calibration data and refactoring notes
 
 ## Getting Help
 

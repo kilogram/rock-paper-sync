@@ -2,6 +2,7 @@
 
 import io
 
+import pytest
 import rmscene
 from rmscene import CrdtId
 
@@ -27,6 +28,8 @@ from rock_paper_sync.annotations.services.hidden_layer import (
     serialize_annotation_blocks,
 )
 from rock_paper_sync.layout.device import DEFAULT_DEVICE
+
+pytestmark = pytest.mark.native_layout
 
 # ===========================================================================
 # Fixtures

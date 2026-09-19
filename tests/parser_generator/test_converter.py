@@ -8,6 +8,8 @@ from rock_paper_sync.config import AppConfig, VaultConfig
 from rock_paper_sync.converter import SyncEngine, SyncResult
 from rock_paper_sync.state import StateManager
 
+pytestmark = pytest.mark.native_layout
+
 
 @pytest.fixture
 def test_vault_config(temp_vault: Path) -> VaultConfig:

@@ -658,7 +658,7 @@ def save_comparison_images(
     Returns:
         List of paths to saved images
     """
-    from tools.rmlib import RmRenderer
+    from native_layout.tools.rmlib import RmRenderer
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)

@@ -93,7 +93,7 @@ ignore = [
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
-addopts = "-v --tb=short"
+addopts = "-v --tb=short -m 'not native_layout'"
 tmp_path_retention_count = 50
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
@@ -170,3 +170,9 @@ forbidden_modules = [
     "rock_paper_sync.sync_v3",
     "rock_paper_sync.rm_cloud_sync",
 ]
+
+[[tool.importlinter.contracts]]
+name = "production does not import native_layout"
+type = "forbidden"
+source_modules = ["rock_paper_sync"]
+forbidden_modules = ["native_layout"]

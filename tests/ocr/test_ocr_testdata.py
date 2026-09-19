@@ -20,6 +20,8 @@ from rock_paper_sync.ocr.paragraph_mapper import SpatialOverlapMapper
 from rock_paper_sync.ocr.protocol import BoundingBox
 from rock_paper_sync.parser import parse_content
 
+pytestmark = pytest.mark.native_layout
+
 # Test data paths - use record_replay testdata
 TESTDATA_DIR = Path(__file__).parent.parent / "record_replay" / "testdata" / "ocr_handwriting"
 MANIFEST_PATH = TESTDATA_DIR / "manifest.json"

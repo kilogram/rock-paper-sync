@@ -1,3 +1,5 @@
+> Superseded by `docs/PDF_SUBSTRATE_PLAN.md` for the current design.
+
 # Annotation Architecture V2: AnchorContext-Based Preservation
 
 **Status**: Production

@@ -174,10 +174,9 @@ class TestPdfPushIntegration:
         pdf_entry = next(e for e in entries if e.entry_name.endswith(".pdf"))
         pdf_blob = cloud_sync.sync_client.download_blob(pdf_entry.hash)
         actual_pdf_sha256 = hashlib.sha256(pdf_blob).hexdigest()
-        assert actual_pdf_sha256 == file_state.pushed_pdf_sha256, (
-            f"PDF hash mismatch: state={file_state.pushed_pdf_sha256}, "
-            f"cloud={actual_pdf_sha256}"
-        )
+        assert (
+            actual_pdf_sha256 == file_state.pushed_pdf_sha256
+        ), f"PDF hash mismatch: state={file_state.pushed_pdf_sha256}, cloud={actual_pdf_sha256}"
 
         initial_index_hash = _get_doc_index_hash(cloud_sync, doc_uuid)
         assert initial_index_hash is not None
@@ -243,9 +242,7 @@ class TestPdfPushIntegration:
         assert len(rm_entries) == 1, f"Expected 1 .rm entry, got {len(rm_entries)}"
 
         # Modify content to force a push attempt
-        test_file.write_text(
-            "# PDF Push Test (Modified)\n\n" "Content changed to trigger a push.\n"
-        )
+        test_file.write_text("# PDF Push Test (Modified)\n\nContent changed to trigger a push.\n")
 
         # Push should fail with InkNotPulledError
         state3 = StateManager(config.sync.state_database)
