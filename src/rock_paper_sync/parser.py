@@ -83,6 +83,7 @@ class FormatStyle(Enum):
     CODE = "code"
     LINK = "link"
     STRIKETHROUGH = "strikethrough"
+    MARK = "mark"
 
 
 @dataclass
@@ -185,9 +186,7 @@ def parse_markdown_file(file_path: Path) -> MarkdownDocument:
     # Get file modification time
     last_modified = datetime.fromtimestamp(file_path.stat().st_mtime)
 
-    logger.debug(
-        f"Parsed {len(blocks)} blocks from {file_path.name}, " f"hash: {content_hash[:8]}..."
-    )
+    logger.debug(f"Parsed {len(blocks)} blocks from {file_path.name}, hash: {content_hash[:8]}...")
 
     return MarkdownDocument(
         path=file_path,
@@ -262,8 +261,10 @@ def parse_content(markdown_text: str) -> list[ContentBlock]:
     if not markdown_text.strip():
         return []
 
-    # Create mistune parser with AST renderer
-    md = mistune.create_markdown(renderer="ast")
+    # Create mistune parser with AST renderer.
+    # "mark" parses ==text== into <mark> (highlights).
+    # "task_lists" parses - [ ] / - [x] into task_list_item nodes.
+    md = mistune.create_markdown(renderer="ast", plugins=["mark", "task_lists"])
     try:
         ast = md(markdown_text)
     except Exception as e:
@@ -315,15 +316,36 @@ def ast_node_to_block(
         items: list[ContentBlock] = []
 
         for item_node in node.get("children", []):
-            if item_node.get("type") == "list_item":
+            item_type = item_node.get("type")
+            if item_type in ("list_item", "task_list_item"):
                 # List items contain child blocks (usually block_text or nested lists)
                 item_children = item_node.get("children", [])
+
+                # Task list items carry a checked attribute
+                is_task = item_type == "task_list_item"
+                is_checked = item_node.get("attrs", {}).get("checked", False) if is_task else None
 
                 for child in item_children:
                     child_type = child.get("type")
                     if child_type in ("paragraph", "block_text"):
                         # Extract text from paragraph or block_text
                         text, formatting = extract_text_and_formatting(child.get("children", []))
+
+                        # Prepend checkbox marker for task list items
+                        if is_task:
+                            checkbox = "[x] " if is_checked else "[ ] "
+                            text = checkbox + text
+                            # Shift existing formatting offsets by checkbox prefix
+                            formatting = [
+                                TextFormat(
+                                    start=f.start + len(checkbox),
+                                    end=f.end + len(checkbox),
+                                    style=f.style,
+                                    metadata=f.metadata,
+                                )
+                                for f in formatting
+                            ]
+
                         items.append(
                             ContentBlock(
                                 type=BlockType.LIST_ITEM,
@@ -515,6 +537,32 @@ def extract_text_and_formatting(children: list[dict[str, Any]]) -> tuple[str, li
             )
 
             for fmt in inner_fmt:  # pragma: no cover (strikethrough plugin not enabled)
+                formatting.append(
+                    TextFormat(
+                        start=start_pos + fmt.start,
+                        end=start_pos + fmt.end,
+                        style=fmt.style,
+                        metadata=fmt.metadata,
+                    )
+                )
+
+            current_pos += len(inner_text)
+
+        elif child_type == "mark":
+            # Highlight text (==text==)
+            start_pos = current_pos
+            inner_text, inner_fmt = extract_text_and_formatting(child.get("children", []))
+            text_parts.append(inner_text)
+
+            formatting.append(
+                TextFormat(
+                    start=start_pos,
+                    end=start_pos + len(inner_text),
+                    style=FormatStyle.MARK,
+                )
+            )
+
+            for fmt in inner_fmt:
                 formatting.append(
                     TextFormat(
                         start=start_pos + fmt.start,

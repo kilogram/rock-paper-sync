@@ -40,6 +40,11 @@ class SyncRecord:
     status: str  # 'synced', 'pending', 'error'
     last_root_generation: int | None = None  # Cloud root generation number (schema v6)
     last_doc_index_hash: str | None = None  # Document index hash (schema v6)
+    pending_pdf_sha256: str | None = None  # PDF hash during push (schema v9)
+    pushed_pdf_sha256: str | None = None  # Last pushed PDF hash (schema v9)
+    word_map: bytes | None = None  # Serialised WordMap blob (schema v9)
+    ink_clearance_hash: str | None = None  # Doc index hash at clearance (schema v9)
+    render_config_hash: str | None = None  # Render config hash (schema v9)
 
 
 @dataclass
@@ -79,7 +84,7 @@ class OrphanedAnnotation:
 class StateManager:
     """Manages sync state using SQLite database."""
 
-    SCHEMA_VERSION = 8  # Schema v8: Add blocks_blob/source_page_idx to orphaned_annotations (M5.5)
+    SCHEMA_VERSION = 9  # Schema v9: PDF substrate columns on sync_state
 
     def __init__(self, db_path: Path) -> None:
         """Initialize state manager with database at given path.
@@ -108,7 +113,7 @@ class StateManager:
         with self.conn:
             self.conn.executescript(
                 """
-                -- File sync state (vault-aware, schema v6)
+                -- File sync state (vault-aware, schema v9)
                 CREATE TABLE IF NOT EXISTS sync_state (
                     vault_name TEXT NOT NULL,
                     obsidian_path TEXT NOT NULL,
@@ -119,6 +124,11 @@ class StateManager:
                     status TEXT NOT NULL DEFAULT 'synced',
                     last_root_generation INTEGER,  -- Cloud generation number (v6)
                     last_doc_index_hash TEXT,       -- Document index hash (v6)
+                    pending_pdf_sha256 TEXT,        -- PDF hash during push (v9)
+                    pushed_pdf_sha256 TEXT,         -- Last pushed PDF hash (v9)
+                    word_map BLOB,                  -- Serialised WordMap (v9)
+                    ink_clearance_hash TEXT,        -- Doc index hash at clearance (v9)
+                    render_config_hash TEXT,        -- Render config hash (v9)
                     PRIMARY KEY (vault_name, obsidian_path)
                 );
 
@@ -250,6 +260,8 @@ class StateManager:
             self._migrate_to_v7()
         if current_version < 8:
             self._migrate_to_v8()
+        if current_version < 9:
+            self._migrate_to_v9()
 
     def _migrate_to_v7(self) -> None:
         """Migrate from v5/v6 to v7: Add pull_state and orphaned_annotations tables."""
@@ -270,6 +282,27 @@ class StateManager:
             self.conn.execute("DELETE FROM schema_version")
             self.conn.execute("INSERT INTO schema_version (version) VALUES (8)")
         logger.info("Database schema migrated to v8")
+
+    def _migrate_to_v9(self) -> None:
+        """Migrate from v8 to v9: Add PDF substrate columns to sync_state."""
+        logger.info("Migrating database schema to v9...")
+        with self.conn:
+            # Add columns for PDF push workflow:
+            # - pending_pdf_sha256: hash of the PDF being pushed (during push)
+            # - pushed_pdf_sha256: hash of the last successfully pushed PDF
+            # - word_map: serialised WordMap blob
+            # - ink_clearance_hash: doc index hash at clearance mint time
+            # - render_config_hash: hash of render config for re-push detection
+            self.conn.executescript("""
+                ALTER TABLE sync_state ADD COLUMN pending_pdf_sha256 TEXT;
+                ALTER TABLE sync_state ADD COLUMN pushed_pdf_sha256 TEXT;
+                ALTER TABLE sync_state ADD COLUMN word_map BLOB;
+                ALTER TABLE sync_state ADD COLUMN ink_clearance_hash TEXT;
+                ALTER TABLE sync_state ADD COLUMN render_config_hash TEXT;
+            """)
+            self.conn.execute("DELETE FROM schema_version")
+            self.conn.execute("INSERT INTO schema_version (version) VALUES (9)")
+        logger.info("Database schema migrated to v9")
 
     def get_file_state(self, vault_name: str, obsidian_path: str) -> SyncRecord | None:
         """Get sync state for a file.
@@ -303,8 +336,12 @@ class StateManager:
             self.conn.execute(
                 """
                 INSERT OR REPLACE INTO sync_state
-                (vault_name, obsidian_path, remarkable_uuid, content_hash, last_sync_time, page_count, status, last_root_generation, last_doc_index_hash)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (vault_name, obsidian_path, remarkable_uuid, content_hash,
+                 last_sync_time, page_count, status,
+                 last_root_generation, last_doc_index_hash,
+                 pending_pdf_sha256, pushed_pdf_sha256, word_map,
+                 ink_clearance_hash, render_config_hash)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.vault_name,
@@ -316,6 +353,11 @@ class StateManager:
                     record.status,
                     record.last_root_generation,
                     record.last_doc_index_hash,
+                    record.pending_pdf_sha256,
+                    record.pushed_pdf_sha256,
+                    record.word_map,
+                    record.ink_clearance_hash,
+                    record.render_config_hash,
                 ),
             )
         logger.debug(f"Updated sync state for {record.vault_name}:{record.obsidian_path}")

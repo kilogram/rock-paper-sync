@@ -38,6 +38,7 @@ dependencies = [
     "imagehash>=4.3.1",
     "runpod>=1.8.1",
     "diff-match-patch>=20230430",
+    "weasyprint>=69.0,<70",
 ]
 
 [project.optional-dependencies]
@@ -97,6 +98,8 @@ tmp_path_retention_count = 50
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "integration: marks tests as integration tests",
+    "native_layout: tests that depend on the native layout engine (deselected by default)",
+    "property: property-based tests (hypothesis)",
 ]
 
 [tool.coverage.run]
@@ -137,4 +140,33 @@ dev = [
     "ty>=0.0.1a28",
     "vulture>=2.14",
     "cairosvg>=2.7",
+    "hypothesis>=6.0.0",
+    "import-linter>=2.0",
+    "pymupdf>=1.24.0",
+]
+
+[tool.importlinter]
+root_packages = ["rock_paper_sync"]
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "wordmap is renderer-agnostic"
+type = "forbidden"
+source_modules = ["rock_paper_sync.render.wordmap"]
+forbidden_modules = [
+    "weasyprint",
+    "fitz",
+    "rock_paper_sync.sync_v3",
+    "rock_paper_sync.rm_cloud_sync",
+]
+
+[[tool.importlinter.contracts]]
+name = "cloud_reader is read-only"
+type = "forbidden"
+source_modules = ["rock_paper_sync.cloud_reader"]
+forbidden_modules = [
+    "weasyprint",
+    "fitz",
+    "rock_paper_sync.sync_v3",
+    "rock_paper_sync.rm_cloud_sync",
 ]

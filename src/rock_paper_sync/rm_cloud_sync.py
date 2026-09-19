@@ -1,8 +1,19 @@
-"""Integration layer for rm_cloud sync."""
+"""Integration layer for rm_cloud sync.
+
+Invariants established:
+    INV-I2: ``PdfDocumentPayload.to_files()`` produces exactly four keys
+            ({uuid}.metadata, .content, .pagedata, .pdf).  No ``.rm`` file
+            can appear in a PDF push payload.
+    INV-I9: ``upload_pdf_document`` requires an ``InkClearance`` and
+            re-reads the document index hash immediately before the root
+            merge.  If the hash differs from the clearance, it raises
+            ``InkNotPulledError``.
+"""
 
 import json
 import logging
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from .audit import get_audit_logger
@@ -10,6 +21,110 @@ from .rm_cloud_client import RmCloudClient
 from .sync_v3 import SyncV3Client
 
 logger = logging.getLogger(__name__)
+
+
+class InkNotPulledError(Exception):
+    """Raised when a push is attempted while un-pulled ink exists on the device.
+
+    This guards I9: push never discards un-pulled ink.
+
+    Attributes:
+        doc_uuid: Document UUID.
+        reason: Human-readable reason.
+    """
+
+    def __init__(self, doc_uuid: str, reason: str) -> None:
+        self.doc_uuid = doc_uuid
+        self.reason = reason
+        super().__init__(
+            f"Cannot push '{doc_uuid}': {reason}. "
+            f"Pull annotations first, or use --discard-ink to override."
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class InkClearance:
+    """Proof that a document's ink state was inspected before push.
+
+    ``doc_index_hash`` is the document index hash at mint time
+    (``None`` for a brand-new document).  ``upload_pdf_document``
+    re-reads the hash and raises ``InkNotPulledError`` if it changed
+    between mint and upload (I9 CAS).
+    """
+
+    doc_uuid: str
+    doc_index_hash: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class PdfDocumentPayload:
+    """Immutable payload for a PDF push (I2).
+
+    Exactly four files: ``.metadata``, ``.content``, ``.pagedata``, ``.pdf``.
+    No ``.rm`` files can appear.
+
+    Attributes:
+        doc_uuid: Document UUID.
+        metadata: JSON bytes for ``{uuid}.metadata``.
+        content: JSON bytes for ``{uuid}.content``.
+        pagedata: Bytes for ``{uuid}.pagedata`` (empty for PDFs).
+        pdf: Raw PDF bytes.
+    """
+
+    doc_uuid: str
+    metadata: bytes
+    content: bytes
+    pagedata: bytes
+    pdf: bytes
+
+    def to_files(self) -> dict[str, bytes]:
+        """Return the four-file dict for upload (I2 by construction)."""
+        return {
+            f"{self.doc_uuid}.metadata": self.metadata,
+            f"{self.doc_uuid}.content": self.content,
+            f"{self.doc_uuid}.pagedata": self.pagedata,
+            f"{self.doc_uuid}.pdf": self.pdf,
+        }
+
+
+def _create_pdf_content_file() -> bytes:
+    """Create the .content JSON for a PDF document.
+
+    Uses rmapi's proven minimal shape.  The device builds its own
+    ``cPages`` from the PDF's page count.
+    """
+    content = {
+        "dummyDocument": False,
+        "extraMetadata": {
+            "LastPen": "Finelinerv2",
+            "LastTool": "Finelinerv2",
+            "LastFinelinerv2Size": "1",
+        },
+        "fileType": "pdf",
+        "fontName": "",
+        "lastOpenedPage": 0,
+        "lineHeight": -1,
+        "margins": 180,
+        "orientation": "portrait",
+        "pageCount": 0,
+        "pages": [""],
+        "pageTags": [],
+        "tags": [],
+        "redirectionPageMap": [],
+        "textScale": 1,
+        "transform": {
+            "m11": 1,
+            "m12": 0,
+            "m13": 0,
+            "m21": 0,
+            "m22": 1,
+            "m23": 0,
+            "m31": 0,
+            "m32": 0,
+            "m33": 1,
+        },
+    }
+    return json.dumps(content).encode("utf-8")
 
 
 class RmCloudSync:
@@ -613,3 +728,152 @@ class RmCloudSync:
                 doc_uuid=doc_uuid,
                 broadcast=broadcast,
             )
+
+    # --- PDF push support (Phase 1) ---
+
+    def _get_document_index_entries(self, doc_uuid: str) -> list | None:
+        """Get the parsed document index entries for a document.
+
+        Returns:
+            List of BlobEntry objects, or None if document not found.
+        """
+        root_entries, _, _ = self.get_root_state()
+        doc_entry = None
+        for entry in root_entries:
+            if entry.entry_name == doc_uuid:
+                doc_entry = entry
+                break
+        if doc_entry is None:
+            return None
+        doc_index_content = self.sync_client.download_blob(doc_entry.hash)
+        return self.sync_client.parse_index(doc_index_content)
+
+    def mint_clearance_if_no_ink(self, doc_uuid: str) -> InkClearance:
+        """Mint an ink clearance if the document has no un-pulled .rm files.
+
+        A document that does not exist on the cloud yields a clearance
+        with ``doc_index_hash=None``.
+
+        Args:
+            doc_uuid: Document UUID.
+
+        Returns:
+            InkClearance for use with ``upload_pdf_document``.
+
+        Raises:
+            InkNotPulledError: If the document index contains ``.rm`` entries.
+        """
+        current_hash = self.get_document_index_hash(doc_uuid)
+        if current_hash is None:
+            # Document does not exist yet — safe to push
+            return InkClearance(doc_uuid=doc_uuid, doc_index_hash=None)
+
+        # Check for .rm files in the document index
+        entries = self._get_document_index_entries(doc_uuid)
+        if entries is not None:
+            rm_entries = [e for e in entries if e.entry_name.endswith(".rm")]
+            if rm_entries:
+                raise InkNotPulledError(
+                    doc_uuid,
+                    f"Document has {len(rm_entries)} .rm file(s) with un-pulled ink",
+                )
+
+        return InkClearance(doc_uuid=doc_uuid, doc_index_hash=current_hash)
+
+    def force_clearance(self, doc_uuid: str) -> InkClearance:
+        """Mint a clearance unconditionally (for ``--discard-ink``).
+
+        Args:
+            doc_uuid: Document UUID.
+
+        Returns:
+            InkClearance that bypasses the ink check.
+        """
+        current_hash = self.get_document_index_hash(doc_uuid)
+        return InkClearance(doc_uuid=doc_uuid, doc_index_hash=current_hash)
+
+    def build_pdf_payload(
+        self,
+        doc_uuid: str,
+        document_name: str,
+        parent_uuid: str,
+        pdf_bytes: bytes,
+    ) -> PdfDocumentPayload:
+        """Build an immutable PDF upload payload.
+
+        Args:
+            doc_uuid: Document UUID.
+            document_name: Visible name on device.
+            parent_uuid: Parent folder UUID (empty for root).
+            pdf_bytes: Raw PDF content.
+
+        Returns:
+            PdfDocumentPayload ready for ``upload_pdf_document``.
+        """
+        metadata = self._create_metadata_file(doc_uuid, document_name, parent_uuid)
+        content = _create_pdf_content_file()
+        return PdfDocumentPayload(
+            doc_uuid=doc_uuid,
+            metadata=metadata,
+            content=content,
+            pagedata=b"",
+            pdf=pdf_bytes,
+        )
+
+    def upload_pdf_document(
+        self,
+        payload: PdfDocumentPayload,
+        clearance: InkClearance,
+        parent_uuid: str = "",
+        broadcast: bool = True,
+    ) -> None:
+        """Upload a PDF document with ink-clearance guard (I9).
+
+        Immediately before the root merge, re-reads the document index
+        hash and raises ``InkNotPulledError`` if it differs from the
+        clearance's hash.
+
+        Args:
+            payload: PDF document payload (I2).
+            clearance: Ink clearance proving no un-pulled ink.
+            parent_uuid: Parent folder UUID (unused, embedded in metadata).
+            broadcast: Whether to trigger device sync notification.
+
+        Raises:
+            InkNotPulledError: If the document index changed since mint (I9).
+        """
+        doc_uuid = payload.doc_uuid
+        logger.info(f"Uploading PDF document via Sync v3: {doc_uuid}")
+
+        # Upload file blobs
+        files = payload.to_files()
+        hash_of_hashes, file_entries = self.sync_client.upload_document_files(doc_uuid, files)
+
+        # I9 CAS: re-read document index hash before root merge
+        self.invalidate_root_cache()
+        current_hash = self.get_document_index_hash(doc_uuid)
+        if current_hash != clearance.doc_index_hash:
+            raise InkNotPulledError(
+                doc_uuid,
+                f"Document index hash changed between clearance mint and upload "
+                f"(expected {clearance.doc_index_hash!r}, got {current_hash!r}). "
+                f"Another process may have synced ink",
+            )
+
+        # Merge into root
+        self.sync_client.merge_document_into_root(
+            doc_uuid, hash_of_hashes, len(file_entries), broadcast
+        )
+        self.invalidate_root_cache()
+
+        logger.info(f"PDF document uploaded successfully: {doc_uuid}")
+
+        # AUDIT
+        total_size = sum(len(data) for data in files.values())
+        audit = get_audit_logger()
+        audit.log_cloud_upload(
+            doc_uuid=doc_uuid,
+            file_count=len(files),
+            total_size=total_size,
+            broadcast=broadcast,
+        )

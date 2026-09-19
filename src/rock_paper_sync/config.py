@@ -3,9 +3,15 @@
 This module handles loading and validating TOML configuration files.
 """
 
+from __future__ import annotations
+
 import os
 import sys
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from rock_paper_sync.device_profile import DeviceProfile
 from pathlib import Path
 
 # Python 3.11+ has tomllib built-in, 3.10 needs tomli
@@ -46,29 +52,45 @@ class SyncConfig:
 
 @dataclass(frozen=True)
 class LayoutConfig:
-    """Page layout configuration.
+    """Page layout configuration for PDF rendering.
 
-    Lines per page is calculated from page geometry by the layout engine.
-    Margins are configurable with sane defaults.
+    Controls the CSS layout that WeasyPrint uses to render markdown to PDF.
+    Margins and font sizing are in PDF points.
 
     Attributes:
-        device: Target device name ("paper_pro_move" is currently the only supported device)
-        margin_top: Top margin in pixels
-        margin_bottom: Bottom margin in pixels
-        margin_left: Left margin in pixels
-        margin_right: Right margin in pixels
-        allow_paragraph_splitting: Whether to allow paragraphs to split across pages
-                                   (True = better page utilization, False = atomic paragraphs)
+        device: Target device name ("paper_pro_move" is currently the only supported device).
+        font_size_pt: Body font size in points.
+        line_height: CSS line-height multiplier.
+        margin_top_pt: Top margin in points.
+        margin_bottom_pt: Bottom margin in points.
+        margin_left_pt: Left margin in points.
+        margin_right_pt: Right margin in points.
+        trailing_blank_pages: Number of ruled blank pages appended for handwriting.
+        notes_heading: Level-2 heading inserted for appended handwriting.
+        margin_top: Deprecated pixel-based top margin (use margin_top_pt).
+        margin_bottom: Deprecated pixel-based bottom margin (use margin_bottom_pt).
+        margin_left: Deprecated pixel-based left margin (use margin_left_pt).
+        margin_right: Deprecated pixel-based right margin (use margin_right_pt).
+        allow_paragraph_splitting: Retained for native layout compatibility.
     """
 
     device: str = "paper_pro_move"
+    font_size_pt: float = 11.0
+    line_height: float = 1.4
+    margin_top_pt: float = 36.0
+    margin_bottom_pt: float = 36.0
+    margin_left_pt: float = 36.0
+    margin_right_pt: float = 36.0
+    trailing_blank_pages: int = 2
+    notes_heading: str = "Notes"
+    # Deprecated pixel-based margins (kept for backward compat with native layout)
     margin_top: int = 50
     margin_bottom: int = 50
     margin_left: int = 50
     margin_right: int = 50
     allow_paragraph_splitting: bool = False
 
-    def get_device_geometry(self) -> "DeviceGeometry":
+    def get_device_geometry(self) -> DeviceGeometry:
         """Get the DeviceGeometry for the configured device.
 
         Returns:
@@ -79,12 +101,45 @@ class LayoutConfig:
         """
         return get_device_geometry(self.device)
 
+    def get_device_profile(self) -> DeviceProfile:
+        """Get the DeviceProfile for the configured device.
+
+        Returns:
+            DeviceProfile for the configured device.
+
+        Raises:
+            ConfigError: If the device name is not recognized.
+        """
+        from rock_paper_sync.device_profile import PROFILES
+
+        name = self.device.lower().replace("-", "_").replace(" ", "_")
+        if name not in PROFILES:
+            valid = ", ".join(sorted(PROFILES.keys()))
+            raise ConfigError(f"Unknown device '{self.device}'. Supported profiles: {valid}")
+        return PROFILES[name]
+
+    def render_config_hash(self) -> str:
+        """Hash of render-affecting fields for push-change detection."""
+        import hashlib
+
+        parts = (
+            f"device={self.device}",
+            f"font_size_pt={self.font_size_pt}",
+            f"line_height={self.line_height}",
+            f"margin_top_pt={self.margin_top_pt}",
+            f"margin_bottom_pt={self.margin_bottom_pt}",
+            f"margin_left_pt={self.margin_left_pt}",
+            f"margin_right_pt={self.margin_right_pt}",
+            f"trailing_blank_pages={self.trailing_blank_pages}",
+        )
+        return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
+
 
 # Type alias for forward reference
 DeviceGeometry = "DeviceGeometry"
 
 
-def get_device_geometry(device_name: str) -> "DeviceGeometry":
+def get_device_geometry(device_name: str) -> DeviceGeometry:
     """Get DeviceGeometry by device name.
 
     Args:
@@ -262,14 +317,46 @@ def load_config(config_path: Path) -> AppConfig:
         # Layout section is optional - all settings have defaults
         layout = config_dict.get("layout", {})
         device = layout.get("device", "paper_pro_move")
+
+        # PDF-era layout fields (points)
+        font_size_pt = layout.get("font_size_pt", 11.0)
+        line_height = layout.get("line_height", 1.4)
+        margin_top_pt = layout.get("margin_top_pt", 36.0)
+        margin_bottom_pt = layout.get("margin_bottom_pt", 36.0)
+        margin_left_pt = layout.get("margin_left_pt", 36.0)
+        margin_right_pt = layout.get("margin_right_pt", 36.0)
+        trailing_blank_pages = layout.get("trailing_blank_pages", 2)
+        notes_heading = layout.get("notes_heading", "Notes")
+
+        # Legacy pixel-based margins (for native layout compat)
         margin_top = layout.get("margin_top", 50)
         margin_bottom = layout.get("margin_bottom", 50)
         margin_left = layout.get("margin_left", 50)
         margin_right = layout.get("margin_right", 50)
         allow_paragraph_splitting = layout.get("allow_paragraph_splitting", False)
 
-        # Validate device name early
-        get_device_geometry(device)
+        # Backward compat: if legacy margin_top_pt keys aren't set but
+        # legacy pixel margins are non-default, warn once
+        import warnings
+
+        _legacy_keys = {"margin_top", "margin_bottom", "margin_left", "margin_right"}
+        _pt_keys = {"margin_top_pt", "margin_bottom_pt", "margin_left_pt", "margin_right_pt"}
+        if any(k in layout for k in _legacy_keys) and not any(k in layout for k in _pt_keys):
+            warnings.warn(
+                "Layout config uses unit-less margin_top/bottom/left/right. "
+                "These control the native layout engine. "
+                "For PDF rendering, set margin_top_pt/bottom_pt/left_pt/right_pt (in points).",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
+        # Validate device name early (try both profile systems)
+        from rock_paper_sync.device_profile import PROFILES
+
+        device_lower = device.lower().replace("-", "_").replace(" ", "_")
+        if device_lower not in PROFILES:
+            valid_profiles = ", ".join(sorted(PROFILES.keys()))
+            raise ConfigError(f"Unknown device '{device}'. Supported profiles: {valid_profiles}")
 
         # Extract logging section
         logging_config = config_dict.get("logging", {})
@@ -291,6 +378,14 @@ def load_config(config_path: Path) -> AppConfig:
 
         layout_config = LayoutConfig(
             device=device,
+            font_size_pt=font_size_pt,
+            line_height=line_height,
+            margin_top_pt=margin_top_pt,
+            margin_bottom_pt=margin_bottom_pt,
+            margin_left_pt=margin_left_pt,
+            margin_right_pt=margin_right_pt,
+            trailing_blank_pages=trailing_blank_pages,
+            notes_heading=notes_heading,
             margin_top=margin_top,
             margin_bottom=margin_bottom,
             margin_left=margin_left,
@@ -428,11 +523,11 @@ def validate_config(config: AppConfig) -> None:
         try:
             db_dir.mkdir(parents=True, exist_ok=True)
         except Exception as e:
-            raise ConfigError(f"Cannot create state database directory: {db_dir}\n" f"Error: {e}")
+            raise ConfigError(f"Cannot create state database directory: {db_dir}\nError: {e}")
 
     if not os.access(db_dir, os.W_OK):
         raise ConfigError(
-            f"State database directory is not writable: {db_dir}\n" "Please check file permissions."
+            f"State database directory is not writable: {db_dir}\nPlease check file permissions."
         )
 
     # Validate log file directory is writable (create if needed)
@@ -441,11 +536,11 @@ def validate_config(config: AppConfig) -> None:
         try:
             log_dir.mkdir(parents=True, exist_ok=True)
         except Exception as e:
-            raise ConfigError(f"Cannot create log file directory: {log_dir}\n" f"Error: {e}")
+            raise ConfigError(f"Cannot create log file directory: {log_dir}\nError: {e}")
 
     if not os.access(log_dir, os.W_OK):
         raise ConfigError(
-            f"Log file directory is not writable: {log_dir}\n" "Please check file permissions."
+            f"Log file directory is not writable: {log_dir}\nPlease check file permissions."
         )
 
     # Validate numeric values are positive
@@ -461,8 +556,7 @@ def validate_config(config: AppConfig) -> None:
     valid_log_levels = ["debug", "info", "warning", "error", "critical"]
     if config.log_level.lower() not in valid_log_levels:
         raise ConfigError(
-            f"Invalid log level: {config.log_level}\n"
-            f"Must be one of: {', '.join(valid_log_levels)}"
+            f"Invalid log level: {config.log_level}\nMust be one of: {', '.join(valid_log_levels)}"
         )
 
     # Validate OCR configuration (if enabled)
@@ -514,9 +608,7 @@ def validate_config(config: AppConfig) -> None:
             try:
                 config.cache_dir.mkdir(parents=True, exist_ok=True)
             except Exception as e:
-                raise ConfigError(
-                    f"Cannot create cache directory: {config.cache_dir}\n" f"Error: {e}"
-                )
+                raise ConfigError(f"Cannot create cache directory: {config.cache_dir}\nError: {e}")
 
         # Create OCR cache directory if it doesn't exist
         if config.ocr.cache_dir and not config.ocr.cache_dir.exists():
@@ -524,5 +616,5 @@ def validate_config(config: AppConfig) -> None:
                 config.ocr.cache_dir.mkdir(parents=True, exist_ok=True)
             except Exception as e:
                 raise ConfigError(
-                    f"Cannot create OCR cache directory: {config.ocr.cache_dir}\n" f"Error: {e}"
+                    f"Cannot create OCR cache directory: {config.ocr.cache_dir}\nError: {e}"
                 )
