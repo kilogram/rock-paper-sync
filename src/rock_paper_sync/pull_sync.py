@@ -28,7 +28,6 @@ Import restrictions (enforced by import-linter):
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import time
@@ -45,7 +44,7 @@ from rock_paper_sync.ink.bake import (
     get_attachment_folder,
     render_cluster_to_png,
 )
-from rock_paper_sync.ink.calibration import check_i8
+from rock_paper_sync.ink.calibration import DeviceRect, check_i8
 from rock_paper_sync.ink.candidates import extract_candidates
 from rock_paper_sync.ink.classify import (
     Classification,
@@ -63,10 +62,9 @@ from rock_paper_sync.ink.dispositions import (
     InkAnchor,
     MarkdownEdit,
     is_terminal,
-    paragraph_anchor_ref,
 )
 from rock_paper_sync.render.wordmap import Rect, WordMap
-from rock_paper_sync.state import StateManager
+from rock_paper_sync.state import PullState, StateManager
 
 logger = logging.getLogger("rock_paper_sync.pull_sync")
 
@@ -201,7 +199,7 @@ class PullSyncEngine:
         doc_uuid = sync_state.remarkable_uuid
         word_map = WordMap.from_json(sync_state.word_map)
 
-        # Step 2: Verify PDF hash matches (I10)
+        # Step 2a: Verify document exists in cloud
         doc_index_hash = self.cloud_reader.get_document_index_hash(doc_uuid)
         if doc_index_hash is None:
             logger.debug(f"Document {doc_uuid} not found in cloud, skipping pull")
@@ -210,6 +208,23 @@ class PullSyncEngine:
                 obsidian_path=obsidian_path,
                 success=True,
             )
+
+        # Step 2b: I10 — compare the .pdf entry's hash with pushed_pdf_sha256.
+        # This ensures ink is interpreted only against the PDF we pushed.
+        index_entries = self.cloud_reader.get_document_index_entries(doc_uuid)
+        if index_entries is not None:
+            pdf_entry_name = f"{doc_uuid}.pdf"
+            pdf_hash: str | None = None
+            for entry in index_entries:
+                if entry.entry_name == pdf_entry_name:
+                    pdf_hash = entry.hash
+                    break
+            if pdf_hash is not None and pdf_hash != sync_state.pushed_pdf_sha256:
+                raise RenderMismatchError(
+                    doc_uuid=doc_uuid,
+                    expected_hash=sync_state.pushed_pdf_sha256,
+                    actual_hash=pdf_hash,
+                )
 
         # Download .content to get cPages
         content_bytes = self.cloud_reader.download_content_file(doc_uuid)
@@ -245,7 +260,6 @@ class PullSyncEngine:
         page_uuids = [str(p.get("id", "")) for p in cpages_list if p.get("id")]
         rm_file_paths = self.cloud_reader.download_page_rm_files(doc_uuid, page_uuids, temp_dir)
 
-        # Build page_uuid -> path mapping
         rm_files: dict[str, Path] = {}
         for page_uuid, rm_path in zip(page_uuids, rm_file_paths):
             if rm_path is not None and rm_path.exists():
@@ -263,16 +277,11 @@ class PullSyncEngine:
         known_ids = self.state.get_known_stroke_ids(vault.name, obsidian_path)
 
         candidates = extract_candidates(rm_files, cpages_list, known_ids)
-
-        # Also extract glyph highlights (these are not stroke clusters)
         glyph_highlights = classify_glyph_highlights(rm_files, cpages_list, known_ids)
 
         # I8: Cross-check every GlyphRange's transformed rects against the word map.
-        # Mismatch -> TransformMismatchError, pull aborted before any write.
-        from rock_paper_sync.ink.calibration import _DeviceRect
-
         for gh in glyph_highlights:
-            device_rects = [_DeviceRect(x=r[0], y=r[1], w=r[2], h=r[3]) for r in gh.device_rects]
+            device_rects = [DeviceRect(x=r[0], y=r[1], w=r[2], h=r[3]) for r in gh.device_rects]
             result = check_i8(gh.text, device_rects, word_map, self._profile, gh.page)
             if not result.i8_pass:
                 raise TransformMismatchError(
@@ -289,12 +298,9 @@ class PullSyncEngine:
                 success=True,
             )
 
-        # Count content pages (pages with redir values < total pages in word map)
         content_page_count = len(word_map.pages)
-
         clusters = cluster_candidates(candidates)
 
-        # Classify each cluster
         classifications: list[Classification] = []
         for cluster in clusters:
             classification = classify_cluster(cluster, word_map, self._profile, content_page_count)
@@ -306,7 +312,6 @@ class PullSyncEngine:
         if snapshot_bytes is not None:
             snapshot_text = snapshot_bytes.decode("utf-8")
         if not snapshot_text:
-            # Fall back to current file
             file_path = vault.path / obsidian_path
             if file_path.exists():
                 snapshot_text = file_path.read_text(encoding="utf-8")
@@ -316,9 +321,9 @@ class PullSyncEngine:
         dispositions: dict[str, Disposition] = {}
         deferred_reasons: list[str] = []
 
-        # Process glyph highlights
+        # Process glyph highlights — use glyph_id for stable identity
         for gh in glyph_highlights:
-            cluster_id = hashlib.sha256(f"highlight:{gh.text}:{gh.page}".encode()).hexdigest()
+            cluster_id = gh.glyph_id
 
             edit = MarkdownEdit(
                 kind="highlight",
@@ -335,7 +340,6 @@ class PullSyncEngine:
             cid = cluster.cluster_id
 
             if classification.kind == "appended":
-                # OCR the cluster for text
                 anchor = DOCUMENT_END
                 ocr_text = self._ocr_cluster(cluster, vault.name, obsidian_path)
                 if ocr_text is not None:
@@ -348,7 +352,6 @@ class PullSyncEngine:
                     dispositions[cid] = Consumed(edit_id=str(uuid_module.uuid4()), edit=edit)
                     edits.append(edit)
                 else:
-                    # OCR failed or unavailable -> deferred
                     reason = "ocr_unavailable"
                     deferred_reasons.append(reason)
                     embed_name = (
@@ -366,13 +369,11 @@ class PullSyncEngine:
                     )
                     dispositions[cid] = Deferred(reason=reason, edit=edit)
                     edits.append(edit)
-
-                    # Still save the SVG
                     self._save_drawing(cluster, vault, obsidian_path, anchor, None)
 
             elif classification.kind == "drawing":
-                # Find the anchor paragraph
-                anchor = self._find_anchor_for_drawing(classification, word_map, snapshot_text)
+                # Use anchor_ref from classify (BlockBox-based) when available
+                anchor = _anchor_from_classification(classification)
 
                 attachment_name, svg_bytes, overlay = bake_cluster(
                     cluster,
@@ -395,8 +396,6 @@ class PullSyncEngine:
                     edit=edit,
                 )
                 edits.append(edit)
-
-                # Save attachment (step a of I12)
                 self._save_attachment(vault, attachment_name, svg_bytes)
 
         # Read current file
@@ -410,55 +409,65 @@ class PullSyncEngine:
             )
         current_text = file_path.read_text(encoding="utf-8")
 
+        # Compute all DB rows before touching the file (foreseeable conflict
+        # check — I12 crash semantics still hold: attachments → markdown →
+        # transaction, but a detectable duplicate aborts before the write).
+        stroke_rows: list[tuple[str, str, str, str, str]] = []
+        for cluster in clusters:
+            cid = cluster.cluster_id
+            for cs in cluster.strokes:
+                sid = f"{cs.stroke.stroke_id.part1}:{cs.stroke.stroke_id.part2}"
+                stroke_rows.append((vault.name, obsidian_path, doc_uuid, sid, cid))
+
+        for gh in glyph_highlights:
+            stroke_rows.append((vault.name, obsidian_path, doc_uuid, gh.glyph_id, gh.glyph_id))
+
+        # Check for foreseeable conflicts: any stroke_id already in the DB
+        # means we would fail inside the transaction after writing markdown.
+        if stroke_rows:
+            conflict_ids = known_ids & frozenset(r[3] for r in stroke_rows)
+            if conflict_ids:
+                logger.warning(
+                    f"Foreseeable conflict: {len(conflict_ids)} stroke id(s) already "
+                    f"in ledger for {vault.name}:{obsidian_path}; skipping write"
+                )
+                return PullResult(
+                    vault_name=vault.name,
+                    obsidian_path=obsidian_path,
+                    success=True,
+                )
+
         # Apply edits (step b of I12)
         if edits:
             new_text, failed_ids = apply_edits(
                 edits, snapshot_text, current_text, self.layout.notes_heading
             )
 
-            # Mark failed edits as deferred
             for fid in failed_ids:
                 if fid in dispositions:
                     old_disp = dispositions[fid]
-                    edit = (
+                    edit_for_defer = (
                         old_disp.edit
                         if hasattr(old_disp, "edit")
-                        else MarkdownEdit(  # type: ignore[union-attr]
+                        else MarkdownEdit(
                             kind="deferred",
                             cluster_id=fid,
                             anchor=DOCUMENT_END,
                             text="",
                         )
                     )
-                    dispositions[fid] = Deferred(reason="patch_failed", edit=edit)
+                    dispositions[fid] = Deferred(reason="patch_failed", edit=edit_for_defer)
                     deferred_reasons.append("patch_failed")
 
-            # Atomic write
             write_markdown_atomic(file_path, new_text)
 
         # Step c: ONE SQLite transaction
         all_terminal = all(is_terminal(d) for d in dispositions.values())
 
         with self.state.conn:
-            # Insert ink_strokes rows
-            stroke_rows: list[tuple[str, str, str, str, str]] = []
-            for cluster in clusters:
-                cid = cluster.cluster_id
-                for cs in cluster.strokes:
-                    sid = f"{cs.stroke.stroke_id.part1}:{cs.stroke.stroke_id.part2}"
-                    stroke_rows.append((vault.name, obsidian_path, doc_uuid, sid, cid))
-
-            # Also record glyph highlight ids as "strokes" so they aren't re-processed
-            for gh in glyph_highlights:
-                gh_id = hashlib.sha256(f"highlight:{gh.text}:{gh.page}".encode()).hexdigest()
-                # Use a synthetic stroke id for the highlight
-                synth_sid = f"glyph:{gh_id[:16]}"
-                stroke_rows.append((vault.name, obsidian_path, doc_uuid, synth_sid, gh_id))
-
             if stroke_rows:
                 self.state.insert_ink_strokes(stroke_rows)
 
-            # Insert ink_clusters rows
             now = int(time.time())
             for cid, disp in dispositions.items():
                 disp_name = type(disp).__name__.lower()
@@ -484,7 +493,6 @@ class PullSyncEngine:
                     anchor_kind = disp.edit.anchor.kind
                     anchor_ref = disp.edit.anchor.ref
 
-                # Find cluster for page_redir
                 page_redir = None
                 for cluster in clusters:
                     if cluster.cluster_id == cid:
@@ -515,9 +523,6 @@ class PullSyncEngine:
                     created_at=now,
                 )
 
-            # Update pull_state
-            from rock_paper_sync.state import PullState
-
             pull_state = PullState(
                 vault_name=vault.name,
                 obsidian_path=obsidian_path,
@@ -528,11 +533,9 @@ class PullSyncEngine:
             )
             self.state.update_pull_state(pull_state)
 
-            # Set ink_clearance_hash only if all clusters are terminal
             if all_terminal and dispositions:
                 self.state.update_ink_clearance_hash(vault.name, obsidian_path, doc_index_hash)
 
-        # Count results
         highlight_count = sum(1 for d in dispositions.values() if isinstance(d, Highlight))
         notes_count = sum(1 for d in dispositions.values() if isinstance(d, Consumed))
         drawings_count = sum(1 for d in dispositions.values() if isinstance(d, Baked))
@@ -580,55 +583,9 @@ class PullSyncEngine:
             )
             return None
 
-    def _find_anchor_for_drawing(
-        self,
-        classification: Classification,
-        word_map: WordMap,
-        snapshot_text: str,
-    ) -> InkAnchor:
-        """Find the paragraph anchor nearest to a drawing cluster.
-
-        Uses the nearest paragraph box on the same page to compute the
-        anchor ref from the snapshot text.
-        """
-        if classification.nearest_anchor_rect is None:
-            return DOCUMENT_END
-
-        page = classification.nearest_anchor_page
-        if page is None:
-            return DOCUMENT_END
-
-        # Get tokens on this page near the anchor rect
-        anchor_rect = classification.nearest_anchor_rect
-
-        # Find the paragraph in snapshot text that corresponds to this position
-        # Group tokens by y-band to identify paragraphs
-        paragraphs = _split_paragraphs_for_anchor(snapshot_text)
-        text_counts: dict[str, int] = {}
-
-        # Try to match by token content on the page near the anchor rect
-        tokens_on_page: list[str] = []
-        for pw in word_map.pages:
-            if pw.page == page:
-                for tid, rect in pw.tokens:
-                    # Check if token is in the anchor paragraph's y-band
-                    if abs(rect.y0 - anchor_rect.y0) < 20.0:
-                        tokens_on_page.append(word_map.texts[tid])
-
-        if tokens_on_page:
-            # Find which paragraph in snapshot text contains these tokens
-            search_text = " ".join(tokens_on_page[:5])
-            for para in paragraphs:
-                normalised = " ".join(para.split())
-                if not normalised:
-                    continue
-                ordinal = text_counts.get(normalised, 0)
-                text_counts[normalised] = ordinal + 1
-                if search_text in normalised or any(t in normalised for t in tokens_on_page[:3]):
-                    ref = paragraph_anchor_ref(normalised, ordinal)
-                    return InkAnchor(kind="paragraph", ref=ref)
-
-        return DOCUMENT_END
+    # _find_anchor_for_drawing removed: anchor resolution now uses
+    # Classification.nearest_anchor_ref from WordMap.blocks (BlockBox).
+    # See _anchor_from_classification().
 
     def _save_drawing(
         self,
@@ -712,9 +669,12 @@ class PullSyncEngine:
         return results, stats
 
 
-def _split_paragraphs_for_anchor(text: str) -> list[str]:
-    """Split text into paragraphs for anchor matching."""
-    import re
+def _anchor_from_classification(classification: Classification) -> InkAnchor:
+    """Build an ``InkAnchor`` from a classification's nearest block.
 
-    blocks = re.split(r"\n\s*\n", text)
-    return [b.strip() for b in blocks if b.strip()]
+    Uses ``nearest_anchor_ref`` (from ``WordMap.blocks``) when available.
+    Falls back to ``DOCUMENT_END``.
+    """
+    if classification.nearest_anchor_ref is not None:
+        return InkAnchor(kind="paragraph", ref=classification.nearest_anchor_ref)
+    return DOCUMENT_END

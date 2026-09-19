@@ -46,7 +46,9 @@ Each vault is synced independently:
 """
 
 import fcntl
+import json
 import logging
+import tempfile
 import time
 import uuid as uuid_module
 from collections.abc import Iterator
@@ -66,6 +68,8 @@ from .audit import get_audit_logger
 from .change_detector import ChangeDetector
 from .config import AppConfig, VaultConfig
 from .generator import RemarkableGenerator
+from .ink.apply import strip_uninterpreted_markers
+from .ink.bake import get_attachment_folder
 from .ocr.integration import OCRProcessor
 from .parser import parse_markdown_file
 from .render.pdf import PdfRenderer
@@ -416,8 +420,6 @@ class SyncEngine:
             clean_doc = md_doc
 
             needs_re_parse = has_annotation_markers(raw_content)
-            from .ink.apply import strip_uninterpreted_markers
-
             has_uninterpreted = "RPS:UNINTERPRETED" in raw_content
 
             if needs_re_parse or has_uninterpreted:
@@ -427,8 +429,6 @@ class SyncEngine:
                     clean_content = strip_annotation_markers(clean_content)
                 if has_uninterpreted:
                     clean_content = strip_uninterpreted_markers(clean_content)
-
-                import tempfile
 
                 with tempfile.NamedTemporaryFile(
                     mode="w", suffix=".md", delete=False, encoding="utf-8"
@@ -450,15 +450,11 @@ class SyncEngine:
                 anchor_ref = bc.get("anchor_ref", "document_end")
                 if attachment:
                     # Read the SVG from the vault attachment folder
-                    from .ink.bake import get_attachment_folder
-
                     attach_dir = get_attachment_folder(vault.path)
                     svg_path = attach_dir / attachment
                     if svg_path.exists():
                         svg_bytes = svg_path.read_bytes()
                         # Parse the rect from stored JSON
-                        import json
-
                         rect_json = bc.get("rect")
                         if rect_json:
                             rd = json.loads(rect_json)

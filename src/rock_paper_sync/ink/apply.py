@@ -200,18 +200,38 @@ def apply_edits(
     embeds = [e for e in edits if e.kind == "embed"]
     deferred_edits = [e for e in edits if e.kind == "deferred"]
 
-    # Apply highlights (wrap in ==...==)
+    # Apply highlights (wrap in ==...==), idempotent: if span is
+    # already wrapped, no-op.  Position-aware: each edit wraps the
+    # first bare (not-yet-wrapped) occurrence; previous edits for the
+    # same phrase will have wrapped earlier occurrences already.
+    _highlight_applied: dict[str, int] = {}
     for edit in highlights:
-        if edit.text in result_text:
-            result_text = result_text.replace(edit.text, f"=={edit.text}==", 1)
+        phrase = edit.text
+        already = _highlight_applied.get(phrase, 0)
+
+        # Idempotent: count how many are wrapped; skip if enough
+        wrapped = f"=={phrase}=="
+        n_wrapped = _count_occurrences(result_text, wrapped)
+        if n_wrapped > already:
+            logger.debug(f"Highlight already applied for cluster {edit.cluster_id}, skipping")
+            _highlight_applied[phrase] = already + 1
+            continue
+
+        # Wrap the first bare occurrence (occurrence index 0 among bare ones,
+        # because earlier occurrences for this phrase are already wrapped).
+        applied = _wrap_nth_bare_occurrence(result_text, phrase, 0)
+        if applied is not None:
+            result_text = applied
+            _highlight_applied[phrase] = already + 1
         else:
             # Try patch
             patches = dmp.patch_make(
-                snapshot_text, snapshot_text.replace(edit.text, f"=={edit.text}==", 1)
+                snapshot_text, snapshot_text.replace(phrase, f"=={phrase}==", 1)
             )
             patched, results = dmp.patch_apply(patches, result_text)
             if all(results):
                 result_text = patched
+                _highlight_applied[phrase] = already + 1
             else:
                 logger.warning(f"Failed to apply highlight for cluster {edit.cluster_id}")
                 failed.append(edit.cluster_id)
@@ -259,6 +279,47 @@ def apply_edits(
             result_text = result_text.rstrip() + f"\n\n{edit.text}\n"
 
     return result_text, failed
+
+
+def _count_occurrences(text: str, needle: str) -> int:
+    """Count non-overlapping occurrences of *needle* in *text*."""
+    count = 0
+    start = 0
+    while True:
+        idx = text.find(needle, start)
+        if idx < 0:
+            break
+        count += 1
+        start = idx + len(needle)
+    return count
+
+
+def _wrap_nth_bare_occurrence(text: str, phrase: str, n: int) -> str | None:
+    """Wrap the *n*-th bare (not already ``==``-wrapped) occurrence of *phrase*.
+
+    Returns the modified text, or ``None`` if fewer than *n+1* bare
+    occurrences exist.
+    """
+    start = 0
+    bare_count = 0
+    while True:
+        idx = text.find(phrase, start)
+        if idx < 0:
+            return None
+        # Check if this occurrence is already wrapped
+        prefix_ok = idx >= 2 and text[idx - 2 : idx] == "=="
+        suffix_ok = (idx + len(phrase) + 2 <= len(text)) and text[
+            idx + len(phrase) : idx + len(phrase) + 2
+        ] == "=="
+        if prefix_ok and suffix_ok:
+            # Already wrapped — skip
+            start = idx + len(phrase) + 2
+            continue
+        if bare_count == n:
+            return text[:idx] + f"=={phrase}==" + text[idx + len(phrase) :]
+        bare_count += 1
+        start = idx + len(phrase)
+    return None  # unreachable but keeps mypy happy
 
 
 def write_markdown_atomic(path: Path, content: str) -> None:
