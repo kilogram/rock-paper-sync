@@ -212,6 +212,31 @@ def _run_pull_sync(
                     f"{stats.total_notes} note(s) appended, "
                     f"{stats.total_drawings} drawing(s) saved as attachments"
                 )
+                # Per-file gesture and uninterpreted counts on stderr
+                for r in results:
+                    if not r.success:
+                        continue
+                    gesture_total = r.ticks + r.strikethroughs + r.insertions + r.corrections
+                    if gesture_total > 0:
+                        parts: list[str] = []
+                        if r.ticks:
+                            parts.append(f"{r.ticks} tick(s)")
+                        if r.strikethroughs:
+                            parts.append(f"{r.strikethroughs} strikethrough(s)")
+                        if r.insertions:
+                            parts.append(f"{r.insertions} insertion(s)")
+                        if r.corrections:
+                            parts.append(f"{r.corrections} correction(s)")
+                        click.echo(
+                            f"  {r.obsidian_path}: {gesture_total} edit(s): {', '.join(parts)}",
+                            err=True,
+                        )
+                    if r.gestures_uninterpreted > 0:
+                        click.echo(
+                            f"  {r.obsidian_path}: {r.gestures_uninterpreted} gesture(s) "
+                            f"uninterpreted (saved as attachments)",
+                            err=True,
+                        )
                 if stats.total_deferred > 0:
                     # Collect unique reasons
                     reasons: set[str] = set()

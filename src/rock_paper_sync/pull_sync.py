@@ -811,8 +811,14 @@ class PullSyncEngine:
         """OCR a set of gesture text strokes.
 
         Renders them as a synthetic cluster and sends to OCR.
-        Returns OCR text or None if OCR is unavailable.
+        Returns OCR text or ``None`` if OCR is unavailable.
+
+        Raises:
+            Any exception other than ``OCRServiceError`` — those are bugs,
+            not service outages, and must not be silently deferred.
         """
+        from rock_paper_sync.ocr.protocol import OCRServiceError
+
         if self.ocr_processor is None or not strokes:
             return None
         try:
@@ -835,8 +841,8 @@ class PullSyncEngine:
                 if isinstance(result, str):
                     return result
             return None
-        except Exception:
-            logger.warning("OCR failed for gesture strokes", exc_info=True)
+        except OCRServiceError:
+            logger.warning("OCR service unavailable for gesture strokes", exc_info=True)
             return None
 
     def _ocr_cluster(
