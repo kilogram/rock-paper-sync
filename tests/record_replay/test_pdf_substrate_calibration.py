@@ -75,9 +75,9 @@ _PROFILE = PROFILES["paper_pro_move"]
 _LEGACY_PROFILE = DeviceProfile(name="trip1_legacy", screen_w_px=954, screen_h_px=1696, ppi=144)
 _LEGACY_TRANSFORM = CanvasTransform.for_pdf_page(_LEGACY_PROFILE)
 
-# Expected page count for the LEGACY layout: 1 content + 2 trailing blank
-_EXPECTED_TOTAL_PAGES = 3
-_EXPECTED_CONTENT_PAGES = 1
+# Expected page count for the LEGACY layout: 2 content + 2 trailing blank = 4
+_EXPECTED_TOTAL_PAGES = 4
+_EXPECTED_CONTENT_PAGES = 2
 
 # Highlight target phrase
 _HIGHLIGHT_PHRASE = "purple monkey dishwasher engine"
@@ -811,7 +811,7 @@ class TestPdfSubstrateReplay:
                 )
                 continue
 
-            content_page_count = _EXPECTED_CONTENT_PAGES
+            content_page_count = wm.content_page_count or _EXPECTED_CONTENT_PAGES
             classification = classify_cluster(cluster, wm, _LEGACY_TRANSFORM, content_page_count)
 
             if classification.kind == "appended":
@@ -830,11 +830,17 @@ class TestPdfSubstrateReplay:
                 token_spans,
                 snapshot_text=fixture_text,
             )
+            # "none" from classify_gesture means "drawing" (baked)
+            disp = gesture.kind if gesture.kind != "none" else "drawing"
+            anchor_str = ""
+            if classification.nearest_anchor_ref:
+                anchor_str = f", anchor={classification.nearest_anchor_ref[:16]}..."
             lines.append(
                 f"- Cluster {cluster.cluster_id[:8]}: "
-                f"gesture={gesture.kind}, confidence={gesture.confidence:.2f}, "
+                f"{disp}, confidence={gesture.confidence:.2f}, "
                 f"page={page_redir}, strokes={len(cluster.strokes)}"
                 + (f", text={gesture.replacement_text!r}" if gesture.replacement_text else "")
+                + anchor_str
             )
 
         report_path = diag_dir / "gestures.md"

@@ -151,6 +151,7 @@ class WordMap:
     texts: tuple[str, ...]
     blocks: tuple[BlockBox, ...] = ()
     token_block: tuple[int, ...] = ()
+    content_page_count: int = 0
 
     def token_at(self, page: int, x: float, y: float) -> TokenMatch | None:
         """Find the token whose bounding box contains the given point."""
@@ -316,6 +317,8 @@ class WordMap:
             ]
         if self.token_block:
             data["token_block"] = list(self.token_block)
+        if self.content_page_count > 0:
+            data["content_page_count"] = self.content_page_count
         return json.dumps(data, separators=(",", ":")).encode("utf-8")
 
     @classmethod
@@ -343,12 +346,14 @@ class WordMap:
             for b in blocks_raw
         )
         token_block = tuple(d.get("token_block", []))
+        content_page_count = d.get("content_page_count", 0)
         return cls(
             page_size=tuple(d["page_size"]),  # type: ignore[arg-type]
             pages=pages,
             texts=tuple(d["texts"]),
             blocks=blocks,
             token_block=token_block,
+            content_page_count=content_page_count,
         )
 
 

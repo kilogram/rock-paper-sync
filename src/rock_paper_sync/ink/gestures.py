@@ -79,11 +79,16 @@ STRIKETHROUGH_TOKEN_OVERLAP = 0.50
 and a token box to consider that token 'covered'.  Also the minimum
 for at least one token to trigger the gesture at all."""
 
-CARET_MAX_SIZE_RATIO = 1.0
+CARET_MAX_WIDTH_RATIO = 1.5
+"""Maximum caret width as a fraction of line height.  A handwritten caret
+(^) is naturally wider than tall; 1.5 line heights covers typical marks."""
+
+CARET_MAX_HEIGHT_RATIO = 1.0
+"""Maximum caret height as a fraction of line height."""
 """Maximum bbox dimension (width or height) of a caret stroke relative
 to line height.  A caret mark is a small symbol, not a large drawing."""
 
-CARET_BASELINE_TOLERANCE_RATIO = 0.5
+CARET_BASELINE_TOLERANCE_RATIO = 0.6
 """The caret's bottom edge must be within this fraction of line height
 below the baseline to qualify.  Allows carets sitting on or slightly
 below the text baseline."""
@@ -545,9 +550,9 @@ def _is_caret_stroke(sg: _StrokeGeom, line: LineBox) -> bool:
     if lh <= 0:
         return False
     # Size constraint: small (bbox <= 1 line height square)
-    if sg.width > CARET_MAX_SIZE_RATIO * lh:
+    if sg.width > CARET_MAX_WIDTH_RATIO * lh:
         return False
-    if sg.height > CARET_MAX_SIZE_RATIO * lh:
+    if sg.height > CARET_MAX_HEIGHT_RATIO * lh:
         return False
     # Position: bottom of caret on or just below the baseline
     baseline = line.baseline_y
@@ -597,9 +602,12 @@ def _find_caret_insert_position(
             return (span[0], span[0])
         return None
 
-    # After last token?
+    # After last token?  Only if close (within one median token width).
     last_tid, last_rect = tok_rects[-1]
     if cx > last_rect.x1:
+        med_w = (sum(r.x1 - r.x0 for _, r in tok_rects) / len(tok_rects)) if tok_rects else 30.0
+        if cx - last_rect.x1 > med_w:
+            return None  # too far past the line end — likely a margin note
         span = token_spans[int(last_tid)] if int(last_tid) < len(token_spans) else (-1, -1)
         if span[1] >= 0:
             return (span[1], span[1])
@@ -631,17 +639,22 @@ def _is_text_above_line(
     line: LineBox,
     prev_line: LineBox | None,
 ) -> bool:
-    """Check if a stroke sits in the interline gap above a line."""
-    if prev_line is not None:
-        gap_top = prev_line.rect.y1
-    else:
-        gap_top = 0.0  # above the first line
+    """Check if a stroke sits above a line, suitable for insertion text.
 
-    gap_bottom = line.rect.y0
-
-    # The stroke should be predominantly in the gap
+    The stroke's vertical centre must be above the caret line's centre
+    by 0.3 to 1.5 line heights.  Overlap with the previous line's
+    glyph boxes is allowed — real handwriting above a line often
+    overlaps the line above when line height is tight.
+    """
+    line_h = line.rect.y1 - line.rect.y0
+    if line_h <= 0:
+        return False
+    line_cy = (line.rect.y0 + line.rect.y1) / 2.0
     stroke_mid_y = sg.cy
-    return gap_top <= stroke_mid_y <= gap_bottom
+
+    # Distance above the line centre, in line heights
+    dist_above = (line_cy - stroke_mid_y) / line_h
+    return 0.3 <= dist_above <= 1.5
 
 
 def _try_caret_insertion(

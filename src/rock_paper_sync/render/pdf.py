@@ -385,6 +385,7 @@ def _boxes_to_wordmap(
     page_size_pt: tuple[float, float],
     anchor_boxes: dict[str, tuple[int, float, float, float, float]] | None = None,
     token_anchors: dict[int, str] | None = None,
+    content_page_count: int = 0,
 ) -> WordMap:
     """Convert collected boxes into a WordMap.
 
@@ -507,6 +508,7 @@ def _boxes_to_wordmap(
         texts=tuple(token_texts),
         blocks=tuple(blocks),
         token_block=tuple(tb),
+        content_page_count=content_page_count,
     )
 
 
@@ -601,12 +603,15 @@ class PdfRenderer:
             _walk_anchor_boxes(page._page_box, anchor_boxes, page_idx)
 
         # Build word map with blocks and token_block (asserts I1)
+        total_pdf_pages = len(wp_doc.pages)
+        content_pages = total_pdf_pages - self._layout.trailing_blank_pages
         word_map = _boxes_to_wordmap(
             token_boxes,
             token_texts,
             profile.page_size_pt,
             anchor_boxes=anchor_boxes,
             token_anchors=token_anchors,
+            content_page_count=max(content_pages, 1),
         )
 
         # Build placements from the actual laid-out overlay box positions

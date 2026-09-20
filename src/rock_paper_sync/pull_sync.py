@@ -317,7 +317,9 @@ class PullSyncEngine:
                 success=True,
             )
 
-        content_page_count = len(word_map.pages)
+        # Use the persisted content_page_count from the push-time render;
+        # fall back to len(pages) for word maps serialised before this field.
+        content_page_count = word_map.content_page_count or len(word_map.pages)
         clusters = cluster_candidates(candidates)
 
         classifications: list[Classification] = []
