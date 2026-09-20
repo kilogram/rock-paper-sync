@@ -24,7 +24,11 @@ from rmscene import CrdtId
 from rmscene.scene_items import Line, Pen, PenColor, Point
 
 from rock_paper_sync.annotations.domain.stroke import Stroke
-from rock_paper_sync.device_profile import PROFILES, CanvasTransform, pdf_to_device
+
+# Use the real profile for production code, but for test rendering we
+# use a "legacy" profile that produces the old 477x848 pt page size so
+# the fixture fits on fewer pages and page-0 assumptions hold.
+from rock_paper_sync.device_profile import PROFILES, CanvasTransform, DeviceProfile, pdf_to_device
 from rock_paper_sync.ink.apply import build_token_spans
 from rock_paper_sync.ink.candidates import CandidateStroke
 from rock_paper_sync.ink.clusters import InkCluster
@@ -36,7 +40,9 @@ from rock_paper_sync.render.wordmap import (
 )
 
 PROFILE = PROFILES["paper_pro_move"]
-TRANSFORM = CanvasTransform.for_pdf_page(PROFILE)
+_LEGACY_PROFILE = DeviceProfile(name="test_legacy", screen_w_px=954, screen_h_px=1696, ppi=144)
+# ppi=144 gives 954/144*72 = 477 pt width, 1696/144*72 = 848 pt height
+TRANSFORM = CanvasTransform.for_pdf_page(_LEGACY_PROFILE)
 
 
 # ---------------------------------------------------------------------------
@@ -46,7 +52,12 @@ TRANSFORM = CanvasTransform.for_pdf_page(PROFILE)
 
 @pytest.fixture(scope="module")
 def rendered_word_map() -> WordMap:
-    """Render the test fixture and return the word map."""
+    """Render the test fixture and return the word map.
+
+    Uses a fixed layout matching the pre-PPI-fix geometry (477x848 pt,
+    36 pt margins, line_height 1.4) so the fixture fits on fewer pages
+    and all gesture tests' page-0 assumptions hold.
+    """
     from rock_paper_sync.config import LayoutConfig
     from rock_paper_sync.parser import parse_markdown_file
     from rock_paper_sync.render.pdf import PdfRenderer
@@ -56,9 +67,16 @@ def rendered_word_map() -> WordMap:
         pytest.skip("test_pdf_substrate.md fixture not found")
 
     doc = parse_markdown_file(fixture)
-    layout = LayoutConfig()
+    # Fixed layout so the word map is stable across geometry changes.
+    layout = LayoutConfig(
+        margin_top_pt=36.0,
+        margin_bottom_pt=36.0,
+        margin_left_pt=36.0,
+        margin_right_pt=36.0,
+        line_height=1.4,
+    )
     renderer = PdfRenderer(layout)
-    result = renderer.render(doc, PROFILE)
+    result = renderer.render(doc, _LEGACY_PROFILE)
     return result.word_map
 
 
@@ -869,7 +887,7 @@ class TestFootnoteTokenDedup:
         )
         doc = parse_markdown_file(md)
         renderer = PdfRenderer(LayoutConfig())
-        result = renderer.render(doc, PROFILE)
+        result = renderer.render(doc, _LEGACY_PROFILE)
         wm = result.word_map
 
         # Count how many times each token appears in pages[].tokens

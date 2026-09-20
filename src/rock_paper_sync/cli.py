@@ -672,12 +672,14 @@ exclude_patterns = [".obsidian/**", "archive/**"]
 debounce_seconds = 5
 
 [layout]
-# Lines per page is calculated automatically from device geometry
-margin_top = 50
-margin_bottom = 50
-margin_left = 50
-margin_right = 50
-allow_paragraph_splitting = false  # true = allow paragraphs to split across pages
+# PDF page margins in points (~5 mm)
+margin_top_pt = 14
+margin_bottom_pt = 14
+margin_left_pt = 14
+margin_right_pt = 14
+# font_size_pt = 11    # body font size
+# line_height = 1.5    # CSS line-height multiplier
+# trailing_blank_pages = 2  # ruled blank pages for handwriting
 
 [logging]
 level = "info"

@@ -37,16 +37,15 @@ exclude_patterns = [
 debounce_seconds = 5
 
 [layout]
-# Approximate number of text lines per page
-# Affects pagination of long documents
-lines_per_page = 45
-
-# Page margins in pixels
-# reMarkable resolution: 1404 x 1872 pixels
-margin_top = 50
-margin_bottom = 50
-margin_left = 50
-margin_right = 50
+# PDF page margins in points (~5 mm).
+# Body font is 11 pt, line height 1.5.
+margin_top_pt = 14
+margin_bottom_pt = 14
+margin_left_pt = 14
+margin_right_pt = 14
+# font_size_pt = 11
+# line_height = 1.5
+# trailing_blank_pages = 2
 
 [logging]
 # Log level: debug, info, warning, error

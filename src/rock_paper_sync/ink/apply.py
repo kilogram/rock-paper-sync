@@ -105,9 +105,15 @@ def _split_paragraphs(text: str) -> list[str]:
 def _normalise_paragraph(text: str) -> str:
     """Normalise paragraph text for anchor computation.
 
-    Collapses whitespace and strips leading/trailing whitespace.
+    Strips leading ATX heading markers (``# ``), collapses whitespace,
+    and strips leading/trailing whitespace.  The result must match
+    what the HTML renderer passes to ``paragraph_anchor_ref`` — the
+    parser strips heading markers before handing text to the renderer,
+    so we must do the same here.
     """
-    return " ".join(text.split())
+    # Strip ATX heading markers: 1-6 '#' followed by a space
+    stripped = re.sub(r"^#{1,6}\s+", "", text)
+    return " ".join(stripped.split())
 
 
 def find_paragraph_in_text(

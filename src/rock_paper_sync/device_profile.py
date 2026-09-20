@@ -57,40 +57,36 @@ PDF_CANVAS_H: int = 1872
 class DeviceProfile:
     """Screen geometry for a reMarkable device.
 
-    Used at render time to choose the PDF page size (aspect ratio matches
-    the screen so the device displays it without letterboxing).  Does NOT
-    drive coordinate transforms — use ``CanvasTransform`` for that.
+    Used at render time to choose the PDF page size so one PDF point
+    equals one physical point on the device (``screen_px / ppi * 72``).
+    Does NOT drive coordinate transforms — use ``CanvasTransform``.
 
     Attributes:
         name: Human-readable device name.
         screen_w_px: Screen width in device pixels.
         screen_h_px: Screen height in device pixels.
+        ppi: Pixels per inch of the device screen.
     """
 
     name: str
     screen_w_px: int
     screen_h_px: int
+    ppi: int
 
     @property
     def page_width_pt(self) -> float:
-        """PDF page width in points (screen px * 72 / ppi)."""
-        return self.screen_w_px * _PX_TO_PT
+        """PDF page width in points (1 PDF pt = 1 physical pt on device)."""
+        return self.screen_w_px / self.ppi * 72.0
 
     @property
     def page_height_pt(self) -> float:
         """PDF page height in points."""
-        return self.screen_h_px * _PX_TO_PT
+        return self.screen_h_px / self.ppi * 72.0
 
     @property
     def page_size_pt(self) -> tuple[float, float]:
         """PDF page size as (width, height) in points."""
         return (self.page_width_pt, self.page_height_pt)
-
-
-# Conversion factor: device pixels -> PDF points.
-# Paper Pro Move: 954 px / 264 ppi * 72 pt/in = 0.5 pt/px (interim;
-# the PPI-based fix follows in the next commit).
-_PX_TO_PT = 0.5
 
 
 # Screen-pixel literals live here and only here (I7).
@@ -99,6 +95,7 @@ PROFILES: dict[str, DeviceProfile] = {
         name="paper_pro_move",
         screen_w_px=954,
         screen_h_px=1696,
+        ppi=264,
     ),
 }
 

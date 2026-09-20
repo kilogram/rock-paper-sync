@@ -76,11 +76,11 @@ class LayoutConfig:
 
     device: str = "paper_pro_move"
     font_size_pt: float = 11.0
-    line_height: float = 1.4
-    margin_top_pt: float = 36.0
-    margin_bottom_pt: float = 36.0
-    margin_left_pt: float = 36.0
-    margin_right_pt: float = 36.0
+    line_height: float = 1.5
+    margin_top_pt: float = 14.0
+    margin_bottom_pt: float = 14.0
+    margin_left_pt: float = 14.0
+    margin_right_pt: float = 14.0
     trailing_blank_pages: int = 2
     notes_heading: str = "Notes"
     # Deprecated pixel-based margins (kept for backward compat with native layout)
@@ -337,11 +337,11 @@ def load_config(config_path: Path) -> AppConfig:
 
         # PDF-era layout fields (points)
         font_size_pt = layout.get("font_size_pt", 11.0)
-        line_height = layout.get("line_height", 1.4)
-        margin_top_pt = layout.get("margin_top_pt", 36.0)
-        margin_bottom_pt = layout.get("margin_bottom_pt", 36.0)
-        margin_left_pt = layout.get("margin_left_pt", 36.0)
-        margin_right_pt = layout.get("margin_right_pt", 36.0)
+        line_height = layout.get("line_height", 1.5)
+        margin_top_pt = layout.get("margin_top_pt", 14.0)
+        margin_bottom_pt = layout.get("margin_bottom_pt", 14.0)
+        margin_left_pt = layout.get("margin_left_pt", 14.0)
+        margin_right_pt = layout.get("margin_right_pt", 14.0)
         trailing_blank_pages = layout.get("trailing_blank_pages", 2)
         notes_heading = layout.get("notes_heading", "Notes")
 

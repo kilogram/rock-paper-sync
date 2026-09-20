@@ -653,8 +653,8 @@ class TestLayoutConfig:
     def test_default_layout_config(self) -> None:
         lc = LayoutConfig()
         assert lc.font_size_pt == 11.0
-        assert lc.line_height == 1.4
-        assert lc.margin_top_pt == 36.0
+        assert lc.line_height == 1.5
+        assert lc.margin_top_pt == 14.0
         assert lc.trailing_blank_pages == 2
         assert lc.notes_heading == "Notes"
 

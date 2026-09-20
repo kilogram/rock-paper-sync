@@ -222,9 +222,22 @@ class TestPdfPullIntegration:
 
         assert len(highlight_rects) == 4, f"Expected 4 highlight rects, got {len(highlight_rects)}"
 
-        # Build a stroke for the margin note (beside the "Margin Note Target" paragraph)
+        # Build a stroke for the margin note (beside the "Margin Note Target"
+        # paragraph).  Coordinates derived from the word map so the stroke
+        # lands near the correct block regardless of page geometry.
+        margin_tok = None
+        for pw in word_map.pages:
+            for tid, rect in pw.tokens:
+                if word_map.texts[tid] == "margin":
+                    margin_tok = rect
+                    break
+            if margin_tok:
+                break
+        assert margin_tok is not None, "Could not find 'margin' token"
+        dev_mx0, dev_my0 = pdf_to_device(transform, margin_tok.x0 - 20.0, margin_tok.y0)
+        dev_mx1, dev_my1 = pdf_to_device(transform, margin_tok.x0 - 5.0, margin_tok.y1)
         margin_stroke = make_line(
-            [(-400.0, 600.0), (-380.0, 610.0), (-360.0, 620.0), (-340.0, 630.0)]
+            [(dev_mx0, dev_my0), (dev_mx1, dev_my0), (dev_mx0, dev_my1), (dev_mx1, dev_my1)]
         )
 
         # Build a stroke for the trailing page (appended handwriting)
@@ -391,8 +404,20 @@ class TestPdfPullIntegration:
                         )
                         break
 
+        # Find 'margin' token for transform-derived coords
+        _mtok = None
+        for _pw in word_map.pages:
+            for _tid, _rect in _pw.tokens:
+                if word_map.texts[_tid] == "margin":
+                    _mtok = _rect
+                    break
+            if _mtok:
+                break
+        assert _mtok is not None
+        _dev0 = pdf_to_device(transform, _mtok.x0 - 20.0, _mtok.y0)
+        _dev1 = pdf_to_device(transform, _mtok.x0 - 5.0, _mtok.y1)
         margin_stroke = make_line(
-            [(-400.0, 600.0), (-380.0, 610.0), (-360.0, 620.0), (-340.0, 630.0)]
+            [(_dev0[0], _dev0[1]), (_dev1[0], _dev0[1]), (_dev0[0], _dev1[1]), (_dev1[0], _dev1[1])]
         )
         glyph_text = "purple monkey dishwasher engine"
         page0_rm = build_synthetic_rm_with_stroke(glyph_text, highlight_rects, margin_stroke)
@@ -621,8 +646,20 @@ The word target appears here in the second paragraph.
                         )
                         break
 
+        # Find 'margin' token for transform-derived coords
+        _mtok = None
+        for _pw in word_map.pages:
+            for _tid, _rect in _pw.tokens:
+                if word_map.texts[_tid] == "margin":
+                    _mtok = _rect
+                    break
+            if _mtok:
+                break
+        assert _mtok is not None
+        _dev0 = pdf_to_device(transform, _mtok.x0 - 20.0, _mtok.y0)
+        _dev1 = pdf_to_device(transform, _mtok.x0 - 5.0, _mtok.y1)
         margin_stroke = make_line(
-            [(-400.0, 600.0), (-380.0, 610.0), (-360.0, 620.0), (-340.0, 630.0)]
+            [(_dev0[0], _dev0[1]), (_dev1[0], _dev0[1]), (_dev0[0], _dev1[1]), (_dev1[0], _dev1[1])]
         )
         glyph_text = "purple monkey dishwasher engine"
         page0_uuid = "page-0000-0000-0000-000000000031"
@@ -830,6 +867,7 @@ The word target appears here in the second paragraph.
                         break
 
         assert len(strike_tokens) >= 3
+        strike_page = strike_tokens[0][2]
 
         # Horizontal line through the middle of these tokens
         first_rect = strike_tokens[0][1]
@@ -860,6 +898,7 @@ The word target appears here in the second paragraph.
                 break
 
         assert caret_tid is not None, "Token 'here.' not found"
+        caret_page = caret_page_val
 
         lines = word_map.lines_on_page(caret_page_val)
         caret_line = None
@@ -933,9 +972,9 @@ The word target appears here in the second paragraph.
         content_with_cpages = {
             "cPages": {
                 "pages": [
-                    {"id": tick_uuid, "redir": {"value": 0}},
-                    {"id": strike_uuid, "redir": {"value": 0}},
-                    {"id": caret_uuid, "redir": {"value": 0}},
+                    {"id": tick_uuid, "redir": {"value": tick_page}},
+                    {"id": strike_uuid, "redir": {"value": strike_page}},
+                    {"id": caret_uuid, "redir": {"value": caret_page}},
                 ],
             },
             "fileType": "pdf",
