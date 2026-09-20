@@ -553,6 +553,223 @@ class TestPdfSubstrateReplay:
         trip2_manifest["device_added_pages"] = len(report.device_added_entries)
         (trip2_dir / "manifest.json").write_text(json.dumps(trip2_manifest, indent=2, default=str))
 
+    def test_stroke_anchor_y_fit(self) -> None:
+        """Y fit from stroke anchors: device_y = a * pdf_y + b.
+
+        Locates tick, strikethrough, and caret programmatically by bbox
+        shape on page 0.  Fits against word-map checkbox-2 centre,
+        DELETE-line centre, and here.-line baseline.
+        """
+        trip1_dir = _testdata_dir() / "trips" / "1"
+        rm_files = _load_rm_files(trip1_dir)
+        if not rm_files:
+            pytest.skip("No .rm files in trip 1")
+
+        # Page 0 = redir 0 = 3343461b
+        trip1_manifest = _load_trip_manifest(1)
+        cpages_raw = trip1_manifest.get("content_json", {}).get("cPages", {}).get("pages", [])
+        page0_uuid = None
+        for entry in cpages_raw:
+            redir = entry.get("redir")
+            if isinstance(redir, dict) and redir.get("value") == 0:
+                page0_uuid = str(entry.get("id", ""))
+                break
+        assert page0_uuid and page0_uuid in rm_files, "Page 0 .rm not found"
+
+        rm_bytes = rm_files[page0_uuid]
+        blocks = list(rmscene.read_blocks(io.BytesIO(rm_bytes)))
+
+        # Extract stroke bboxes
+        stroke_bboxes = []
+        for block in blocks:
+            if isinstance(block, SceneLineItemBlock) and block.item.value is not None:
+                pts = [(p.x, p.y) for p in block.item.value.points]
+                xs = [p[0] for p in pts]
+                ys = [p[1] for p in pts]
+                w = max(xs) - min(xs)
+                h = max(ys) - min(ys)
+                stroke_bboxes.append(
+                    {
+                        "cx": (min(xs) + max(xs)) / 2,
+                        "cy": (min(ys) + max(ys)) / 2,
+                        "w": w,
+                        "h": h,
+                        "x0": min(xs),
+                        "y0": min(ys),
+                    }
+                )
+
+        # Identify strokes by bbox shape:
+        # Tick: smallest stroke near x ~ -570
+        tick = min(
+            (s for s in stroke_bboxes if s["x0"] < -500 and s["w"] < 100),
+            key=lambda s: s["w"] * s["h"],
+            default=None,
+        )
+        # Strikethrough: wide horizontal (w > 200, h < 30)
+        strike = next(
+            (s for s in stroke_bboxes if s["w"] > 200 and s["h"] < 30),
+            None,
+        )
+        # Caret: y > 2400, small bbox
+        caret = next(
+            (s for s in stroke_bboxes if s["y0"] > 2400 and s["w"] < 100 and s["h"] < 50),
+            None,
+        )
+
+        assert tick is not None, "Tick stroke not found"
+        assert strike is not None, "Strikethrough stroke not found"
+        assert caret is not None, "Caret stroke not found"
+
+        # Get word-map anchors
+        rendered = _render_fixture()
+        wm = rendered.word_map
+
+        # Checkbox 2 centre
+        cb_count = 0
+        cb2_cy = None
+        for pw in wm.pages:
+            if pw.page != 0:
+                continue
+            for tid, rect in pw.tokens:
+                if wm.texts[tid] == "[ ]":
+                    cb_count += 1
+                    if cb_count == 2:
+                        cb2_cy = (rect.y0 + rect.y1) / 2.0
+                        break
+
+        # DELETE line centre
+        del_rects = []
+        for pw in wm.pages:
+            if pw.page != 0:
+                continue
+            for tid, rect in pw.tokens:
+                if wm.texts[tid] in ("DELETE", "THIS", "PHRASE"):
+                    del_rects.append(rect)
+        del_cy = sum((r.y0 + r.y1) / 2.0 for r in del_rects) / len(del_rects) if del_rects else None
+
+        # "here." baseline
+        here_baseline = None
+        for pw in wm.pages:
+            if pw.page != 0:
+                continue
+            for tid, rect in pw.tokens:
+                if wm.texts[tid] == "here.":
+                    here_baseline = rect.y1
+                    break
+
+        assert cb2_cy is not None and del_cy is not None and here_baseline is not None
+
+        # Fit: device_y = a * pdf_y + b using tick and strikethrough
+        from rock_paper_sync.ink.calibration import fit_affine_1d
+
+        pdf_ys = [cb2_cy, del_cy, here_baseline]
+        dev_ys = [tick["cy"], strike["cy"], caret["cy"]]
+        fit = fit_affine_1d(pdf_ys, dev_ys)
+
+        # Residuals
+        residuals = [dev_ys[i] - (fit.scale * pdf_ys[i] + fit.offset) for i in range(3)]
+
+        print(f"\nStroke anchor y fit: a={fit.scale:.4f}, b={fit.offset:.1f}")
+        print(
+            f"  Tick:   dev_y={tick['cy']:.1f}  pdf_y={cb2_cy:.1f}  residual={residuals[0]:.1f} px"
+        )
+        print(
+            f"  Strike: dev_y={strike['cy']:.1f}  pdf_y={del_cy:.1f}  residual={residuals[1]:.1f} px"
+        )
+        print(
+            f"  Caret:  dev_y={caret['cy']:.1f}  pdf_y={here_baseline:.1f}  residual={residuals[2]:.1f} px"
+        )
+        print(f"  y/x ratio: {fit.scale / _LEGACY_TRANSFORM.x_scale:.4f}")
+
+        assert abs(fit.scale - 3.15) / 3.15 < 0.015, (
+            f"y_scale {fit.scale:.4f} deviates >1.5% from 3.15"
+        )
+        assert abs(fit.offset) < 20, f"|b| = {abs(fit.offset):.1f} >= 20 px"
+
+    def test_gesture_replay(self) -> None:
+        """Run gesture classifier over trip 1 page 0 and write gestures.md."""
+        trip1_dir = _testdata_dir() / "trips" / "1"
+        rm_files = _load_rm_files(trip1_dir)
+        if not rm_files:
+            pytest.skip("No .rm files in trip 1")
+
+        rendered = _render_fixture()
+        wm = rendered.word_map
+
+        trip1_manifest = _load_trip_manifest(1)
+        cpages_raw = trip1_manifest.get("content_json", {}).get("cPages", {}).get("pages", [])
+
+        # Extract candidates from page 0 (redir 0) and page 1 (redir 1)
+        from rock_paper_sync.ink.apply import build_token_spans
+        from rock_paper_sync.ink.candidates import extract_candidates
+        from rock_paper_sync.ink.classify import classify_cluster
+        from rock_paper_sync.ink.clusters import cluster_candidates
+        from rock_paper_sync.ink.gestures import classify_gesture
+
+        # Build page_uuid -> rm_path mapping
+        rm_paths = {}
+        for page_uuid in rm_files:
+            rm_path = trip1_dir / f"{page_uuid}.rm"
+            if rm_path.exists():
+                rm_paths[page_uuid] = rm_path
+
+        candidates = extract_candidates(
+            rm_files=rm_paths,
+            cpages_entries=cpages_raw,
+            known_stroke_ids=frozenset(),
+        )
+
+        fixture_text = (_fixtures_dir() / _FIXTURE_NAME).read_text(encoding="utf-8")
+        token_spans = build_token_spans(wm.texts, fixture_text)
+
+        clusters = cluster_candidates(candidates) if candidates else []
+
+        diag_dir = trip1_dir / "_diagnostic"
+        diag_dir.mkdir(parents=True, exist_ok=True)
+        lines = ["# Gesture Classification Report\n"]
+
+        for cluster in clusters:
+            page_redir = cluster.redir
+            if page_redir is None:
+                kind = "appended (device-added page)"
+                lines.append(
+                    f"- Cluster {cluster.cluster_id[:8]}: {kind} ({len(cluster.strokes)} strokes)"
+                )
+                continue
+
+            content_page_count = _EXPECTED_CONTENT_PAGES
+            classification = classify_cluster(cluster, wm, _LEGACY_TRANSFORM, content_page_count)
+
+            if classification.kind == "appended":
+                lines.append(
+                    f"- Cluster {cluster.cluster_id[:8]}: appended "
+                    f"(page redir={page_redir}, {len(cluster.strokes)} strokes)"
+                )
+                continue
+
+            # Content-page cluster: try gesture classification
+            gesture = classify_gesture(
+                cluster,
+                wm,
+                _LEGACY_TRANSFORM,
+                page_redir,
+                token_spans,
+                snapshot_text=fixture_text,
+            )
+            lines.append(
+                f"- Cluster {cluster.cluster_id[:8]}: "
+                f"gesture={gesture.kind}, confidence={gesture.confidence:.2f}, "
+                f"page={page_redir}, strokes={len(cluster.strokes)}"
+                + (f", text={gesture.replacement_text!r}" if gesture.replacement_text else "")
+            )
+
+        report_path = diag_dir / "gestures.md"
+        report_path.write_text("\n".join(lines) + "\n")
+        print(f"\nGestures report: {report_path}")
+        for line in lines[1:]:
+            print(f"  {line}")
+
     def test_write_report(self, tmp_path: Path) -> None:
         """Write a diagnostic report with all measured numbers."""
         trip1_dir = _testdata_dir() / "trips" / "1"
