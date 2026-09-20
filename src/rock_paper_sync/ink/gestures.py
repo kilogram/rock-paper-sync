@@ -33,7 +33,7 @@ import logging
 from dataclasses import dataclass
 from typing import Literal
 
-from rock_paper_sync.device_profile import DeviceProfile, device_to_pdf
+from rock_paper_sync.device_profile import CanvasTransform, device_to_pdf
 from rock_paper_sync.ink.candidates import CandidateStroke
 from rock_paper_sync.ink.clusters import InkCluster
 from rock_paper_sync.render.wordmap import LineBox, Rect, TokenId, WordMap
@@ -111,14 +111,14 @@ class _StrokeGeom:
     cy: float
 
 
-def _stroke_geom(cs: CandidateStroke, profile: DeviceProfile) -> _StrokeGeom:
+def _stroke_geom(cs: CandidateStroke, transform: CanvasTransform) -> _StrokeGeom:
     """Compute a stroke's bounding box and dimensions in PDF points."""
     bx, by, bw, bh = cs.stroke.bounding_box
     x0_dev, y0_dev = bx, by
     x1_dev, y1_dev = bx + bw, by + bh
-    x0_pdf, y0_pdf = device_to_pdf(profile, x0_dev, y0_dev)
-    x1_pdf, y1_pdf = device_to_pdf(profile, x1_dev, y1_dev)
-    # device_to_pdf shifts x by half screen width; ensure x0 < x1
+    x0_pdf, y0_pdf = device_to_pdf(transform, x0_dev, y0_dev)
+    x1_pdf, y1_pdf = device_to_pdf(transform, x1_dev, y1_dev)
+    # device_to_pdf shifts x by half canvas width; ensure x0 < x1
     px0 = min(x0_pdf, x1_pdf)
     px1 = max(x0_pdf, x1_pdf)
     py0 = min(y0_pdf, y1_pdf)
@@ -861,7 +861,7 @@ def _try_correction(
 def classify_gesture(
     cluster: InkCluster,
     word_map: WordMap,
-    profile: DeviceProfile,
+    transform: CanvasTransform,
     page: int,
     token_spans: list[tuple[int, int]],
     strikethrough_action: str = "mark",
@@ -875,7 +875,7 @@ def classify_gesture(
     Args:
         cluster: The ink cluster to classify.
         word_map: Word map from the pushed PDF.
-        profile: Device profile for coordinate transform.
+        transform: Canvas transform for coordinate conversion.
         page: PDF page index (redir value).
         token_spans: Pre-built ``(start, end)`` per token in the snapshot.
         strikethrough_action: ``"mark"`` or ``"delete"``.
@@ -885,7 +885,7 @@ def classify_gesture(
     Returns:
         ``GestureResult`` with the classification.
     """
-    geoms = [_stroke_geom(cs, profile) for cs in cluster.strokes]
+    geoms = [_stroke_geom(cs, transform) for cs in cluster.strokes]
     lines = word_map.lines_on_page(page)
 
     if not lines:

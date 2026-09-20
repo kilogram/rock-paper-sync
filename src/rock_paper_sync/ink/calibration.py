@@ -1,12 +1,13 @@
-"""Calibration analysis: measured device transform vs profile transform.
+"""Calibration analysis: measured device transform vs canvas transform.
 
 Compares highlight ``GlyphRange`` rectangles recorded on a real device
 against expected positions from the ``WordMap`` to measure the actual
 scale and offset of the device-to-PDF coordinate mapping.
 
 This module is the Phase 2 deliverable: it produces a measured transform
-that either confirms the profile in ``device_profile.py`` or quantifies
-the drift, yielding a report and assertions for the offline replay test.
+that either confirms the ``CanvasTransform`` in ``device_profile.py`` or
+quantifies the drift, yielding a report and assertions for the offline
+replay test.
 
 Import restrictions (enforced by import-linter):
     Must NOT import ``weasyprint``, ``fitz``, ``pymupdf``,
@@ -24,7 +25,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from rock_paper_sync.device_profile import DeviceProfile, device_to_pdf
+from rock_paper_sync.device_profile import CanvasTransform, device_to_pdf
 from rock_paper_sync.render.wordmap import Rect, TokenId, WordMap
 
 __all__ = [
@@ -98,33 +99,37 @@ def fit_affine_1d(
 class HighlightCalibration:
     """Measured transform for a single highlight.
 
+    The fit direction is device->PDF: ``pdf = scale * device + offset``.
+    The ``nominal_scale`` is ``1 / canvas_transform.scale`` (i.e.
+    ``pdf_w / canvas_w``), and the nominal x offset is ``pdf_w / 2``.
+
     Attributes:
         text: The ``GlyphRange.text`` that was highlighted.
         x_fit: Affine fit for x coordinates (device rect centres -> PDF rect centres).
         y_fit: Affine fit for y coordinates.
-        profile_scale: The profile's nominal scale factor (``_PX_TO_PT``).
+        nominal_scale: The canvas transform's nominal ``1/scale`` (pdf_w/canvas_w).
         matched_tokens: Token ids that were matched in the word map.
     """
 
     text: str
     x_fit: TransformFit
     y_fit: TransformFit
-    profile_scale: float
+    nominal_scale: float
     matched_tokens: tuple[TokenId, ...]
 
     @property
     def x_scale_error_pct(self) -> float:
-        """Percentage deviation of measured x scale from the profile scale."""
+        """Percentage deviation of measured x scale from the nominal scale."""
         if math.isnan(self.x_fit.scale):
             return float("nan")
-        return abs(self.x_fit.scale - self.profile_scale) / self.profile_scale * 100.0
+        return abs(self.x_fit.scale - self.nominal_scale) / self.nominal_scale * 100.0
 
     @property
     def y_scale_error_pct(self) -> float:
-        """Percentage deviation of measured y scale from the profile scale."""
+        """Percentage deviation of measured y scale from the nominal scale."""
         if math.isnan(self.y_fit.scale):
             return float("nan")
-        return abs(self.y_fit.scale - self.profile_scale) / self.profile_scale * 100.0
+        return abs(self.y_fit.scale - self.nominal_scale) / self.nominal_scale * 100.0
 
     @property
     def x_offset_error_pt(self) -> float:
@@ -139,6 +144,12 @@ class HighlightCalibration:
         if math.isnan(self.y_fit.offset):
             return float("nan")
         return abs(self.y_fit.offset)
+
+    # Keep old name for backward compatibility in tests
+    @property
+    def profile_scale(self) -> float:
+        """Alias for ``nominal_scale`` (backward compat)."""
+        return self.nominal_scale
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,7 +173,7 @@ def calibrate_highlight(
     glyph_text: str,
     device_rects: list[_DeviceRect],
     word_map: WordMap,
-    profile: DeviceProfile,
+    transform: CanvasTransform,
     page: int,
 ) -> HighlightCalibration:
     """Measure the device-to-PDF transform for a recorded highlight.
@@ -171,11 +182,13 @@ def calibrate_highlight(
     with word-map rects by reading order, and fits an affine transform
     (scale + offset) for x and y separately.
 
+    The fit direction is device->PDF: ``pdf = scale * device + offset``.
+
     Args:
         glyph_text: The ``GlyphRange.text`` string.
         device_rects: Rectangles from the ``GlyphRange``, in device coords.
         word_map: The word map from the pushed PDF.
-        profile: Device profile for nominal transform.
+        transform: Canvas transform for this page.
         page: PDF page index where the highlight was found.
 
     Returns:
@@ -203,8 +216,7 @@ def calibrate_highlight(
             f"No tokens from glyph text {glyph_text!r} found on page {page} of the word map"
         )
 
-    # Convert device rects to PDF points using the profile transform,
-    # then compare with word-map rects.  Pair by index (reading order).
+    # Pair device rects with word-map rects by index (reading order).
     n_pairs = min(len(device_rects), len(matched_rects))
 
     source_x: list[float] = []
@@ -227,10 +239,12 @@ def calibrate_highlight(
         target_x.append(wm_cx)
         target_y.append(wm_cy)
 
-    # The profile's nominal conversion: device_to_pdf includes a
-    # centre-origin shift for x.  The scale factor is _PX_TO_PT = 0.5.
-    # We compare the measured fit against this.
-    nominal_scale = profile.page_width_pt / profile.screen_w_px  # == _PX_TO_PT
+    # The nominal conversion from the canvas transform:
+    #   pdf_x = (dev_x + canvas_w/2) / canvas_scale
+    #         = dev_x * (1/canvas_scale) + (canvas_w/2) / canvas_scale
+    #         = dev_x * (pdf_w/canvas_w) + pdf_w/2
+    # So: nominal_scale = 1/transform.scale = pdf_w/canvas_w
+    nominal_scale = 1.0 / transform.scale
 
     x_fit = fit_affine_1d(source_x, target_x)
     y_fit = fit_affine_1d(source_y, target_y)
@@ -239,7 +253,7 @@ def calibrate_highlight(
         text=glyph_text,
         x_fit=x_fit,
         y_fit=y_fit,
-        profile_scale=nominal_scale,
+        nominal_scale=nominal_scale,
         matched_tokens=tuple(matched_tokens),
     )
 
@@ -270,37 +284,77 @@ def check_i8(
     glyph_text: str,
     device_rects: list[_DeviceRect],
     word_map: WordMap,
-    profile: DeviceProfile,
+    transform: CanvasTransform,
     page: int,
+    *,
+    h_pad: float = 30.0,
 ) -> CalibrationResult:
     """Cross-check I8: words under transformed highlight rects == GlyphRange.text.
 
-    Transforms each device rect to PDF coords using the profile transform
-    (not the fitted one), finds the word-map token at each centre, and
-    compares the resulting words to the glyph text.
+    Transforms each device rect to PDF coords using the canvas transform,
+    then locates the line by maximum vertical overlap with the rect (not
+    just the rect centre), and matches words within the padded x range.
 
     Args:
         glyph_text: The ``GlyphRange.text`` string.
         device_rects: Rectangles from the ``GlyphRange``.
         word_map: The word map from the pushed PDF.
-        profile: Device profile for the transform.
+        transform: Canvas transform for this page.
         page: PDF page index.
+        h_pad: Horizontal padding tolerance in device pixels
+            (the device adds ~23 px padding per side to highlight rects).
 
     Returns:
         ``CalibrationResult`` with the I8 pass/fail and details.
     """
-    cal = calibrate_highlight(glyph_text, device_rects, word_map, profile, page)
+    cal = calibrate_highlight(glyph_text, device_rects, word_map, transform, page)
+
+    # Build sorted list of line boxes for the page
+    page_lines = word_map.lines_on_page(page)
 
     words_under: list[str] = []
     for dr in device_rects:
-        # Centre of device rect -> PDF coords via profile
-        dev_cx = dr.x + dr.w / 2.0
-        dev_cy = dr.y + dr.h / 2.0
-        pdf_x, pdf_y = device_to_pdf(profile, dev_cx, dev_cy)
+        # Transform device rect corners to PDF coords
+        pdf_x0, pdf_y0 = device_to_pdf(transform, dr.x + h_pad, dr.y)
+        pdf_x1, pdf_y1 = device_to_pdf(transform, dr.x + dr.w - h_pad, dr.y + dr.h)
 
-        match = word_map.token_at(page, pdf_x, pdf_y)
-        if match is not None:
-            words_under.append(match.text)
+        # Locate the line with maximum vertical overlap
+        best_line = None
+        best_overlap = 0.0
+        for line in page_lines:
+            overlap_top = max(pdf_y0, line.rect.y0)
+            overlap_bot = min(pdf_y1, line.rect.y1)
+            overlap = max(0.0, overlap_bot - overlap_top)
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best_line = line
+
+        if best_line is None:
+            # Fallback: point lookup at centre
+            dev_cx = dr.x + dr.w / 2.0
+            dev_cy = dr.y + dr.h / 2.0
+            pdf_x, pdf_y = device_to_pdf(transform, dev_cx, dev_cy)
+            match = word_map.token_at(page, pdf_x, pdf_y)
+            if match is not None:
+                words_under.append(match.text)
+            continue
+
+        # Find the token whose x range overlaps with the padded highlight rect.
+        # LineBox.token_ids gives reading-order ids; look up rects from the page.
+        page_token_map: dict[int, Rect] = {}
+        for pw in word_map.pages:
+            if pw.page == page:
+                for tid_pw, rect_pw in pw.tokens:
+                    page_token_map[int(tid_pw)] = rect_pw
+                break
+
+        for tid in best_line.token_ids:
+            tok_rect = page_token_map.get(int(tid))
+            if tok_rect is None:
+                continue
+            token_cx = (tok_rect.x0 + tok_rect.x1) / 2.0
+            if pdf_x0 <= token_cx <= pdf_x1:
+                words_under.append(word_map.texts[tid])
 
     glyph_words = tuple(glyph_text.split())
     words_under_tuple = tuple(words_under)
@@ -399,7 +453,7 @@ def extract_cpages_from_content(
         entry: dict[str, object] = {"id": pid}
         if isinstance(redir_val, int) and redir_val >= 0:
             entry["redir"] = {"timestamp": "0:0", "value": redir_val}
-        # redir_val == -1 or missing → device-added page (no redir)
+        # redir_val == -1 or missing -> device-added page (no redir)
         entries.append(entry)
 
     return entries
@@ -459,9 +513,6 @@ def analyse_cpages(
     trailing_ok = True
     for entry in redir_entries:
         if entry.redir_value is not None and entry.redir_value >= expected_content_pages:
-            # This is a trailing blank page: redir should equal its page index
-            if entry.redir_value != entry.redir_value:  # always true; real check below
-                trailing_ok = False
             # The redir value should be a valid page index
             if entry.redir_value < 0:
                 trailing_ok = False

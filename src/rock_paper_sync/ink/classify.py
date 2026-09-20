@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from rock_paper_sync.device_profile import DeviceProfile, device_to_pdf
+from rock_paper_sync.device_profile import CanvasTransform, device_to_pdf
 from rock_paper_sync.ink.clusters import InkCluster
 from rock_paper_sync.render.wordmap import Rect, WordMap
 
@@ -82,7 +82,7 @@ class GlyphHighlight:
 def classify_cluster(
     cluster: InkCluster,
     word_map: WordMap,
-    profile: DeviceProfile,
+    transform: CanvasTransform,
     content_page_count: int,
 ) -> Classification:
     """Classify a single stroke cluster.
@@ -90,7 +90,7 @@ def classify_cluster(
     Args:
         cluster: The cluster to classify.
         word_map: Word map from the pushed PDF.
-        profile: Device profile for coordinate transform.
+        transform: Canvas transform for coordinate conversion.
         content_page_count: Number of content pages in the PDF
             (excluding trailing blank pages).
 
@@ -108,7 +108,7 @@ def classify_cluster(
     # Stroke cluster on a content page → drawing
     # Find the nearest block on this page
     page_redir = cluster.redir
-    nearest_rect, anchor_ref = _find_nearest_block(cluster, word_map, profile, page_redir)
+    nearest_rect, anchor_ref = _find_nearest_block(cluster, word_map, transform, page_redir)
 
     return Classification(
         kind="drawing",
@@ -122,7 +122,7 @@ def classify_cluster(
 def _find_nearest_block(
     cluster: InkCluster,
     word_map: WordMap,
-    profile: DeviceProfile,
+    transform: CanvasTransform,
     page: int,
 ) -> tuple[Rect | None, str | None]:
     """Find the ``BlockBox`` nearest to the cluster's centre on the given page.
@@ -136,7 +136,7 @@ def _find_nearest_block(
     """
     cx_dev = (cluster.bbox[0] + cluster.bbox[2]) / 2.0
     cy_dev = (cluster.bbox[1] + cluster.bbox[3]) / 2.0
-    cx_pdf, cy_pdf = device_to_pdf(profile, cx_dev, cy_dev)
+    cx_pdf, cy_pdf = device_to_pdf(transform, cx_dev, cy_dev)
 
     # Prefer the renderer-published block geometry.
     blk = word_map.nearest_block(page, cx_pdf, cy_pdf)

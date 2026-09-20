@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .audit import get_audit_logger
+from .device_profile import PDF_CANVAS_H, PDF_CANVAS_W
 from .render.wordmap import DocumentIndexEntry
 from .rm_cloud_client import RmCloudClient
 from .sync_v3 import SyncV3Client
@@ -151,10 +152,10 @@ def _create_pdf_content_file(
         "cPages": c_pages,
         "coverPageNumber": -1,
         "customZoomCenterX": 0,
-        "customZoomCenterY": 936,
+        "customZoomCenterY": PDF_CANVAS_H // 2,
         "customZoomOrientation": "portrait",
-        "customZoomPageHeight": 1872,
-        "customZoomPageWidth": 1404,
+        "customZoomPageHeight": PDF_CANVAS_H,
+        "customZoomPageWidth": PDF_CANVAS_W,
         "customZoomScale": 1,
         "documentMetadata": {},
         "dummyDocument": False,
@@ -334,10 +335,10 @@ class RmCloudSync:
             "cPages": c_pages,
             "coverPageNumber": 0,
             "customZoomCenterX": 0,
-            "customZoomCenterY": 936,
+            "customZoomCenterY": PDF_CANVAS_H // 2,
             "customZoomOrientation": "portrait",
-            "customZoomPageHeight": 1872,
-            "customZoomPageWidth": 1404,
+            "customZoomPageHeight": PDF_CANVAS_H,
+            "customZoomPageWidth": PDF_CANVAS_W,
             "customZoomScale": 1,
             "documentMetadata": {},
             "extraMetadata": {

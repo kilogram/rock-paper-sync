@@ -193,9 +193,10 @@ class TestPdfPullIntegration:
 
         # Find the token positions for "purple monkey dishwasher engine"
         target_words = ["purple", "monkey", "dishwasher", "engine"]
-        from rock_paper_sync.device_profile import PROFILES, pdf_to_device
+        from rock_paper_sync.device_profile import PROFILES, CanvasTransform, pdf_to_device
 
         profile = PROFILES["paper_pro_move"]
+        transform = CanvasTransform.for_pdf_page(profile)
 
         # Build highlight rects in device coords from word-map positions
         highlight_rects = []
@@ -206,9 +207,9 @@ class TestPdfPullIntegration:
                         # Convert PDF rect centre to device coords
                         cx = (rect.x0 + rect.x1) / 2.0
                         cy = (rect.y0 + rect.y1) / 2.0
-                        dev_x, dev_y = pdf_to_device(profile, cx, cy)
-                        w_dev = (rect.x1 - rect.x0) / 0.5
-                        h_dev = (rect.y1 - rect.y0) / 0.5
+                        dev_x, dev_y = pdf_to_device(transform, cx, cy)
+                        w_dev = (rect.x1 - rect.x0) * transform.scale
+                        h_dev = (rect.y1 - rect.y0) * transform.scale
                         highlight_rects.append(
                             Rectangle(
                                 x=dev_x - w_dev / 2,
@@ -371,9 +372,10 @@ class TestPdfPullIntegration:
 
         # --- (b) Inject highlight + stroke ---
         target_words = ["purple", "monkey", "dishwasher", "engine"]
-        from rock_paper_sync.device_profile import PROFILES, pdf_to_device
+        from rock_paper_sync.device_profile import PROFILES, CanvasTransform, pdf_to_device
 
         profile = PROFILES["paper_pro_move"]
+        transform = CanvasTransform.for_pdf_page(profile)
         highlight_rects = []
         for word in target_words:
             for pw in word_map.pages:
@@ -381,9 +383,9 @@ class TestPdfPullIntegration:
                     if word_map.texts[tid] == word:
                         cx = (rect.x0 + rect.x1) / 2.0
                         cy = (rect.y0 + rect.y1) / 2.0
-                        dev_x, dev_y = pdf_to_device(profile, cx, cy)
-                        w_dev = (rect.x1 - rect.x0) / 0.5
-                        h_dev = (rect.y1 - rect.y0) / 0.5
+                        dev_x, dev_y = pdf_to_device(transform, cx, cy)
+                        w_dev = (rect.x1 - rect.x0) * transform.scale
+                        h_dev = (rect.y1 - rect.y0) * transform.scale
                         highlight_rects.append(
                             Rectangle(x=dev_x - w_dev / 2, y=dev_y - h_dev / 2, w=w_dev, h=h_dev)
                         )
@@ -493,18 +495,19 @@ The word target appears here in the second paragraph.
         word_map = WordMap.from_json(file_state.word_map)
 
         # Find both occurrences of "target" in the word map
-        from rock_paper_sync.device_profile import PROFILES, pdf_to_device
+        from rock_paper_sync.device_profile import PROFILES, CanvasTransform, pdf_to_device
 
         profile = PROFILES["paper_pro_move"]
+        transform = CanvasTransform.for_pdf_page(profile)
         target_rects_list: list[list[Rectangle]] = []
         for pw in word_map.pages:
             for tid, rect in pw.tokens:
                 if word_map.texts[tid] == "target":
                     cx = (rect.x0 + rect.x1) / 2.0
                     cy = (rect.y0 + rect.y1) / 2.0
-                    dev_x, dev_y = pdf_to_device(profile, cx, cy)
-                    w_dev = (rect.x1 - rect.x0) / 0.5
-                    h_dev = (rect.y1 - rect.y0) / 0.5
+                    dev_x, dev_y = pdf_to_device(transform, cx, cy)
+                    w_dev = (rect.x1 - rect.x0) * transform.scale
+                    h_dev = (rect.y1 - rect.y0) * transform.scale
                     target_rects_list.append(
                         [Rectangle(x=dev_x - w_dev / 2, y=dev_y - h_dev / 2, w=w_dev, h=h_dev)]
                     )
@@ -596,9 +599,10 @@ The word target appears here in the second paragraph.
         from rock_paper_sync.render.wordmap import WordMap
 
         word_map = WordMap.from_json(file_state.word_map)
-        from rock_paper_sync.device_profile import PROFILES, pdf_to_device
+        from rock_paper_sync.device_profile import PROFILES, CanvasTransform, pdf_to_device
 
         profile = PROFILES["paper_pro_move"]
+        transform = CanvasTransform.for_pdf_page(profile)
 
         # --- (b) Inject highlight + margin stroke ---
         target_words = ["purple", "monkey", "dishwasher", "engine"]
@@ -609,9 +613,9 @@ The word target appears here in the second paragraph.
                     if word_map.texts[tid] == word:
                         cx = (rect.x0 + rect.x1) / 2.0
                         cy = (rect.y0 + rect.y1) / 2.0
-                        dev_x, dev_y = pdf_to_device(profile, cx, cy)
-                        w_dev = (rect.x1 - rect.x0) / 0.5
-                        h_dev = (rect.y1 - rect.y0) / 0.5
+                        dev_x, dev_y = pdf_to_device(transform, cx, cy)
+                        w_dev = (rect.x1 - rect.x0) * transform.scale
+                        h_dev = (rect.y1 - rect.y0) * transform.scale
                         highlight_rects.append(
                             Rectangle(x=dev_x - w_dev / 2, y=dev_y - h_dev / 2, w=w_dev, h=h_dev)
                         )
@@ -667,7 +671,37 @@ The word target appears here in the second paragraph.
         assert result2.success, f"Re-push failed: {result2.error}"
 
         # --- (e) Inject new stroke (different stroke_id) ---
-        new_stroke = make_line([(-300.0, 400.0), (-280.0, 420.0), (-260.0, 400.0), (-240.0, 420.0)])
+        # Reload word map from the re-push so the stroke lands near a
+        # block whose anchor_ref matches the current file's paragraphs.
+        file_state2 = state.get_file_state("test-vault", "test-3pull.md")
+        word_map2 = WordMap.from_json(file_state2.word_map)
+        # Place the new stroke in the right margin at PDF (445, 200),
+        # near the "Margin Note Target" paragraph.  This position is
+        # derived from word_map2 to ensure it lands near a block whose
+        # anchor_ref matches a body paragraph in the raw markdown (not
+        # a heading, whose rendered vs raw text hashes differ).
+        margin_target = None
+        for blk2 in word_map2.blocks if word_map2.blocks else []:
+            # Find a block whose anchor_ref is also in the current file's
+            # paragraph anchors — body paragraphs match, headings may not.
+            from rock_paper_sync.ink.apply import compute_paragraph_anchors
+
+            current_text = test_file.read_text(encoding="utf-8")
+            file_anchors = compute_paragraph_anchors(current_text)
+            if blk2.anchor_ref in file_anchors:
+                margin_target = blk2
+                break
+        if margin_target is None:
+            pytest.skip("No matching body-paragraph block found in re-push word map")
+        dev_mx0, dev_my0 = pdf_to_device(
+            transform, margin_target.rect.x1 + 5.0, margin_target.rect.y0
+        )
+        dev_mx1, dev_my1 = pdf_to_device(
+            transform, margin_target.rect.x1 + 25.0, margin_target.rect.y1
+        )
+        new_stroke = make_line(
+            [(dev_mx0, dev_my0), (dev_mx1, dev_my1), (dev_mx0, dev_my1), (dev_mx1, dev_my0)]
+        )
         # stroke_id=70 to avoid collision with the first pull's strokes (30, 50)
         new_page_uuid = "page-0000-0000-0000-000000000032"
         new_rm = build_stroke_only_rm(new_stroke, stroke_id=70)
@@ -750,9 +784,10 @@ The word target appears here in the second paragraph.
 
         word_map = WordMap.from_json(file_state.word_map)
 
-        from rock_paper_sync.device_profile import PROFILES, pdf_to_device
+        from rock_paper_sync.device_profile import PROFILES, CanvasTransform, pdf_to_device
 
         profile = PROFILES["paper_pro_move"]
+        transform = CanvasTransform.for_pdf_page(profile)
 
         # --- (b) Build synthetic ink for gestures ---
 
@@ -772,9 +807,9 @@ The word target appears here in the second paragraph.
         # Convert checkbox rect centre to device coords for stroke
         tick_cx = (tick_rect.x0 + tick_rect.x1) / 2.0
         tick_cy = (tick_rect.y0 + tick_rect.y1) / 2.0
-        dev_tick_x, dev_tick_y = pdf_to_device(profile, tick_cx, tick_cy)
-        tick_w_dev = (tick_rect.x1 - tick_rect.x0) / 0.5 * 0.8
-        tick_h_dev = (tick_rect.y1 - tick_rect.y0) / 0.5 * 0.8
+        dev_tick_x, dev_tick_y = pdf_to_device(transform, tick_cx, tick_cy)
+        tick_w_dev = (tick_rect.x1 - tick_rect.x0) * transform.scale * 0.8
+        tick_h_dev = (tick_rect.y1 - tick_rect.y0) * transform.scale * 0.8
 
         tick_stroke = make_line(
             [
@@ -800,8 +835,8 @@ The word target appears here in the second paragraph.
         first_rect = strike_tokens[0][1]
         last_rect = strike_tokens[-1][1]
         mid_y_pdf = (first_rect.y0 + first_rect.y1) / 2.0
-        dev_sx0, dev_sy = pdf_to_device(profile, first_rect.x0 - 5.0, mid_y_pdf)
-        dev_sx1, _ = pdf_to_device(profile, last_rect.x1 + 5.0, mid_y_pdf)
+        dev_sx0, dev_sy = pdf_to_device(transform, first_rect.x0 - 5.0, mid_y_pdf)
+        dev_sx1, _ = pdf_to_device(transform, last_rect.x1 + 5.0, mid_y_pdf)
 
         strike_stroke = make_line(
             [
@@ -840,7 +875,7 @@ The word target appears here in the second paragraph.
 
         caret_x_pdf = caret_rect_val.x0 - 3.0
         caret_y_pdf = caret_line.baseline_y - lh * 0.1
-        dev_cx, dev_cy = pdf_to_device(profile, caret_x_pdf, caret_y_pdf)
+        dev_cx, dev_cy = pdf_to_device(transform, caret_x_pdf, caret_y_pdf)
         caret_mark = make_line(
             [
                 (dev_cx - 3.0, dev_cy - 5.0),
@@ -856,7 +891,7 @@ The word target appears here in the second paragraph.
             if prev_line
             else caret_line.rect.y0 - lh * 0.5
         )
-        dev_tx, dev_ty = pdf_to_device(profile, caret_x_pdf - 10.0, gap_y_pdf)
+        dev_tx, dev_ty = pdf_to_device(transform, caret_x_pdf - 10.0, gap_y_pdf)
         text_ink = make_line(
             [
                 (dev_tx, dev_ty),

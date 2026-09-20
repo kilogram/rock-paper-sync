@@ -37,7 +37,7 @@ from pathlib import Path
 
 from rock_paper_sync.cloud_reader import CloudReader
 from rock_paper_sync.config import InkConfig, LayoutConfig, VaultConfig
-from rock_paper_sync.device_profile import DeviceProfile, device_to_pdf
+from rock_paper_sync.device_profile import CanvasTransform, device_to_pdf
 from rock_paper_sync.errors import RenderMismatchError, TransformMismatchError
 from rock_paper_sync.ink.apply import apply_edits, build_token_spans, write_markdown_atomic
 from rock_paper_sync.ink.bake import (
@@ -146,6 +146,7 @@ class PullSyncEngine:
         self.ink_config = ink_config or InkConfig()
         self.ocr_confidence_threshold = ocr_confidence_threshold
         self._profile = layout.get_device_profile()
+        self._transform = CanvasTransform.for_pdf_page(self._profile)
 
     def pull_file(
         self,
@@ -300,7 +301,7 @@ class PullSyncEngine:
         # I8: Cross-check every GlyphRange's transformed rects against the word map.
         for gh in glyph_highlights:
             device_rects = [DeviceRect(x=r[0], y=r[1], w=r[2], h=r[3]) for r in gh.device_rects]
-            result = check_i8(gh.text, device_rects, word_map, self._profile, gh.page)
+            result = check_i8(gh.text, device_rects, word_map, self._transform, gh.page)
             if not result.i8_pass:
                 raise TransformMismatchError(
                     page=gh.page,
@@ -321,7 +322,9 @@ class PullSyncEngine:
 
         classifications: list[Classification] = []
         for cluster in clusters:
-            classification = classify_cluster(cluster, word_map, self._profile, content_page_count)
+            classification = classify_cluster(
+                cluster, word_map, self._transform, content_page_count
+            )
             classifications.append(classification)
 
         # Read snapshot text for edit computation
@@ -356,7 +359,7 @@ class PullSyncEngine:
             span = _resolve_highlight_span(
                 gh,
                 word_map,
-                self._profile,
+                self._transform,
                 token_spans,
             )
             if span is None:
@@ -421,7 +424,7 @@ class PullSyncEngine:
                 gesture = classify_gesture(
                     cluster,
                     word_map,
-                    self._profile,
+                    self._transform,
                     cluster_page,
                     token_spans,
                     self.ink_config.strikethrough_action,
@@ -450,7 +453,7 @@ class PullSyncEngine:
 
                     attachment_name, svg_bytes, overlay = bake_cluster(
                         cluster,
-                        self._profile,
+                        self._transform,
                         anchor,
                         classification.nearest_anchor_rect,
                         Path(obsidian_path).stem,
@@ -737,7 +740,7 @@ class PullSyncEngine:
                 )
                 attachment_name, svg_bytes, overlay = bake_cluster(
                     cluster,
-                    self._profile,
+                    self._transform,
                     anchor,
                     classification.nearest_anchor_rect,
                     Path(obsidian_path).stem,
@@ -813,7 +816,7 @@ class PullSyncEngine:
             leftover_anchor = _anchor_from_classification(classification)
             attachment_name, svg_bytes, overlay = bake_cluster(
                 leftover_cluster,
-                self._profile,
+                self._transform,
                 leftover_anchor,
                 classification.nearest_anchor_rect,
                 Path(obsidian_path).stem,
@@ -865,7 +868,7 @@ class PullSyncEngine:
                 page_index=strokes[0].page_index,
                 redir=strokes[0].redir,
             )
-            png_bytes = render_cluster_to_png(synth_cluster, self._profile)
+            png_bytes = render_cluster_to_png(synth_cluster, self._transform)
             if hasattr(self.ocr_processor, "process_image"):
                 result = self.ocr_processor.process_image(png_bytes)
                 if result is not None:
@@ -889,7 +892,7 @@ class PullSyncEngine:
             return None
 
         try:
-            png_bytes = render_cluster_to_png(cluster, self._profile)
+            png_bytes = render_cluster_to_png(cluster, self._transform)
 
             # Simple OCR interface: expects a process_image method
             if hasattr(self.ocr_processor, "process_image"):
@@ -921,7 +924,7 @@ class PullSyncEngine:
         """Save a drawing cluster as an SVG attachment. Returns attachment name."""
         attachment_name, svg_bytes, _ = bake_cluster(
             cluster,
-            self._profile,
+            self._transform,
             anchor,
             anchor_rect,
             Path(obsidian_path).stem,
@@ -1006,7 +1009,7 @@ def _anchor_from_classification(classification: Classification) -> InkAnchor:
 def _resolve_highlight_span(
     gh: GlyphHighlight,
     word_map: WordMap,
-    profile: DeviceProfile,
+    transform: CanvasTransform,
     token_spans: list[tuple[int, int]],
 ) -> tuple[int, int] | None:
     """Resolve a highlight's character span in the snapshot via the word map.
@@ -1024,7 +1027,7 @@ def _resolve_highlight_span(
     for rx, ry, rw, rh in gh.device_rects:
         dev_cx = rx + rw / 2.0
         dev_cy = ry + rh / 2.0
-        pdf_x, pdf_y = device_to_pdf(profile, dev_cx, dev_cy)
+        pdf_x, pdf_y = device_to_pdf(transform, dev_cx, dev_cy)
         match = word_map.token_at(gh.page, pdf_x, pdf_y)
         if match is not None:
             matched_tids.append(int(match.token))

@@ -11,7 +11,7 @@ This module lives in ``tools/`` and is deliberately outside the
 Usage (programmatic)::
 
     from tools.ink_overlay import overlay_ink
-    pngs = overlay_ink(pdf_bytes, {0: rm_bytes}, profile, out_dir=Path("out"))
+    pngs = overlay_ink(pdf_bytes, {0: rm_bytes}, transform, out_dir=Path("out"))
 
 Usage (CLI)::
 
@@ -29,7 +29,7 @@ import pymupdf
 import rmscene
 from rmscene import SceneGlyphItemBlock, SceneLineItemBlock
 
-from rock_paper_sync.device_profile import DeviceProfile, device_to_pdf
+from rock_paper_sync.device_profile import CanvasTransform, device_to_pdf
 from rock_paper_sync.render.wordmap import WordMap
 
 __all__ = ["overlay_ink"]
@@ -51,7 +51,7 @@ _PNG_DPI = 110
 def overlay_ink(
     pdf_bytes: bytes,
     page_files: Mapping[int, bytes],
-    profile: DeviceProfile,
+    transform: CanvasTransform,
     word_map: WordMap | None = None,
     out_dir: Path | None = None,
 ) -> list[Path]:
@@ -67,7 +67,7 @@ def overlay_ink(
     Args:
         pdf_bytes: Source PDF file bytes.
         page_files: Mapping of PDF page index -> ``.rm`` file bytes.
-        profile: Device profile for coordinate transform.
+        transform: Canvas transform for coordinate conversion.
         word_map: Optional word map; if provided, its token rects are
             drawn in red outlines (like ``bench render --overlay``).
         out_dir: Output directory.  If ``None``, a temporary directory
@@ -99,8 +99,8 @@ def overlay_ink(
             w = doc[0].rect.width
             h = doc[0].rect.height
         else:
-            w = profile.page_width_pt
-            h = profile.page_height_pt
+            w = transform.pdf_w
+            h = transform.pdf_h
         doc.new_page(width=w, height=h)
 
     # Draw word-map rects if provided
@@ -125,7 +125,7 @@ def overlay_ink(
         for points_dev in strokes:
             if len(points_dev) < 2:
                 continue
-            pdf_points = [device_to_pdf(profile, x, y) for x, y in points_dev]
+            pdf_points = [device_to_pdf(transform, x, y) for x, y in points_dev]
             for i in range(len(pdf_points) - 1):
                 p1 = pymupdf.Point(*pdf_points[i])
                 p2 = pymupdf.Point(*pdf_points[i + 1])
@@ -133,9 +133,9 @@ def overlay_ink(
 
         # Draw highlight rects as translucent yellow
         for rect_dev in highlights:
-            x0, y0 = device_to_pdf(profile, rect_dev[0], rect_dev[1])
+            x0, y0 = device_to_pdf(transform, rect_dev[0], rect_dev[1])
             x1, y1 = device_to_pdf(
-                profile,
+                transform,
                 rect_dev[0] + rect_dev[2],
                 rect_dev[1] + rect_dev[3],
             )

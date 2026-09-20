@@ -19,7 +19,7 @@ import logging
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from rock_paper_sync.device_profile import DeviceProfile, device_to_pdf
+from rock_paper_sync.device_profile import CanvasTransform, device_to_pdf
 from rock_paper_sync.ink.clusters import InkCluster
 from rock_paper_sync.ink.dispositions import InkAnchor
 from rock_paper_sync.render.wordmap import BakedOverlay, Rect
@@ -40,7 +40,7 @@ _PEN_THICKNESS_SCALE = 0.5
 
 def bake_cluster(
     cluster: InkCluster,
-    profile: DeviceProfile,
+    transform: CanvasTransform,
     anchor: InkAnchor,
     anchor_rect: Rect | None,
     stem: str,
@@ -49,7 +49,7 @@ def bake_cluster(
 
     Args:
         cluster: The cluster to bake.
-        profile: Device profile for coordinate transform.
+        transform: Canvas transform for coordinate conversion.
         anchor: The anchor for this overlay.
         anchor_rect: The paragraph box this drawing is near (PDF points).
         stem: Markdown file stem (without extension) for naming.
@@ -65,7 +65,7 @@ def bake_cluster(
     for cs in cluster.strokes:
         stroke_pts: list[tuple[float, float, float]] = []
         for pt in cs.stroke.points:
-            px, py = device_to_pdf(profile, pt.x, pt.y)
+            px, py = device_to_pdf(transform, pt.x, pt.y)
             pt_w = getattr(pt, "width", None)
             width = (
                 float(pt_w) * _PEN_THICKNESS_SCALE if pt_w is not None else _DEFAULT_STROKE_WIDTH_PT
@@ -169,7 +169,7 @@ def get_attachment_folder(vault_path: Path) -> Path:
 
 def render_cluster_to_png(
     cluster: InkCluster,
-    profile: DeviceProfile,
+    transform: CanvasTransform,
     scale: float = 2.0,
 ) -> bytes:
     """Render a cluster to PNG bytes for OCR.
@@ -178,7 +178,7 @@ def render_cluster_to_png(
 
     Args:
         cluster: The cluster to render.
-        profile: Device profile for coordinate transform.
+        transform: Canvas transform for coordinate conversion.
         scale: Pixels per PDF point.
 
     Returns:
@@ -193,7 +193,7 @@ def render_cluster_to_png(
     for cs in cluster.strokes:
         pts = []
         for pt in cs.stroke.points:
-            px, py = device_to_pdf(profile, pt.x, pt.y)
+            px, py = device_to_pdf(transform, pt.x, pt.y)
             pts.append((px, py))
         all_points.append(pts)
 

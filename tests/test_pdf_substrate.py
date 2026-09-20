@@ -13,6 +13,7 @@ import pytest
 from rock_paper_sync.config import LayoutConfig
 from rock_paper_sync.device_profile import (
     PROFILES,
+    CanvasTransform,
     DeviceProfile,
     device_to_pdf,
     pdf_to_device,
@@ -336,18 +337,20 @@ class TestI6CoordinateRoundTrip:
 
     def test_round_trip_origin(self) -> None:
         profile = PROFILES["paper_pro_move"]
-        pdf_x, pdf_y = device_to_pdf(profile, 0.0, 0.0)
-        dx, dy = pdf_to_device(profile, pdf_x, pdf_y)
+        transform = CanvasTransform.for_pdf_page(profile)
+        pdf_x, pdf_y = device_to_pdf(transform, 0.0, 0.0)
+        dx, dy = pdf_to_device(transform, pdf_x, pdf_y)
         assert abs(dx) < 0.5
         assert abs(dy) < 0.5
 
     def test_round_trip_corners(self) -> None:
         profile = PROFILES["paper_pro_move"]
-        w = profile.screen_w_px
-        h = profile.screen_h_px
+        transform = CanvasTransform.for_pdf_page(profile)
+        w = transform.canvas_w
+        h = transform.canvas_h
         for dev_x, dev_y in [(-w / 2, 0), (w / 2, 0), (0, h), (-w / 2, h), (w / 2, h)]:
-            px, py = device_to_pdf(profile, dev_x, dev_y)
-            rx, ry = pdf_to_device(profile, px, py)
+            px, py = device_to_pdf(transform, dev_x, dev_y)
+            rx, ry = pdf_to_device(transform, px, py)
             assert abs(rx - dev_x) < 0.5, f"x round-trip failed: {dev_x} -> {rx}"
             assert abs(ry - dev_y) < 0.5, f"y round-trip failed: {dev_y} -> {ry}"
 
@@ -455,8 +458,9 @@ try:
     def test_coordinate_round_trip_property(x: float, y: float) -> None:
         """I6 property: round-trip within 0.5 px for any point."""
         profile = PROFILES["paper_pro_move"]
-        pdf_x, pdf_y = device_to_pdf(profile, x, y)
-        rx, ry = pdf_to_device(profile, pdf_x, pdf_y)
+        transform = CanvasTransform.for_pdf_page(profile)
+        pdf_x, pdf_y = device_to_pdf(transform, x, y)
+        rx, ry = pdf_to_device(transform, pdf_x, pdf_y)
         assert abs(rx - x) < 0.5
         assert abs(ry - y) < 0.5
 

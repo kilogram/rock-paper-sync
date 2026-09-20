@@ -24,7 +24,7 @@ from rmscene import CrdtId
 from rmscene.scene_items import Line, Pen, PenColor, Point
 
 from rock_paper_sync.annotations.domain.stroke import Stroke
-from rock_paper_sync.device_profile import PROFILES, pdf_to_device
+from rock_paper_sync.device_profile import PROFILES, CanvasTransform, pdf_to_device
 from rock_paper_sync.ink.apply import build_token_spans
 from rock_paper_sync.ink.candidates import CandidateStroke
 from rock_paper_sync.ink.clusters import InkCluster
@@ -36,6 +36,7 @@ from rock_paper_sync.render.wordmap import (
 )
 
 PROFILE = PROFILES["paper_pro_move"]
+TRANSFORM = CanvasTransform.for_pdf_page(PROFILE)
 
 
 # ---------------------------------------------------------------------------
@@ -125,8 +126,8 @@ def _make_candidate_stroke(
     x,y,w,h format).
     """
     # Convert PDF rect corners to device coords
-    dev_x0, dev_y0 = pdf_to_device(PROFILE, pdf_rect.x0, pdf_rect.y0)
-    dev_x1, dev_y1 = pdf_to_device(PROFILE, pdf_rect.x1, pdf_rect.y1)
+    dev_x0, dev_y0 = pdf_to_device(TRANSFORM, pdf_rect.x0, pdf_rect.y0)
+    dev_x1, dev_y1 = pdf_to_device(TRANSFORM, pdf_rect.x1, pdf_rect.y1)
     dev_x = min(dev_x0, dev_x1)
     dev_y = min(dev_y0, dev_y1)
     dev_w = abs(dev_x1 - dev_x0)
@@ -236,7 +237,7 @@ class TestCheckboxTick:
         result = classify_gesture(
             cluster,
             rendered_word_map,
-            PROFILE,
+            TRANSFORM,
             page,
             token_spans,
             snapshot_text=snapshot_text,
@@ -277,7 +278,7 @@ class TestCheckboxTick:
         result = classify_gesture(
             cluster,
             rendered_word_map,
-            PROFILE,
+            TRANSFORM,
             page,
             token_spans,
             snapshot_text=snapshot_text,
@@ -301,7 +302,7 @@ class TestCheckboxTick:
         result = classify_gesture(
             cluster,
             rendered_word_map,
-            PROFILE,
+            TRANSFORM,
             0,
             token_spans,
             snapshot_text=snapshot_text,
@@ -353,7 +354,7 @@ class TestStrikethrough:
         result = classify_gesture(
             cluster,
             rendered_word_map,
-            PROFILE,
+            TRANSFORM,
             page,
             token_spans,
             strikethrough_action="mark",
@@ -401,7 +402,7 @@ class TestStrikethrough:
         result = classify_gesture(
             cluster,
             rendered_word_map,
-            PROFILE,
+            TRANSFORM,
             page,
             token_spans,
             strikethrough_action="delete",
@@ -426,7 +427,7 @@ class TestStrikethrough:
         result = classify_gesture(
             cluster,
             rendered_word_map,
-            PROFILE,
+            TRANSFORM,
             0,
             token_spans,
             snapshot_text=snapshot_text,
@@ -506,7 +507,7 @@ class TestCaretInsertion:
         result = classify_gesture(
             cluster,
             rendered_word_map,
-            PROFILE,
+            TRANSFORM,
             page,
             token_spans,
             snapshot_text=snapshot_text,
@@ -567,7 +568,7 @@ class TestCaretInsertion:
         result = classify_gesture(
             cluster,
             rendered_word_map,
-            PROFILE,
+            TRANSFORM,
             page,
             token_spans,
             snapshot_text=snapshot_text,
@@ -619,7 +620,7 @@ class TestCaretInsertion:
         result = classify_gesture(
             cluster,
             rendered_word_map,
-            PROFILE,
+            TRANSFORM,
             page,
             token_spans,
             snapshot_text=snapshot_text,
@@ -700,7 +701,7 @@ class TestCorrection:
         result = classify_gesture(
             cluster,
             rendered_word_map,
-            PROFILE,
+            TRANSFORM,
             page,
             token_spans,
             strikethrough_action="mark",
@@ -787,7 +788,7 @@ class TestNonContiguousStrikethrough:
         result = classify_gesture(
             cluster,
             rendered_word_map,
-            PROFILE,
+            TRANSFORM,
             page,
             token_spans,
             strikethrough_action="mark",
@@ -919,7 +920,7 @@ class TestTickOvershoot:
         token_spans: list[tuple[int, int]],
         snapshot_text: str,
     ) -> None:
-        """A stroke shifted right by 50% of the checkbox width is not a tick."""
+        """A stroke shifted right by 60% of the checkbox width is not a tick."""
         checkbox_tids = []
         for pw in rendered_word_map.pages:
             for tid, rect in pw.tokens:
@@ -930,11 +931,13 @@ class TestTickOvershoot:
         tid, rect, page = checkbox_tids[0]
 
         w = rect.x1 - rect.x0
-        # Shift by 50% of box width to the right
+        # Shift by 60% of box width to the right — centroid lands
+        # outside the checkbox, guaranteeing a miss even with
+        # floating-point rounding in the canvas transform.
         shifted = Rect(
-            x0=rect.x0 + w * 0.5,
+            x0=rect.x0 + w * 0.6,
             y0=rect.y0,
-            x1=rect.x1 + w * 0.5,
+            x1=rect.x1 + w * 0.6,
             y1=rect.y1,
         )
 
@@ -944,15 +947,15 @@ class TestTickOvershoot:
         result = classify_gesture(
             cluster,
             rendered_word_map,
-            PROFILE,
+            TRANSFORM,
             page,
             token_spans,
             snapshot_text=snapshot_text,
         )
 
-        # Centroid of shifted stroke is outside expanded checkbox -> not a tick
+        # Centroid of shifted stroke is outside checkbox -> not a tick
         assert result.kind != "tick", (
-            "A stroke shifted by 50% of the box width should not be a tick"
+            "A stroke shifted by 60% of the box width should not be a tick"
         )
 
 

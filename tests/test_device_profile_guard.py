@@ -9,11 +9,11 @@ from pathlib import Path
 
 import pytest
 
-# Known screen-pixel literals that must be confined to device_profile.py.
-# Paper Pro Move: 954x1696.
-# Legacy rM2 literals (1404, 1872) are left to Phase 3a when the notebook
-# code moves to native_layout/.
-_PIXEL_LITERALS = ["954", "1696"]
+# Known screen-pixel and canvas-pixel literals that must be confined to
+# device_profile.py.
+# Paper Pro Move screen: 954x1696.
+# PDF canvas (measured from SceneInfo.paper_size): 1404x1872.
+_PIXEL_LITERALS = ["954", "1696", "1404", "1872"]
 
 # Directories excluded from the scan (they're allowed to know pixel values)
 _EXCLUDED_DIRS = {"layout", "fonts", "annotations"}

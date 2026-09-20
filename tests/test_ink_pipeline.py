@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from rock_paper_sync.device_profile import PROFILES
+from rock_paper_sync.device_profile import PROFILES, CanvasTransform
 from rock_paper_sync.ink.apply import (
     apply_edits,
     compute_paragraph_anchors,
@@ -51,6 +51,12 @@ from rock_paper_sync.state import StateManager, SyncRecord
 def profile():
     """Paper Pro Move device profile."""
     return PROFILES["paper_pro_move"]
+
+
+@pytest.fixture
+def transform(profile):
+    """Canvas transform for the Paper Pro Move."""
+    return CanvasTransform.for_pdf_page(profile)
 
 
 @pytest.fixture
@@ -384,7 +390,7 @@ class TestApplyEdits:
 class TestBakeCluster:
     """Tests for SVG baking."""
 
-    def test_bake_produces_svg(self, profile) -> None:
+    def test_bake_produces_svg(self, profile, transform) -> None:
         """bake_cluster produces valid SVG bytes."""
         from unittest.mock import MagicMock
 
@@ -413,7 +419,7 @@ class TestBakeCluster:
         anchor = InkAnchor(kind="paragraph", ref="test_ref")
         anchor_rect = Rect(x0=36.0, y0=80.0, x1=400.0, y1=100.0)
 
-        name, svg_bytes, overlay = bake_cluster(cluster, profile, anchor, anchor_rect, "test_doc")
+        name, svg_bytes, overlay = bake_cluster(cluster, transform, anchor, anchor_rect, "test_doc")
 
         assert name.startswith("test_doc-drawing-p0-")
         assert name.endswith(".svg")
@@ -461,7 +467,7 @@ class TestOCRFailurePath:
 class TestClassifyCluster:
     """Tests for cluster classification."""
 
-    def test_no_redir_is_appended(self, simple_word_map, profile) -> None:
+    def test_no_redir_is_appended(self, simple_word_map, profile, transform) -> None:
         """Cluster on a device-added page (no redir) → appended."""
         cluster = InkCluster(
             cluster_id="test",
@@ -470,10 +476,10 @@ class TestClassifyCluster:
             page_index=5,
             redir=None,
         )
-        result = classify_cluster(cluster, simple_word_map, profile, content_page_count=1)
+        result = classify_cluster(cluster, simple_word_map, transform, content_page_count=1)
         assert result.kind == "appended"
 
-    def test_trailing_page_is_appended(self, simple_word_map, profile) -> None:
+    def test_trailing_page_is_appended(self, simple_word_map, profile, transform) -> None:
         """Cluster on a trailing blank page → appended."""
         cluster = InkCluster(
             cluster_id="test",
@@ -482,10 +488,10 @@ class TestClassifyCluster:
             page_index=2,
             redir=5,  # Beyond content page count
         )
-        result = classify_cluster(cluster, simple_word_map, profile, content_page_count=1)
+        result = classify_cluster(cluster, simple_word_map, transform, content_page_count=1)
         assert result.kind == "appended"
 
-    def test_content_page_is_drawing(self, simple_word_map, profile) -> None:
+    def test_content_page_is_drawing(self, simple_word_map, profile, transform) -> None:
         """Cluster on a content page → drawing."""
         cluster = InkCluster(
             cluster_id="test",
@@ -494,7 +500,7 @@ class TestClassifyCluster:
             page_index=0,
             redir=0,
         )
-        result = classify_cluster(cluster, simple_word_map, profile, content_page_count=1)
+        result = classify_cluster(cluster, simple_word_map, transform, content_page_count=1)
         assert result.kind == "drawing"
 
 
@@ -577,7 +583,7 @@ class TestAttachmentFolder:
 class TestI8TransformMismatch:
     """I8: highlight rects that don't match word-map tokens raise TransformMismatchError."""
 
-    def test_offset_rects_fail_i8(self, simple_word_map, profile) -> None:
+    def test_offset_rects_fail_i8(self, simple_word_map, profile, transform) -> None:
         """GlyphRange rects offset by 30 pt from the true position fail I8."""
         # Build device rects that are 30 pt off from where "Hello" is
         # in the word map. "Hello" is at (36, 36, 100, 50) in PDF pts.
@@ -589,13 +595,13 @@ class TestI8TransformMismatch:
         true_cx = (36.0 + 100.0) / 2.0
         true_cy = (36.0 + 50.0) / 2.0
         # Convert to device coords
-        dev_x, dev_y = pdf_to_device(profile, true_cx, true_cy)
+        dev_x, dev_y = pdf_to_device(transform, true_cx, true_cy)
         # Offset by 60 device px (30 pt / 0.5 scale) to guarantee a miss
         bad_x = dev_x + 120.0
         bad_y = dev_y + 120.0
 
         device_rects = [_DeviceRect(x=bad_x, y=bad_y, w=20.0, h=10.0)]
-        result = check_i8("Hello", device_rects, simple_word_map, profile, page=0)
+        result = check_i8("Hello", device_rects, simple_word_map, transform, page=0)
         assert not result.i8_pass
 
 
