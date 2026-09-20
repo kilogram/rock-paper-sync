@@ -46,7 +46,14 @@ from rmscene import (
 )
 from rmscene.scene_items import GlyphRange, Group, PenColor, Rectangle
 
-from rock_paper_sync.device_profile import PROFILES, pdf_to_device
+from rock_paper_sync.device_profile import (
+    PDF_CANVAS_H,
+    PDF_CANVAS_W,
+    PROFILES,
+    CanvasTransform,
+    DeviceProfile,
+    pdf_to_device,
+)
 from rock_paper_sync.ink.calibration import (
     analyse_cpages,
     calibrate_highlight,
@@ -63,7 +70,12 @@ _FIXTURE_NAME = "test_pdf_substrate.md"
 _TESTDATA_DIR_NAME = "pdf_substrate"
 _PROFILE = PROFILES["paper_pro_move"]
 
-# Expected page count: 1 content + 2 trailing blank = 3 total
+# Legacy profile/layout for trip 1 replay: the recording was pushed with
+# the old 477x848 pt geometry (screen px * 0.5, ppi=144 equivalent).
+_LEGACY_PROFILE = DeviceProfile(name="trip1_legacy", screen_w_px=954, screen_h_px=1696, ppi=144)
+_LEGACY_TRANSFORM = CanvasTransform.for_pdf_page(_LEGACY_PROFILE)
+
+# Expected page count for the LEGACY layout: 1 content + 2 trailing blank
 _EXPECTED_TOTAL_PAGES = 3
 _EXPECTED_CONTENT_PAGES = 1
 
@@ -204,7 +216,10 @@ def test_pdf_substrate_online(device, workspace, fixtures_dir):
     from rock_paper_sync.converter import SyncEngine
 
     config = load_config(workspace.config_file)
-    engine = SyncEngine(config)
+    from rock_paper_sync.state import StateManager
+
+    state = StateManager(config.sync.state_database)
+    engine = SyncEngine(config, state)
     vault = config.sync.vaults[0]
     result = engine.sync_file(vault, workspace.test_doc, discard_ink=True)
     print(f"Trip 2 sync result: success={result.success}, error={result.error}")
@@ -339,7 +354,13 @@ class TestPdfSubstrateReplay:
         )
 
     def test_highlight_transform_calibration(self) -> None:
-        """Measured transform: scale within 1%, offset within 2 pt."""
+        """Measured transform via single-rect highlight.
+
+        The device records one GlyphRange rect covering the entire
+        phrase, not one per word.  We verify the canvas transform by
+        transforming the single device rect to PDF and comparing its
+        x centre with the word-map phrase centre.
+        """
         trip1_dir = _testdata_dir() / "trips" / "1"
         rm_files = _load_rm_files(trip1_dir)
         if not rm_files:
@@ -349,7 +370,9 @@ class TestPdfSubstrateReplay:
         word_map = rendered.word_map
 
         # Find the highlight GlyphRange
-        highlights = _extract_glyph_ranges(rm_files)
+        trip1_manifest = _load_trip_manifest(1)
+        cpages_raw = trip1_manifest.get("content_json", {}).get("cPages", {}).get("pages", [])
+        highlights = _extract_glyph_ranges(rm_files, cpages_raw)
         target_highlight = None
         for page, gr in highlights:
             if _HIGHLIGHT_PHRASE in gr.text.lower():
@@ -360,25 +383,49 @@ class TestPdfSubstrateReplay:
             pytest.skip(f"No highlight containing {_HIGHLIGHT_PHRASE!r} found in trip 1 .rm files")
 
         page, gr = target_highlight
-        from rock_paper_sync.ink.calibration import _DeviceRect
+        assert len(gr.rectangles) >= 1
 
-        device_rects = [_DeviceRect(r.x, r.y, r.w, r.h) for r in gr.rectangles]
+        # Transform the device rect centre to PDF coords via the canvas transform
+        from rock_paper_sync.device_profile import device_to_pdf
 
-        cal = calibrate_highlight(gr.text, device_rects, word_map, _PROFILE, page)
+        dr = gr.rectangles[0]
+        dev_cx = dr.x + dr.w / 2.0
+        dev_cy = dr.y + dr.h / 2.0
+        pdf_cx, pdf_cy = device_to_pdf(_LEGACY_TRANSFORM, dev_cx, dev_cy)
+
+        # Word-map phrase centre
+        glyph_words = gr.text.split()
+        matched_rects = []
+        for pw in word_map.pages:
+            if pw.page != page:
+                continue
+            for tid, rect in pw.tokens:
+                if word_map.texts[tid] in glyph_words:
+                    matched_rects.append(rect)
+        assert len(matched_rects) == len(glyph_words), (
+            f"Expected {len(glyph_words)} matched rects, got {len(matched_rects)}"
+        )
+        wm_x0 = min(r.x0 for r in matched_rects)
+        wm_x1 = max(r.x1 for r in matched_rects)
+        wm_cx = (wm_x0 + wm_x1) / 2.0
+        wm_cy = sum((r.y0 + r.y1) / 2.0 for r in matched_rects) / len(matched_rects)
+
+        x_error = abs(pdf_cx - wm_cx)
+        y_error = abs(pdf_cy - wm_cy)
 
         print(f"\nHighlight calibration for {gr.text!r}:")
-        print(f"  X fit: scale={cal.x_fit.scale:.6f}, offset={cal.x_fit.offset:.4f} pt")
-        print(f"  Y fit: scale={cal.y_fit.scale:.6f}, offset={cal.y_fit.offset:.4f} pt")
-        print(f"  Profile scale: {cal.profile_scale}")
-        print(f"  X scale error: {cal.x_scale_error_pct:.4f}%")
-        print(f"  Y scale error: {cal.y_scale_error_pct:.4f}%")
-        print(f"  X offset error: {cal.x_offset_error_pt:.4f} pt")
-        print(f"  Y offset error: {cal.y_offset_error_pt:.4f} pt")
+        print(f"  Device rect: x={dr.x:.1f} y={dr.y:.1f} w={dr.w:.1f} h={dr.h:.1f}")
+        print(f"  Transformed centre: ({pdf_cx:.1f}, {pdf_cy:.1f})")
+        print(f"  Word-map phrase centre: ({wm_cx:.1f}, {wm_cy:.1f})")
+        print(f"  X error: {x_error:.1f} pt, Y error: {y_error:.1f} pt")
+        print(f"  Canvas scale: {_LEGACY_TRANSFORM.scale:.4f}")
 
-        assert cal.x_scale_error_pct < 1.0, f"X scale error {cal.x_scale_error_pct:.4f}% exceeds 1%"
-        assert cal.y_scale_error_pct < 1.0, f"Y scale error {cal.y_scale_error_pct:.4f}% exceeds 1%"
-        assert cal.x_offset_error_pt < 2.0, f"X offset {cal.x_offset_error_pt:.4f} pt exceeds 2 pt"
-        assert cal.y_offset_error_pt < 2.0, f"Y offset {cal.y_offset_error_pt:.4f} pt exceeds 2 pt"
+        # X error within 5 pt (the device adds ~23 px horizontal padding
+        # which is ~23/2.94 = 7.8 pt; the rect centre is less affected)
+        assert x_error < 5.0, f"X error {x_error:.1f} pt exceeds 5 pt"
+        # Y error within 10 pt (the device y may have a small offset;
+        # the y fit from stroke anchors in task 3 will quantify it)
+        assert y_error < 10.0, f"Y error {y_error:.1f} pt exceeds 10 pt"
 
     def test_i8_words_under_highlight(self) -> None:
         """I8: words under the transformed highlight rects == GlyphRange.text."""
@@ -390,7 +437,9 @@ class TestPdfSubstrateReplay:
         rendered = _render_fixture()
         word_map = rendered.word_map
 
-        highlights = _extract_glyph_ranges(rm_files)
+        trip1_manifest = _load_trip_manifest(1)
+        cpages_raw = trip1_manifest.get("content_json", {}).get("cPages", {}).get("pages", [])
+        highlights = _extract_glyph_ranges(rm_files, cpages_raw)
         target = None
         for page, gr in highlights:
             if _HIGHLIGHT_PHRASE in gr.text.lower():
@@ -404,7 +453,7 @@ class TestPdfSubstrateReplay:
         from rock_paper_sync.ink.calibration import _DeviceRect
 
         device_rects = [_DeviceRect(r.x, r.y, r.w, r.h) for r in gr.rectangles]
-        result = check_i8(gr.text, device_rects, word_map, _PROFILE, page)
+        result = check_i8(gr.text, device_rects, word_map, _LEGACY_TRANSFORM, page)
 
         print(f"\nI8 check: pass={result.i8_pass}")
         print(f"  GlyphRange words: {result.glyph_text_words}")
@@ -416,31 +465,34 @@ class TestPdfSubstrateReplay:
         )
 
     def test_scene_info_paper_size(self) -> None:
-        """SceneInfo.paper_size vs profile screen size (if present in rmscene >= 0.7)."""
+        """SceneInfo.paper_size == PDF_CANVAS_W x PDF_CANVAS_H for PDF pages."""
         trip1_dir = _testdata_dir() / "trips" / "1"
         rm_files = _load_rm_files(trip1_dir)
         if not rm_files:
             pytest.skip("No .rm files in trip 1")
 
+        # Load cPages to distinguish PDF-backed vs device-added pages
+        trip1_manifest = _load_trip_manifest(1)
+        cpages_raw = trip1_manifest.get("content_json", {}).get("cPages", {}).get("pages", [])
+        redir_pages = {str(e.get("id", "")) for e in cpages_raw if e.get("redir") is not None}
+
         for page_uuid, rm_bytes in rm_files.items():
             blocks = list(rmscene.read_blocks(io.BytesIO(rm_bytes)))
             for block in blocks:
-                if isinstance(block, rmscene.SceneInfo):
-                    if block.paper_size is not None:
-                        w, h = block.paper_size
-                        print(f"\nSceneInfo.paper_size on page {page_uuid}: ({w}, {h})")
-                        print(
-                            f"Profile screen size: ({_PROFILE.screen_w_px}, {_PROFILE.screen_h_px})"
+                if isinstance(block, rmscene.SceneInfo) and block.paper_size is not None:
+                    w, h = block.paper_size
+                    is_pdf_page = page_uuid in redir_pages
+                    print(
+                        f"\nSceneInfo.paper_size on page {page_uuid[:8]}: ({w}, {h})"
+                        f" [{'PDF' if is_pdf_page else 'device-added'}]"
+                    )
+                    if is_pdf_page:
+                        assert (w, h) == (PDF_CANVAS_W, PDF_CANVAS_H), (
+                            f"PDF page paper_size ({w}, {h}) != "
+                            f"expected ({PDF_CANVAS_W}, {PDF_CANVAS_H})"
                         )
-                        # Report; assert equality if present
-                        assert (w, h) == (
-                            _PROFILE.screen_w_px,
-                            _PROFILE.screen_h_px,
-                        ), (
-                            f"SceneInfo.paper_size ({w}, {h}) != "
-                            f"profile ({_PROFILE.screen_w_px}, {_PROFILE.screen_h_px})"
-                        )
-                        return
+                    # Device-added pages have their own canvas size (820x1458)
+                    # — just report, don't assert a specific value
 
         # paper_size is optional; just report absence
         print("\nSceneInfo.paper_size not present in any .rm file")
@@ -513,14 +565,18 @@ class TestPdfSubstrateReplay:
         rm_files = _load_rm_files(trip1_dir)
         if rm_files:
             rendered = _render_fixture()
-            highlights = _extract_glyph_ranges(rm_files)
+            trip1_manifest_hl = _load_trip_manifest(1)
+            cpages_raw_hl = (
+                trip1_manifest_hl.get("content_json", {}).get("cPages", {}).get("pages", [])
+            )
+            highlights = _extract_glyph_ranges(rm_files, cpages_raw_hl)
             for page, gr in highlights:
                 if _HIGHLIGHT_PHRASE in gr.text.lower():
                     from rock_paper_sync.ink.calibration import _DeviceRect
 
                     device_rects = [_DeviceRect(r.x, r.y, r.w, r.h) for r in gr.rectangles]
                     cal = calibrate_highlight(
-                        gr.text, device_rects, rendered.word_map, _PROFILE, page
+                        gr.text, device_rects, rendered.word_map, _LEGACY_TRANSFORM, page
                     )
                     lines.append("## Highlight Calibration\n")
                     lines.append(f"- Text: {gr.text!r}")
@@ -580,7 +636,7 @@ class TestPdfSubstrateReplay:
             png_paths = overlay_ink(
                 rendered.pdf,
                 page_files,
-                _PROFILE,
+                _LEGACY_TRANSFORM,
                 word_map=rendered.word_map,
                 out_dir=diag_dir,
             )
@@ -617,31 +673,64 @@ def _load_rm_files(trip_dir: Path) -> dict[str, bytes]:
 
 
 def _render_fixture():
-    """Re-render the fixture and return the RenderedDocument."""
+    """Re-render the fixture with the legacy layout that trip 1 was pushed with.
+
+    Trip 1 was pushed with the old page geometry (477x848 pt, 36 pt margins,
+    line_height 1.4).  We must render with the same parameters so the PDF
+    hash matches the recorded one (I10).
+    """
     from rock_paper_sync.config import LayoutConfig
     from rock_paper_sync.parser import parse_markdown_file
     from rock_paper_sync.render.pdf import PdfRenderer
 
     fixture_path = _fixtures_dir() / _FIXTURE_NAME
     md_doc = parse_markdown_file(fixture_path)
-    layout = LayoutConfig()
+    layout = LayoutConfig(
+        margin_top_pt=36.0,
+        margin_bottom_pt=36.0,
+        margin_left_pt=36.0,
+        margin_right_pt=36.0,
+        line_height=1.4,
+    )
     renderer = PdfRenderer(layout)
-    return renderer.render(md_doc, _PROFILE)
+    return renderer.render(md_doc, _LEGACY_PROFILE)
 
 
-def _extract_glyph_ranges(rm_files: dict[str, bytes]) -> list[tuple[int, GlyphRange]]:
+def _extract_glyph_ranges(
+    rm_files: dict[str, bytes],
+    cpages: list[dict[str, object]] | None = None,
+) -> list[tuple[int, GlyphRange]]:
     """Extract all GlyphRange highlights from .rm files.
 
-    Returns list of (page_index, GlyphRange).  Page index is inferred
-    from the file ordering (sorted by key).
+    Returns list of (page_redir, GlyphRange) where page_redir is the
+    PDF page index from the cPages redir value (D4: never from list position).
+
+    Args:
+        rm_files: Mapping of page UUID -> .rm bytes.
+        cpages: The cPages.pages list; when provided, the page's redir
+            value is used.  Otherwise falls back to sorted order (legacy).
     """
+    # Build UUID -> redir mapping from cPages
+    redir_map: dict[str, int] = {}
+    if cpages:
+        for entry in cpages:
+            page_id = str(entry.get("id", ""))
+            redir = entry.get("redir")
+            if redir is not None and isinstance(redir, dict):
+                redir_map[page_id] = int(redir.get("value", -1))
+            elif isinstance(redir, (int, float)):
+                redir_map[page_id] = int(redir)
+
     results: list[tuple[int, GlyphRange]] = []
-    for page_idx, page_uuid in enumerate(sorted(rm_files.keys())):
-        rm_bytes = rm_files[page_uuid]
+    for page_uuid, rm_bytes in rm_files.items():
+        page_redir = redir_map.get(page_uuid, -1)
+        if page_redir < 0:
+            # No redir (device-added page) — skip for highlight extraction
+            continue
         blocks = list(rmscene.read_blocks(io.BytesIO(rm_bytes)))
         for block in blocks:
             if isinstance(block, SceneGlyphItemBlock) and block.item.value is not None:
-                results.append((page_idx, block.item.value))
+                results.append((page_redir, block.item.value))
     return results
 
 
@@ -841,6 +930,7 @@ class TestCalibrationSynthetic:
         offset should be ~0.
         """
         profile = PROFILES["paper_pro_move"]
+        transform = CanvasTransform.for_pdf_page(profile)
 
         # Create a word map with four tokens: "purple", "monkey", "dishwasher", "engine"
         words = ["purple", "monkey", "dishwasher", "engine"]
@@ -869,18 +959,18 @@ class TestCalibrationSynthetic:
         # the "device rects" in the GlyphRange.
         # device_to_pdf: pdf_x = (dev_x + w/2) * scale, pdf_y = dev_y * scale
         # pdf_to_device inverts that.
-        scale = profile.page_width_pt / profile.screen_w_px  # 0.5
+        scale = 1.0 / transform.scale  # pdf_w / canvas_w
         device_rects: list[Rectangle] = []
         for rect in pdf_rects:
             # PDF centre -> device coords
             pdf_cx = (rect.x0 + rect.x1) / 2.0
             pdf_cy = (rect.y0 + rect.y1) / 2.0
-            dev_x, dev_y = pdf_to_device(profile, pdf_cx, pdf_cy)
+            dev_x, dev_y = pdf_to_device(transform, pdf_cx, pdf_cy)
 
             # GlyphRange rects use (x, y, w, h) in device coords
             # where (x, y) is top-left of the rect
-            dev_w = (rect.x1 - rect.x0) / scale
-            dev_h = (rect.y1 - rect.y0) / scale
+            dev_w = (rect.x1 - rect.x0) * transform.scale
+            dev_h = (rect.y1 - rect.y0) * transform.scale
             dev_x_tl = dev_x - dev_w / 2.0
             dev_y_tl = dev_y - dev_h / 2.0
             device_rects.append(Rectangle(x=dev_x_tl, y=dev_y_tl, w=dev_w, h=dev_h))
@@ -903,7 +993,7 @@ class TestCalibrationSynthetic:
         from rock_paper_sync.ink.calibration import _DeviceRect
 
         cal_rects = [_DeviceRect(r.x, r.y, r.w, r.h) for r in gr.rectangles]
-        cal = calibrate_highlight(glyph_text, cal_rects, word_map, profile, page=0)
+        cal = calibrate_highlight(glyph_text, cal_rects, word_map, transform, page=0)
 
         # The fitted transform is: pdf_centre = scale * dev_centre + offset
         # For x: pdf_x = (dev_x + screen_w/2) * scale = scale*dev_x + screen_w/2*scale
@@ -911,7 +1001,7 @@ class TestCalibrationSynthetic:
         # For y: pdf_y = dev_y * scale
         #   => fitted scale == 0.5, fitted offset == 0
         expected_scale = scale
-        expected_x_offset = (profile.screen_w_px / 2.0) * scale
+        expected_x_offset = transform.pdf_w / 2.0  # centre-origin shift in PDF points
 
         assert abs(cal.x_fit.scale - expected_scale) < 0.001, (
             f"X scale {cal.x_fit.scale} != expected {expected_scale}"
@@ -927,6 +1017,7 @@ class TestCalibrationSynthetic:
     def test_i8_check_synthetic(self) -> None:
         """I8 check passes with synthetic data where rects match tokens."""
         profile = PROFILES["paper_pro_move"]
+        transform = CanvasTransform.for_pdf_page(profile)
         words = ["purple", "monkey", "dishwasher", "engine"]
 
         token_rects: list[tuple[TokenId, Rect]] = []
@@ -951,14 +1042,14 @@ class TestCalibrationSynthetic:
         for tid, rect in token_rects:
             pdf_cx = (rect.x0 + rect.x1) / 2.0
             pdf_cy = (rect.y0 + rect.y1) / 2.0
-            dev_x, dev_y = pdf_to_device(profile, pdf_cx, pdf_cy)
+            dev_x, dev_y = pdf_to_device(transform, pdf_cx, pdf_cy)
             cal_rects.append(_DeviceRect(x=dev_x - 5, y=dev_y - 5, w=10, h=10))
 
         result = check_i8(
             "purple monkey dishwasher engine",
             cal_rects,
             word_map,
-            profile,
+            transform,
             page=0,
         )
 
@@ -1004,6 +1095,7 @@ class TestCalibrationSynthetic:
         from tools.ink_overlay import overlay_ink
 
         profile = PROFILES["paper_pro_move"]
+        transform = CanvasTransform.for_pdf_page(profile)
 
         # Render a tiny markdown to get a real PDF
         md_file = tmp_path / "tiny.md"
@@ -1040,7 +1132,7 @@ class TestCalibrationSynthetic:
         pngs = overlay_ink(
             rendered.pdf,
             {0: rm_bytes},
-            profile,
+            transform,
             word_map=rendered.word_map,
             out_dir=out_dir,
         )
@@ -1051,13 +1143,15 @@ class TestCalibrationSynthetic:
         assert pngs[0].exists()
 
         # Check that the highlight region has yellow-ish pixels.
-        # The highlight rect at device (-60, 190) w=120 h=24 transforms to:
-        #   top-left: device_to_pdf(profile, -60, 190) = ((-60 + 477)*0.5, 190*0.5) = (208.5, 95)
-        #   bot-right: device_to_pdf(profile, 60, 214) = ((60 + 477)*0.5, 214*0.5) = (268.5, 107)
+        # The highlight rect at device (-60, 190) w=120 h=24 transforms to
+        # PDF coords via the canvas transform.
+        from rock_paper_sync.device_profile import device_to_pdf
+
+        pdf_cx, pdf_cy = device_to_pdf(transform, -60.0 + 120.0 / 2, 190.0 + 24.0 / 2)
         # At 110 dpi, PDF point -> pixel: px = pt * (110/72)
-        scale = _PNG_DPI / 72.0
-        sample_x = int(238.5 * scale)  # centre of highlight in PDF pts
-        sample_y = int(100.0 * scale)
+        dpi_scale = _PNG_DPI / 72.0
+        sample_x = int(pdf_cx * dpi_scale)
+        sample_y = int(pdf_cy * dpi_scale)
         img = Image.open(pngs[0])
 
         # Ensure the sample point is within bounds

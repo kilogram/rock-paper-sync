@@ -314,9 +314,16 @@ def check_i8(
 
     words_under: list[str] = []
     for dr in device_rects:
-        # Transform device rect corners to PDF coords
-        pdf_x0, pdf_y0 = device_to_pdf(transform, dr.x + h_pad, dr.y)
-        pdf_x1, pdf_y1 = device_to_pdf(transform, dr.x + dr.w - h_pad, dr.y + dr.h)
+        # Transform device rect corners to PDF coords, applying horizontal
+        # padding to shrink the x range (accounts for device-added padding).
+        # Clamp the padding so the x range never inverts for narrow rects.
+        effective_pad = min(h_pad, dr.w / 2.0 - 1.0) if dr.w > 2.0 else 0.0
+        effective_pad = max(effective_pad, 0.0)
+        pdf_x0, pdf_y0 = device_to_pdf(transform, dr.x + effective_pad, dr.y)
+        pdf_x1, pdf_y1 = device_to_pdf(transform, dr.x + dr.w - effective_pad, dr.y + dr.h)
+        # Normalize (centre-origin shift may swap x0/x1)
+        if pdf_x0 > pdf_x1:
+            pdf_x0, pdf_x1 = pdf_x1, pdf_x0
 
         # Locate the line with maximum vertical overlap
         best_line = None
