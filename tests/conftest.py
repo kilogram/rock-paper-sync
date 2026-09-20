@@ -353,12 +353,17 @@ def mock_cloud_sync():
     mock_sync.apply_virtual_state = MagicMock(return_value=1)
     # PDF push support (Phase 1)
     mock_sync.build_pdf_payload = MagicMock(
-        side_effect=lambda doc_uuid, document_name, parent_uuid, pdf_bytes: PdfDocumentPayload(
+        side_effect=lambda doc_uuid,
+        document_name,
+        parent_uuid,
+        pdf_bytes,
+        page_count=1: PdfDocumentPayload(
             doc_uuid=doc_uuid,
             metadata=b'{"test": true}',
-            content=b'{"fileType": "pdf"}',
+            content=b'{"fileType": "pdf", "formatVersion": 2}',
             pagedata=b"",
             pdf=pdf_bytes,
+            page_uuids=tuple(f"page-{i}" for i in range(page_count)),
         )
     )
     mock_sync.mint_clearance_if_no_ink = MagicMock(

@@ -628,6 +628,7 @@ class PdfRenderer:
             pdf_sha256=pdf_sha256,
             word_map=word_map,
             placements=placements,
+            page_count=len(wp_doc.pages),
         )
 
 

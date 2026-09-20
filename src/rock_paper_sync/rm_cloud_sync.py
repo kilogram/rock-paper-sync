@@ -70,6 +70,7 @@ class PdfDocumentPayload:
         content: JSON bytes for ``{uuid}.content``.
         pagedata: Bytes for ``{uuid}.pagedata`` (empty for PDFs).
         pdf: Raw PDF bytes.
+        page_uuids: Page UUIDs emitted in ``cPages`` (persisted for pull mapping).
     """
 
     doc_uuid: str
@@ -77,6 +78,7 @@ class PdfDocumentPayload:
     content: bytes
     pagedata: bytes
     pdf: bytes
+    page_uuids: tuple[str, ...]
 
     def to_files(self) -> dict[str, bytes]:
         """Return the four-file dict for upload (I2 by construction)."""
@@ -88,30 +90,92 @@ class PdfDocumentPayload:
         }
 
 
-def _create_pdf_content_file() -> bytes:
-    """Create the .content JSON for a PDF document.
+def _generate_idx(i: int) -> str:
+    """Generate lexicographically sortable index strings ("ba","bb",...)."""
+    if i < 26:
+        return f"b{chr(ord('a') + i)}"
+    elif i < 52:
+        return f"c{chr(ord('a') + (i - 26))}"
+    elif i < 78:
+        return f"d{chr(ord('a') + (i - 52))}"
+    else:
+        return f"z{i:04d}"
 
-    Uses rmapi's proven minimal shape.  The device builds its own
-    ``cPages`` from the PDF's page count.
+
+def _create_pdf_content_file(
+    page_count: int,
+    page_uuids: list[str],
+    pdf_size: int,
+) -> bytes:
+    """Create the .content JSON for a PDF document in formatVersion 2.
+
+    Generates a full ``cPages`` structure with one entry per PDF page,
+    each carrying a ``redir`` value mapping to the PDF page index.
+    This matches the shape the device itself writes for imported PDFs.
+
+    Args:
+        page_count: Total number of PDF pages.
+        page_uuids: One UUID per page (len must equal page_count).
+        pdf_size: PDF file size in bytes (for ``sizeInBytes``).
+
+    Returns:
+        JSON-encoded ``.content`` file bytes.
     """
+    import uuid as uuid_module
+
+    device_uuid = str(uuid_module.uuid4())
+    current_time_ms = int(time.time() * 1000)
+
+    # Build cPages entries — one per PDF page with redir
+    pages_list: list[dict] = []
+    for i, page_uuid in enumerate(page_uuids):
+        entry: dict = {
+            "id": page_uuid,
+            "idx": {"timestamp": "1:2", "value": _generate_idx(i)},
+            "redir": {"timestamp": "1:2", "value": i},
+            "modifed": str(current_time_ms),
+        }
+        # Only page 0 carries a template (matches device behavior)
+        if i == 0:
+            entry["template"] = {"timestamp": "1:2", "value": "Blank"}
+        pages_list.append(entry)
+
+    c_pages = {
+        "lastOpened": {"timestamp": "0:0", "value": ""},
+        "original": {"timestamp": "1:2", "value": page_count},
+        "pages": pages_list,
+        "uuids": [{"first": device_uuid, "second": 1}],
+    }
+
     content = {
+        "cPages": c_pages,
+        "coverPageNumber": -1,
+        "customZoomCenterX": 0,
+        "customZoomCenterY": 936,
+        "customZoomOrientation": "portrait",
+        "customZoomPageHeight": 1872,
+        "customZoomPageWidth": 1404,
+        "customZoomScale": 1,
+        "documentMetadata": {},
         "dummyDocument": False,
         "extraMetadata": {
+            "LastActiveTool": "primary",
+            "LastFinelinerv2Size": "1",
             "LastPen": "Finelinerv2",
             "LastTool": "Finelinerv2",
-            "LastFinelinerv2Size": "1",
         },
         "fileType": "pdf",
         "fontName": "",
+        "formatVersion": 2,
         "lastOpenedPage": 0,
         "lineHeight": -1,
         "margins": 180,
         "orientation": "portrait",
-        "pageCount": 0,
-        "pages": [""],
+        "pageCount": page_count,
         "pageTags": [],
+        "sizeInBytes": str(pdf_size),
         "tags": [],
-        "redirectionPageMap": [],
+        "textAlignment": "justify",
         "textScale": 1,
         "transform": {
             "m11": 1,
@@ -124,6 +188,7 @@ def _create_pdf_content_file() -> bytes:
             "m32": 0,
             "m33": 1,
         },
+        "zoomMode": "bestFit",
     }
     return json.dumps(content).encode("utf-8")
 
@@ -852,26 +917,35 @@ class RmCloudSync:
         document_name: str,
         parent_uuid: str,
         pdf_bytes: bytes,
+        page_count: int,
     ) -> PdfDocumentPayload:
         """Build an immutable PDF upload payload.
+
+        Generates one page UUID per PDF page and emits a formatVersion 2
+        ``.content`` with ``cPages`` entries carrying ``redir`` values.
 
         Args:
             doc_uuid: Document UUID.
             document_name: Visible name on device.
             parent_uuid: Parent folder UUID (empty for root).
             pdf_bytes: Raw PDF content.
+            page_count: Number of pages in the PDF.
 
         Returns:
             PdfDocumentPayload ready for ``upload_pdf_document``.
         """
+        import uuid as uuid_module
+
         metadata = self._create_metadata_file(doc_uuid, document_name, parent_uuid)
-        content = _create_pdf_content_file()
+        page_uuids = [str(uuid_module.uuid4()) for _ in range(page_count)]
+        content = _create_pdf_content_file(page_count, page_uuids, len(pdf_bytes))
         return PdfDocumentPayload(
             doc_uuid=doc_uuid,
             metadata=metadata,
             content=content,
             pagedata=b"",
             pdf=pdf_bytes,
+            page_uuids=tuple(page_uuids),
         )
 
     def upload_pdf_document(

@@ -381,12 +381,18 @@ class Relocated:
 
 @dataclass(frozen=True, slots=True)
 class RenderedDocument:
-    """Complete render output: PDF bytes, content hash, word map."""
+    """Complete render output: PDF bytes, content hash, word map.
+
+    ``page_count`` is the total number of PDF pages (including trailing
+    blank pages) as determined by the layout engine.  The payload builder
+    needs this to generate ``cPages`` entries with correct ``redir`` values.
+    """
 
     pdf: bytes
     pdf_sha256: str
     word_map: WordMap
     placements: tuple[Placed | Relocated, ...]
+    page_count: int
 
 
 class DocumentRenderer(Protocol):

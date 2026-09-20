@@ -483,7 +483,7 @@ class SyncEngine:
 
             # Render PDF with overlays
             rendered = self._pdf_renderer.render(clean_doc, self._device_profile, overlays=overlays)
-            page_count = len(rendered.word_map.pages)
+            page_count = rendered.page_count
 
             # Build PDF payload (I2)
             payload = self.cloud_sync.build_pdf_payload(
@@ -491,6 +491,7 @@ class SyncEngine:
                 document_name=md_doc.title,
                 parent_uuid=parent_uuid,
                 pdf_bytes=rendered.pdf,
+                page_count=page_count,
             )
 
             # Write transient state: status='pushing'

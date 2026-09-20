@@ -255,6 +255,7 @@ class TestI2PdfPayload:
             content=b'{"fileType": "pdf"}',
             pagedata=b"",
             pdf=b"%PDF-1.4 fake",
+            page_uuids=("p1", "p2"),
         )
         files = payload.to_files()
         expected = {
@@ -273,6 +274,7 @@ class TestI2PdfPayload:
             content=b"{}",
             pagedata=b"",
             pdf=b"%PDF",
+            page_uuids=(),
         )
         files = payload.to_files()
         rm_keys = [k for k in files if k.endswith(".rm")]
@@ -285,9 +287,43 @@ class TestI2PdfPayload:
             content=b"{}",
             pagedata=b"",
             pdf=b"%PDF",
+            page_uuids=(),
         )
         with pytest.raises(AttributeError):
             payload.doc_uuid = "other"  # type: ignore[misc]
+
+    def test_content_json_has_cpages_with_redir(self) -> None:
+        """Content JSON has N cPages entries with distinct UUIDs and correct redir."""
+        import json
+
+        from rock_paper_sync.rm_cloud_sync import _create_pdf_content_file
+
+        page_uuids = ["aa-11", "bb-22", "cc-33", "dd-44"]
+        content = json.loads(_create_pdf_content_file(4, page_uuids, 9999))
+
+        assert content["formatVersion"] == 2
+        assert content["fileType"] == "pdf"
+        assert content["pageCount"] == 4
+        assert content["sizeInBytes"] == "9999"
+
+        cpages = content["cPages"]["pages"]
+        assert len(cpages) == 4
+
+        ids = [p["id"] for p in cpages]
+        assert ids == page_uuids
+        assert "" not in ids, "Empty page id must never appear"
+        assert len(set(ids)) == 4, "Page UUIDs must be distinct"
+
+        for i, page in enumerate(cpages):
+            assert page["redir"]["value"] == i, f"Page {i} redir mismatch"
+
+        # Only page 0 has template
+        assert "template" in cpages[0]
+        for p in cpages[1:]:
+            assert "template" not in p
+
+        # original.value == page count
+        assert content["cPages"]["original"]["value"] == 4
 
 
 # ---------------------------------------------------------------------------
@@ -326,6 +362,86 @@ class TestI6CoordinateRoundTrip:
 # ---------------------------------------------------------------------------
 # I6 property test
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# cPages content parsing (v1 and v2 formats)
+# ---------------------------------------------------------------------------
+
+
+class TestCPagesContentParsing:
+    """Tests for extract_cpages_from_content handling both v1 and v2."""
+
+    def test_v2_cpages_with_redir(self) -> None:
+        """v2 format: cPages.pages with redir dicts."""
+        from rock_paper_sync.ink.calibration import analyse_cpages, extract_cpages_from_content
+
+        content = {
+            "formatVersion": 2,
+            "cPages": {
+                "pages": [
+                    {"id": "p0", "redir": {"timestamp": "1:2", "value": 0}},
+                    {"id": "p1", "redir": {"timestamp": "1:2", "value": 1}},
+                    {"id": "p2", "redir": {"timestamp": "1:2", "value": 2}},
+                ],
+            },
+        }
+        pages = extract_cpages_from_content(content)
+        assert len(pages) == 3
+        report = analyse_cpages(pages, 3)
+        assert len(report.redir_entries) == 3
+        assert len(report.device_added_entries) == 0
+        assert report.redir_entries[0].redir_value == 0
+        assert report.redir_entries[2].redir_value == 2
+
+    def test_v1_pages_with_redirection_map(self) -> None:
+        """v1 format: top-level pages + redirectionPageMap."""
+        from rock_paper_sync.ink.calibration import analyse_cpages, extract_cpages_from_content
+
+        content = {
+            "pages": ["id-a", "id-b", "id-c"],
+            "redirectionPageMap": [0, 1, 2],
+        }
+        pages = extract_cpages_from_content(content)
+        assert len(pages) == 3
+        report = analyse_cpages(pages, 3)
+        assert len(report.redir_entries) == 3
+        assert report.redir_entries[1].redir_value == 1
+
+    def test_v1_with_device_added_page(self) -> None:
+        """v1 format: device-added page has redir == -1."""
+        from rock_paper_sync.ink.calibration import analyse_cpages, extract_cpages_from_content
+
+        content = {
+            "pages": ["id-a", "id-b", "id-inserted", "id-c"],
+            "redirectionPageMap": [0, 1, -1, 2],
+        }
+        pages = extract_cpages_from_content(content)
+        assert len(pages) == 4
+        report = analyse_cpages(pages, 3)
+        assert len(report.redir_entries) == 3
+        assert len(report.device_added_entries) == 1
+        assert report.device_added_entries[0].page_id == "id-inserted"
+
+    def test_v2_with_device_added_page(self) -> None:
+        """v2 format: device-added page has no redir field."""
+        from rock_paper_sync.ink.calibration import analyse_cpages, extract_cpages_from_content
+
+        content = {
+            "formatVersion": 2,
+            "cPages": {
+                "pages": [
+                    {"id": "p0", "redir": {"timestamp": "1:2", "value": 0}},
+                    {"id": "device-added", "idx": {"timestamp": "1:3", "value": "ca"}},
+                    {"id": "p1", "redir": {"timestamp": "1:2", "value": 1}},
+                ],
+            },
+        }
+        pages = extract_cpages_from_content(content)
+        report = analyse_cpages(pages, 2)
+        assert len(report.redir_entries) == 2
+        assert len(report.device_added_entries) == 1
+        assert report.device_added_entries[0].page_id == "device-added"
+
 
 try:
     from hypothesis import given

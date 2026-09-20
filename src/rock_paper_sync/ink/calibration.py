@@ -36,6 +36,7 @@ __all__ = [
     "TransformFit",
     "calibrate_highlight",
     "analyse_cpages",
+    "extract_cpages_from_content",
     "fit_affine_1d",
 ]
 
@@ -352,6 +353,54 @@ class CPageReport:
     redir_entries: tuple[CPageEntry, ...]
     device_added_entries: tuple[CPageEntry, ...]
     trailing_blank_redir_ok: bool
+
+
+def extract_cpages_from_content(
+    content: dict[str, object],
+) -> list[dict[str, object]]:
+    """Extract a normalised list of page entries from a ``.content`` dict.
+
+    Accepts both formats the device may write:
+
+    **v2** (``formatVersion: 2``): ``cPages.pages`` list with ``redir``
+    dicts.  Returned as-is.
+
+    **v1** (no ``cPages``, or ``formatVersion`` absent/1): top-level
+    ``pages`` list of page id strings plus ``redirectionPageMap`` list
+    of ints (-1 or missing = device-added page).  Converted into v2-style
+    dicts with ``id``, ``redir`` keys.
+
+    Args:
+        content: Parsed ``.content`` JSON dict.
+
+    Returns:
+        List of page-entry dicts, each with at least ``id`` and
+        optionally ``redir``.
+    """
+    # v2 format: cPages.pages
+    c_pages = content.get("cPages")
+    if isinstance(c_pages, dict):
+        pages = c_pages.get("pages")
+        if isinstance(pages, list) and pages:
+            return pages  # type: ignore[return-value]
+
+    # v1 fallback: top-level pages + redirectionPageMap
+    page_ids = content.get("pages", [])
+    redir_map = content.get("redirectionPageMap", [])
+    if not isinstance(page_ids, list):
+        return []
+
+    entries: list[dict[str, object]] = []
+    for i, page_id in enumerate(page_ids):
+        pid = str(page_id) if page_id else f"v1_page_{i}"
+        redir_val = redir_map[i] if i < len(redir_map) else -1
+        entry: dict[str, object] = {"id": pid}
+        if isinstance(redir_val, int) and redir_val >= 0:
+            entry["redir"] = {"timestamp": "0:0", "value": redir_val}
+        # redir_val == -1 or missing → device-added page (no redir)
+        entries.append(entry)
+
+    return entries
 
 
 def analyse_cpages(
