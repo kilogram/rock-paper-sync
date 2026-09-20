@@ -845,6 +845,60 @@ class TestPdfSubstrateReplay:
 
         report_path = diag_dir / "gestures.md"
         report_path.write_text("\n".join(lines) + "\n")
+
+        # --- Assertions on the classification results ---
+        # Build a lookup: cluster_id prefix -> (disp, gesture, classification)
+        results: dict[str, tuple[str, object, object]] = {}
+        for cluster in clusters:
+            page_redir = cluster.redir
+            cid = cluster.cluster_id[:8]
+            if page_redir is None:
+                results[cid] = ("appended", None, None)
+                continue
+            content_page_count = wm.content_page_count or _EXPECTED_CONTENT_PAGES
+            cls_result = classify_cluster(cluster, wm, _LEGACY_TRANSFORM, content_page_count)
+            if cls_result.kind == "appended":
+                results[cid] = ("appended", None, cls_result)
+                continue
+            gest = classify_gesture(
+                cluster,
+                wm,
+                _LEGACY_TRANSFORM,
+                page_redir,
+                token_spans,
+                snapshot_text=fixture_text,
+            )
+            disp = gest.kind if gest.kind != "none" else "drawing"
+            results[cid] = (disp, gest, cls_result)
+
+        # Tick -> item 2
+        tick_cid = next(c for c, (d, *_) in results.items() if d == "tick")
+        tick_gest = results[tick_cid][1]
+        assert tick_gest.replacement_text == "[x]", (
+            f"Tick replacement: {tick_gest.replacement_text!r}"
+        )
+
+        # Strikethrough -> "DELETE THIS PHRASE"
+        strike_cid = next(c for c, (d, *_) in results.items() if d == "strikethrough")
+        strike_gest = results[strike_cid][1]
+        assert "DELETE THIS PHRASE" in (strike_gest.replacement_text or ""), (
+            f"Strikethrough text: {strike_gest.replacement_text!r}"
+        )
+
+        # Caret insertion -> between "word" and "here."
+        insert_cid = next(c for c, (d, *_) in results.items() if d == "caret_insertion")
+        insert_gest = results[insert_cid][1]
+        assert insert_gest.needs_ocr, "Insertion should need OCR"
+
+        # Margin note -> drawing anchored to Margin Note Target paragraph
+        drawing_cids = [c for c, (d, *_) in results.items() if d == "drawing"]
+        assert len(drawing_cids) >= 1, "Expected at least 1 drawing (margin note)"
+
+        # Trailing page -> appended
+        appended_cids = [c for c, (d, *_) in results.items() if d == "appended"]
+        assert len(appended_cids) >= 2, (
+            f"Expected >= 2 appended (trailing + device-added), got {len(appended_cids)}"
+        )
         print(f"\nGestures report: {report_path}")
         for line in lines[1:]:
             print(f"  {line}")

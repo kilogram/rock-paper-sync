@@ -982,7 +982,100 @@ class TestTickOvershoot:
 
 
 # ---------------------------------------------------------------------------
-# 7. Replay hook (skip if recording doesn't exist)
+# 7. Caret insertion with text overlapping previous line
+# ---------------------------------------------------------------------------
+
+
+class TestCaretInsertionOverlap:
+    """Text above a caret overlaps the previous line's glyph boxes.
+
+    Reproduces the real recording scenario: with tight line height (1.4),
+    the interline gap is ~0.4 pt.  Handwritten text above the caret line
+    overlaps the previous line's box.  The classifier must still detect
+    the insertion.
+    """
+
+    def test_text_overlaps_previous_line(
+        self,
+        rendered_word_map: WordMap,
+        token_spans: list[tuple[int, int]],
+        snapshot_text: str,
+    ) -> None:
+        """Caret + text strokes where text overlaps the previous line."""
+        # Find "here." token — the caret should be just before it
+        here_match = _find_token_by_text(rendered_word_map, "here.")
+        assert here_match is not None, "Token 'here.' not found"
+        here_tid, here_rect = here_match
+
+        # Find the line containing "here."
+        lines = rendered_word_map.lines_on_page(0)
+        here_line_idx = None
+        here_line = None
+        for idx, line in enumerate(lines):
+            if here_tid in line.token_ids:
+                here_line_idx = idx
+                here_line = line
+                break
+        assert here_line is not None
+
+        lh = here_line.rect.y1 - here_line.rect.y0
+        assert lh > 0
+
+        # Build a caret stroke just below the baseline
+        caret_x = here_rect.x0 - 3.0
+        caret_y_bottom = here_line.baseline_y + lh * 0.5
+        caret_rect = Rect(
+            x0=caret_x - 8.0,
+            y0=caret_y_bottom - lh * 0.6,
+            x1=caret_x + 8.0,
+            y1=caret_y_bottom,
+        )
+        caret_stroke = _make_candidate_stroke(caret_rect, stroke_id_part2=500, redir=0)
+
+        # Build text strokes ABOVE the caret line, overlapping the
+        # previous line's box (realistic with tight line spacing).
+        prev_line = lines[here_line_idx - 1] if here_line_idx > 0 else None
+        # Text vertical centre at 0.7 line heights above the here-line centre
+        text_cy = ((here_line.rect.y0 + here_line.rect.y1) / 2) - 0.7 * lh
+        text_rects = []
+        for i in range(3):
+            text_rects.append(
+                Rect(
+                    x0=caret_x - 10.0 + i * 8.0,
+                    y0=text_cy - 4.0,
+                    x1=caret_x - 2.0 + i * 8.0,
+                    y1=text_cy + 4.0,
+                )
+            )
+
+        text_strokes = [
+            _make_candidate_stroke(r, stroke_id_part2=501 + i, redir=0)
+            for i, r in enumerate(text_rects)
+        ]
+
+        # Verify the text strokes overlap the previous line (the scenario
+        # this test guards against)
+        if prev_line is not None:
+            assert text_cy < prev_line.rect.y1, (
+                f"Text centre {text_cy:.1f} should overlap prev line bottom {prev_line.rect.y1:.1f}"
+            )
+
+        cluster = _make_cluster([caret_stroke] + text_strokes, redir=0)
+        result = classify_gesture(
+            cluster,
+            rendered_word_map,
+            TRANSFORM,
+            0,
+            token_spans,
+            snapshot_text=snapshot_text,
+        )
+
+        assert result.kind == "caret_insertion", f"Expected caret_insertion, got {result.kind}"
+        assert result.needs_ocr, "Insertion should need OCR for the text"
+
+
+# ---------------------------------------------------------------------------
+# 8. Replay hook (skip if recording doesn't exist)
 # ---------------------------------------------------------------------------
 
 
