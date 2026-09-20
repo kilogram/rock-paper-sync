@@ -129,10 +129,10 @@ body {{
     overflow-wrap: anywhere;
 }}
 
-h1 {{ font-size: {font_size * 1.6}pt; margin: 0.5em 0 0.3em 0; }}
-h2 {{ font-size: {font_size * 1.35}pt; margin: 0.5em 0 0.3em 0; }}
-h3 {{ font-size: {font_size * 1.15}pt; margin: 0.4em 0 0.2em 0; }}
-h4, h5, h6 {{ font-size: {font_size}pt; font-weight: bold; margin: 0.4em 0 0.2em 0; }}
+h1 {{ font-size: {font_size * layout.h1_scale}pt; margin: 0.5em 0 0.3em 0; }}
+h2 {{ font-size: {font_size * layout.h2_scale}pt; margin: 0.5em 0 0.3em 0; }}
+h3 {{ font-size: {font_size * layout.h3_scale}pt; margin: 0.4em 0 0.2em 0; }}
+h4, h5, h6 {{ font-size: {font_size * layout.h4_scale}pt; font-weight: bold; margin: 0.4em 0 0.2em 0; }}
 
 p {{ margin: 0.4em 0; }}
 

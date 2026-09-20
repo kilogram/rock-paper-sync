@@ -74,6 +74,31 @@ Plus `TestCalibrationSynthetic` (always passes, no testdata needed).
 The overlay PDF and PNGs land at
 `tests/record_replay/testdata/pdf_substrate/trips/1/_diagnostic/`.
 
+## Session 2: D5 re-push verification (10 minutes)
+
+A standalone session to verify D5 (same-UUID re-push with
+`discard_ink=True`).  The harness cleanup from session 1 deleted the
+trip-1 document from the cloud, so this pushes a fresh document.
+
+```bash
+uv run pytest tests/record_replay/test_pdf_substrate_calibration.py \
+    -k test_pdf_substrate_repush_online --online -s
+```
+
+Steps:
+
+1. The test pushes a fresh fixture as a PDF document.
+2. **Open on device** -- confirm it renders correctly.
+3. Optionally draw a mark so there is ink to discard.
+4. Press Enter -- the test re-pushes with `discard_ink=True`.
+5. **Open on device again** -- confirm it shows no ink.
+6. Press Enter -- the test captures `.content` and `.metadata` to
+   `trips/2/`.
+
+After the session, the offline `test_trip2_cpages_rebuilt` test will
+check whether `cPages` was rebuilt with fresh page ids and what
+`metadata.version` the device wrote.
+
 ## Commit
 
 After a successful offline run, commit the testdata:

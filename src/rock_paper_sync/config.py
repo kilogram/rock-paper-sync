@@ -83,6 +83,10 @@ class LayoutConfig:
     margin_right_pt: float = 14.0
     trailing_blank_pages: int = 2
     notes_heading: str = "Notes"
+    h1_scale: float = 1.6
+    h2_scale: float = 1.35
+    h3_scale: float = 1.15
+    h4_scale: float = 1.0
     # Deprecated pixel-based margins (kept for backward compat with native layout)
     margin_top: int = 50
     margin_bottom: int = 50

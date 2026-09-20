@@ -74,6 +74,10 @@ def rendered_word_map() -> WordMap:
         margin_left_pt=36.0,
         margin_right_pt=36.0,
         line_height=1.4,
+        h1_scale=1.8,
+        h2_scale=1.4,
+        h3_scale=1.2,
+        h4_scale=1.1,
     )
     renderer = PdfRenderer(layout)
     result = renderer.render(doc, _LEGACY_PROFILE)

@@ -240,6 +240,79 @@ def test_pdf_substrate_online(device, workspace, fixtures_dir):
     print("\nOnline recording complete.")
 
 
+@pytest.mark.online_only
+@pytest.mark.device
+def test_pdf_substrate_repush_online(device, workspace, fixtures_dir):
+    """D5 verification: push a fresh fixture, prompt open, discard_ink re-push.
+
+    This is a standalone online test for the D5 check.  It pushes a fresh
+    document (the harness cleanup from the calibration session deleted the
+    trip-1 document), prompts the user to open it, then re-pushes with
+    ``discard_ink=True`` and captures trip 2 files.
+
+    Run separately from the calibration session:
+
+        uv run pytest tests/record_replay/test_pdf_substrate_calibration.py \\
+            -k test_pdf_substrate_repush_online --online -s
+
+    The harness cleanup deleted the trip-1 document from the cloud, so this
+    test pushes a fresh document with a new UUID.
+    """
+    from tests.record_replay.harness.prompts import user_prompt
+
+    fixture_doc = fixtures_dir / _FIXTURE_NAME
+    workspace.test_doc.write_text(fixture_doc.read_text())
+
+    test_id = device.start_test_for_fixture(
+        fixture_doc,
+        description="PDF substrate D5 re-push verification",
+    )
+
+    # Push a fresh document
+    doc_uuid = device.upload_document(workspace.test_doc)
+    print(f"\n  Pushed fresh document: {doc_uuid}")
+
+    user_prompt(
+        "Open the document on device",
+        [
+            "Open the document on the device.",
+            "Confirm it renders correctly (text visible, no blank pages).",
+            "Optionally draw a mark so there is ink to discard.",
+        ],
+    )
+
+    # Re-push with discard_ink
+    from rock_paper_sync.config import load_config
+    from rock_paper_sync.converter import SyncEngine
+    from rock_paper_sync.state import StateManager
+
+    config = load_config(workspace.config_file)
+    state = StateManager(config.sync.state_database)
+
+    # Touch the file to force re-sync
+    workspace.test_doc.write_text(fixture_doc.read_text() + "\n")
+
+    engine = SyncEngine(config, state)
+    vault = config.sync.vaults[0]
+    result = engine.sync_file(vault, workspace.test_doc, discard_ink=True)
+    print(f"  Re-push result: success={result.success}, error={result.error}")
+
+    user_prompt(
+        "Verify clean document after re-push",
+        [
+            "Open the document on the device again.",
+            "Confirm it shows NO ink (all annotations cleared).",
+            "If it does not open or still shows ink, note that.",
+        ],
+    )
+
+    # Capture trip 2 files
+    _capture_document_files(device, doc_uuid, trip_number=2)
+
+    device.end_test(test_id)
+    print("\nD5 re-push verification complete.")
+
+
 def _capture_document_files(device, doc_uuid: str, trip_number: int) -> None:
     """Download .content, .metadata, .rm pages, and PDF blob hash.
 
@@ -908,6 +981,11 @@ def _render_fixture():
         margin_left_pt=36.0,
         margin_right_pt=36.0,
         line_height=1.4,
+        # Old heading sizes from when trip 1 was recorded
+        h1_scale=1.8,
+        h2_scale=1.4,
+        h3_scale=1.2,
+        h4_scale=1.1,
     )
     renderer = PdfRenderer(layout)
     return renderer.render(md_doc, _LEGACY_PROFILE)
