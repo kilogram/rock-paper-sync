@@ -306,7 +306,8 @@ def _capture_document_files(device, doc_uuid: str, trip_number: int) -> None:
 def _skip_if_no_testdata() -> None:
     """Skip the test if the online session has not been recorded."""
     td = _testdata_dir()
-    if not td.exists() or not (td / "trips" / "1").exists():
+    manifest = td / "trips" / "1" / "manifest.json"
+    if not td.exists() or not manifest.exists():
         pytest.skip(
             f"Testdata not found at {td}. "
             "Run the online session first: "

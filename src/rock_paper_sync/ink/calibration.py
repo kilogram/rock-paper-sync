@@ -380,18 +380,20 @@ def extract_cpages_from_content(
     # v2 format: cPages.pages
     c_pages = content.get("cPages")
     if isinstance(c_pages, dict):
-        pages = c_pages.get("pages")
-        if isinstance(pages, list) and pages:
-            return pages  # type: ignore[return-value]
+        pages_raw = c_pages.get("pages")
+        if isinstance(pages_raw, list) and pages_raw:
+            # Each entry should be a dict; filter defensively
+            return [p for p in pages_raw if isinstance(p, dict)]
 
     # v1 fallback: top-level pages + redirectionPageMap
-    page_ids = content.get("pages", [])
-    redir_map = content.get("redirectionPageMap", [])
-    if not isinstance(page_ids, list):
+    page_ids_raw = content.get("pages", [])
+    redir_map_raw = content.get("redirectionPageMap", [])
+    if not isinstance(page_ids_raw, list):
         return []
+    redir_map: list[object] = redir_map_raw if isinstance(redir_map_raw, list) else []
 
     entries: list[dict[str, object]] = []
-    for i, page_id in enumerate(page_ids):
+    for i, page_id in enumerate(page_ids_raw):
         pid = str(page_id) if page_id else f"v1_page_{i}"
         redir_val = redir_map[i] if i < len(redir_map) else -1
         entry: dict[str, object] = {"id": pid}
