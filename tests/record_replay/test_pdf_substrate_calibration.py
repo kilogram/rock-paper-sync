@@ -957,9 +957,7 @@ class TestCalibrationSynthetic:
 
         # Convert PDF rects back to device coords, then use those as
         # the "device rects" in the GlyphRange.
-        # device_to_pdf: pdf_x = (dev_x + w/2) * scale, pdf_y = dev_y * scale
-        # pdf_to_device inverts that.
-        scale = 1.0 / transform.scale  # pdf_w / canvas_w
+        # Anisotropic: x uses x_scale, y uses y_scale.
         device_rects: list[Rectangle] = []
         for rect in pdf_rects:
             # PDF centre -> device coords
@@ -969,8 +967,8 @@ class TestCalibrationSynthetic:
 
             # GlyphRange rects use (x, y, w, h) in device coords
             # where (x, y) is top-left of the rect
-            dev_w = (rect.x1 - rect.x0) * transform.scale
-            dev_h = (rect.y1 - rect.y0) * transform.scale
+            dev_w = (rect.x1 - rect.x0) * transform.x_scale
+            dev_h = (rect.y1 - rect.y0) * transform.y_scale
             dev_x_tl = dev_x - dev_w / 2.0
             dev_y_tl = dev_y - dev_h / 2.0
             device_rects.append(Rectangle(x=dev_x_tl, y=dev_y_tl, w=dev_w, h=dev_h))
@@ -996,18 +994,16 @@ class TestCalibrationSynthetic:
         cal = calibrate_highlight(glyph_text, cal_rects, word_map, transform, page=0)
 
         # The fitted transform is: pdf_centre = scale * dev_centre + offset
-        # For x: pdf_x = (dev_x + screen_w/2) * scale = scale*dev_x + screen_w/2*scale
-        #   => fitted scale == 0.5, fitted offset == screen_w/2 * scale = 238.5
-        # For y: pdf_y = dev_y * scale
-        #   => fitted scale == 0.5, fitted offset == 0
-        expected_scale = scale
-        expected_x_offset = transform.pdf_w / 2.0  # centre-origin shift in PDF points
+        # Anisotropic: x and y have different scales.
+        expected_x_scale = 1.0 / transform.x_scale
+        expected_y_scale = 1.0 / transform.y_scale
+        expected_x_offset = transform.pdf_w / 2.0  # centre-origin shift
 
-        assert abs(cal.x_fit.scale - expected_scale) < 0.001, (
-            f"X scale {cal.x_fit.scale} != expected {expected_scale}"
+        assert abs(cal.x_fit.scale - expected_x_scale) < 0.001, (
+            f"X scale {cal.x_fit.scale} != expected {expected_x_scale}"
         )
-        assert abs(cal.y_fit.scale - expected_scale) < 0.001, (
-            f"Y scale {cal.y_fit.scale} != expected {expected_scale}"
+        assert abs(cal.y_fit.scale - expected_y_scale) < 0.001, (
+            f"Y scale {cal.y_fit.scale} != expected {expected_y_scale}"
         )
         assert abs(cal.x_fit.offset - expected_x_offset) < 0.5, (
             f"X offset {cal.x_fit.offset} != expected {expected_x_offset}"

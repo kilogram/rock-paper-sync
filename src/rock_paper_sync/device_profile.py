@@ -16,12 +16,16 @@ Coordinate systems
 - **PDF coords**: top-left origin. x in [0, page_w], y in [0, page_h].
   Unit: PDF points (1 pt = 1/72 inch).
 
-The transform is fit-by-width: ``scale = canvas_w / pdf_w``, then
-``pdf_x = (dev_x + canvas_w/2) / scale`` and ``pdf_y = dev_y / scale``.
+The transform is **anisotropic**: x and y scale factors differ.
+``x_scale = canvas_w / pdf_w`` (fit-by-width); ``y_scale`` is measured
+from device-session stroke anchors.  On the Paper Pro Move (firmware
+3.28), ``y_scale / x_scale = 1.070``.  Expressed per screen pixel:
+canvas x per screen px = 1404/954 = 1.4717; canvas y per screen px =
+1.575 (measured 2026-09-19 from ``testdata/pdf_substrate/trips/1``).
 
 Invariants:
-    INV-I6: ``pdf_to_device(device_to_pdf(p)) == p`` within 0.5 px;
-            profile aspect == page aspect.
+    INV-I6: ``pdf_to_device(device_to_pdf(p)) == p`` within 0.5 px
+            per axis.
     INV-I7: Screen-pixel and canvas-pixel literals exist only in this file.
 """
 
@@ -52,6 +56,16 @@ PDF_CANVAS_W: int = 1404
 PDF_CANVAS_H: int = 1872
 """Canvas height for PDF-backed pages on the Paper Pro Move (device pixels)."""
 
+# Measured from Phase 2 stroke anchors (tick, strikethrough, highlight)
+# on the Paper Pro Move: canvas y pixels per screen pixel.
+# x factor is derived: PDF_CANVAS_W / screen_w_px = 1404/954 = 1.4717.
+# y factor differs: 1.575 (ratio y/x = 1.070).
+# Provenance: two-point fit (tick centre over checkbox-2 centre,
+# strikethrough centre over DELETE-line centre) gives y_scale = 3.174
+# with intercept -13 px; all four anchors (tick, strike, caret,
+# highlight) agree within 1.5%.
+_PDF_CANVAS_Y_PER_SCREEN_PX: float = 1.575
+
 
 @dataclass(frozen=True, slots=True)
 class DeviceProfile:
@@ -61,17 +75,25 @@ class DeviceProfile:
     equals one physical point on the device (``screen_px / ppi * 72``).
     Does NOT drive coordinate transforms — use ``CanvasTransform``.
 
+    The ``pdf_canvas_y_per_screen_px`` field carries the measured y-axis
+    canvas factor.  For the Paper Pro Move this is 1.575 (measured
+    2026-09-19 from ``testdata/pdf_substrate/trips/1``).  The x factor
+    is derived: ``PDF_CANVAS_W / screen_w_px``.
+
     Attributes:
         name: Human-readable device name.
         screen_w_px: Screen width in device pixels.
         screen_h_px: Screen height in device pixels.
         ppi: Pixels per inch of the device screen.
+        pdf_canvas_y_per_screen_px: Canvas y pixels per screen pixel
+            (measured; default ``_PDF_CANVAS_Y_PER_SCREEN_PX``).
     """
 
     name: str
     screen_w_px: int
     screen_h_px: int
     ppi: int
+    pdf_canvas_y_per_screen_px: float = _PDF_CANVAS_Y_PER_SCREEN_PX
 
     @property
     def page_width_pt(self) -> float:
@@ -96,6 +118,7 @@ PROFILES: dict[str, DeviceProfile] = {
         screen_w_px=954,
         screen_h_px=1696,
         ppi=264,
+        pdf_canvas_y_per_screen_px=_PDF_CANVAS_Y_PER_SCREEN_PX,
     ),
 }
 
@@ -111,30 +134,32 @@ class CanvasTransform:
 
     The device stores ink in a canvas whose size is recorded in
     ``SceneInfo.paper_size``.  The PDF page has a known size in points
-    from the renderer.  The transform scales by width (fit-by-width):
-    the PDF page fills the canvas horizontally, and scrolls vertically
-    for pages taller than the canvas.
+    from the renderer.
+
+    The transform is **anisotropic**: ``x_scale`` and ``y_scale`` differ.
+    ``x_scale = canvas_w / pdf_w`` (fit-by-width); ``y_scale`` is
+    derived from the measured ``pdf_canvas_y_per_screen_px`` factor.
 
     Attributes:
-        canvas_w: Canvas width in device pixels (from ``SceneInfo.paper_size``).
+        canvas_w: Canvas width in device pixels.
         canvas_h: Canvas height in device pixels.
         pdf_w: PDF page width in points.
         pdf_h: PDF page height in points.
+        x_scale: Canvas pixels per PDF point, x axis.
+        y_scale: Canvas pixels per PDF point, y axis.
     """
 
     canvas_w: float
     canvas_h: float
     pdf_w: float
     pdf_h: float
+    x_scale: float
+    y_scale: float
 
     @property
     def scale(self) -> float:
-        """Width-based scale factor: ``canvas_w / pdf_w``.
-
-        Multiplying a PDF-point distance by this gives the device-pixel
-        distance.  The inverse maps device pixels to PDF points.
-        """
-        return self.canvas_w / self.pdf_w
+        """X-axis scale factor (backward compat; prefer ``x_scale``)."""
+        return self.x_scale
 
     def device_to_pdf(self, x: float, y: float) -> tuple[float, float]:
         """Convert device canvas coordinates to PDF points.
@@ -142,9 +167,8 @@ class CanvasTransform:
         Device canvas: centre-top origin, x in [-canvas_w/2, canvas_w/2].
         PDF: top-left origin.
         """
-        s = self.scale
-        pdf_x = (x + self.canvas_w / 2.0) / s
-        pdf_y = y / s
+        pdf_x = (x + self.canvas_w / 2.0) / self.x_scale
+        pdf_y = y / self.y_scale
         return (pdf_x, pdf_y)
 
     def pdf_to_device(self, pdf_x: float, pdf_y: float) -> tuple[float, float]:
@@ -152,9 +176,8 @@ class CanvasTransform:
 
         Inverse of :meth:`device_to_pdf`.
         """
-        s = self.scale
-        x = pdf_x * s - self.canvas_w / 2.0
-        y = pdf_y * s
+        x = pdf_x * self.x_scale - self.canvas_w / 2.0
+        y = pdf_y * self.y_scale
         return (x, y)
 
     @classmethod
@@ -162,13 +185,18 @@ class CanvasTransform:
         """Default canvas transform for a PDF page on the given device.
 
         Uses the measured canvas constants ``PDF_CANVAS_W x PDF_CANVAS_H``
-        and the profile's PDF page size.
+        and the profile's PDF page size.  The y scale is derived from
+        ``profile.pdf_canvas_y_per_screen_px``.
         """
+        x_scale = float(PDF_CANVAS_W) / profile.page_width_pt
+        y_scale = (profile.screen_w_px / profile.page_width_pt) * profile.pdf_canvas_y_per_screen_px
         return cls(
             canvas_w=float(PDF_CANVAS_W),
             canvas_h=float(PDF_CANVAS_H),
             pdf_w=profile.page_width_pt,
             pdf_h=profile.page_height_pt,
+            x_scale=x_scale,
+            y_scale=y_scale,
         )
 
     @classmethod
@@ -177,13 +205,32 @@ class CanvasTransform:
         paper_size: tuple[int, int] | tuple[float, float],
         pdf_w: float,
         pdf_h: float,
+        *,
+        y_scale: float | None = None,
     ) -> CanvasTransform:
-        """Build from ``SceneInfo.paper_size`` and known PDF page dimensions."""
+        """Build from ``SceneInfo.paper_size`` and known PDF page dimensions.
+
+        If ``y_scale`` is not provided, it is derived from the default
+        profile's ``pdf_canvas_y_per_screen_px``.
+        """
+        x_s = float(paper_size[0]) / pdf_w
+        if y_scale is None:
+            default_profile = PROFILES.get("paper_pro_move")
+            if default_profile is not None:
+                y_s = (
+                    default_profile.screen_w_px / pdf_w
+                ) * default_profile.pdf_canvas_y_per_screen_px
+            else:
+                y_s = x_s  # fallback: isotropic
+        else:
+            y_s = y_scale
         return cls(
             canvas_w=float(paper_size[0]),
             canvas_h=float(paper_size[1]),
             pdf_w=pdf_w,
             pdf_h=pdf_h,
+            x_scale=x_s,
+            y_scale=y_s,
         )
 
 

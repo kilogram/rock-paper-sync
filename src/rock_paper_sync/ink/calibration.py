@@ -100,14 +100,15 @@ class HighlightCalibration:
     """Measured transform for a single highlight.
 
     The fit direction is device->PDF: ``pdf = scale * device + offset``.
-    The ``nominal_scale`` is ``1 / canvas_transform.scale`` (i.e.
-    ``pdf_w / canvas_w``), and the nominal x offset is ``pdf_w / 2``.
+    ``nominal_scale`` is ``1 / x_scale``; ``nominal_y_scale`` is
+    ``1 / y_scale`` (they differ for anisotropic transforms).
 
     Attributes:
         text: The ``GlyphRange.text`` that was highlighted.
         x_fit: Affine fit for x coordinates (device rect centres -> PDF rect centres).
         y_fit: Affine fit for y coordinates.
-        nominal_scale: The canvas transform's nominal ``1/scale`` (pdf_w/canvas_w).
+        nominal_scale: The canvas transform's ``1/x_scale`` (pdf_w/canvas_w).
+        nominal_y_scale: The canvas transform's ``1/y_scale``.
         matched_tokens: Token ids that were matched in the word map.
     """
 
@@ -115,21 +116,22 @@ class HighlightCalibration:
     x_fit: TransformFit
     y_fit: TransformFit
     nominal_scale: float
+    nominal_y_scale: float
     matched_tokens: tuple[TokenId, ...]
 
     @property
     def x_scale_error_pct(self) -> float:
-        """Percentage deviation of measured x scale from the nominal scale."""
+        """Percentage deviation of measured x scale from the nominal x scale."""
         if math.isnan(self.x_fit.scale):
             return float("nan")
         return abs(self.x_fit.scale - self.nominal_scale) / self.nominal_scale * 100.0
 
     @property
     def y_scale_error_pct(self) -> float:
-        """Percentage deviation of measured y scale from the nominal scale."""
+        """Percentage deviation of measured y scale from the nominal y scale."""
         if math.isnan(self.y_fit.scale):
             return float("nan")
-        return abs(self.y_fit.scale - self.nominal_scale) / self.nominal_scale * 100.0
+        return abs(self.y_fit.scale - self.nominal_y_scale) / self.nominal_y_scale * 100.0
 
     @property
     def x_offset_error_pt(self) -> float:
@@ -243,8 +245,9 @@ def calibrate_highlight(
     #   pdf_x = (dev_x + canvas_w/2) / canvas_scale
     #         = dev_x * (1/canvas_scale) + (canvas_w/2) / canvas_scale
     #         = dev_x * (pdf_w/canvas_w) + pdf_w/2
-    # So: nominal_scale = 1/transform.scale = pdf_w/canvas_w
-    nominal_scale = 1.0 / transform.scale
+    # So: nominal_scale = 1/x_scale = pdf_w/canvas_w
+    nominal_scale = 1.0 / transform.x_scale
+    nominal_y_scale = 1.0 / transform.y_scale
 
     x_fit = fit_affine_1d(source_x, target_x)
     y_fit = fit_affine_1d(source_y, target_y)
@@ -254,6 +257,7 @@ def calibrate_highlight(
         x_fit=x_fit,
         y_fit=y_fit,
         nominal_scale=nominal_scale,
+        nominal_y_scale=nominal_y_scale,
         matched_tokens=tuple(matched_tokens),
     )
 
