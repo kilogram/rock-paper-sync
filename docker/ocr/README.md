@@ -35,6 +35,39 @@ Fully implemented and tested. Supports GPU inference on Runpods cloud infrastruc
 Not yet implemented. Will support local container execution with GPU passthrough.
 **Status**: Planned for future release. Contributions welcome!
 
+## Base Image Requirements
+
+The Containerfile accepts a `BASE_IMAGE` build arg. The base image **must** provide:
+
+- **Python 3.10+** - with `python` in PATH
+- **PyTorch 2.1+** - with appropriate backend (ROCm, CUDA, or CPU)
+- **uv** - for dependency management (in PATH)
+
+> **Note**: PyTorch is intentionally NOT in requirements.txt. This allows the base image to provide PyTorch with the correct backend (ROCm for AMD GPUs, CUDA for NVIDIA, or CPU-only).
+
+### Tested Base Images
+
+| Image | Use Case | Notes |
+|-------|----------|-------|
+| `localhost/ml-base-rocm:latest` | AMD iGPU (ROCm) | Based on rocm/pytorch, for RDNA GPUs |
+| `pytorch/pytorch:2.1.0-cuda12.1-cudnn8-runtime` | NVIDIA GPU / Runpods | CUDA runtime included |
+| Custom with CPU PyTorch | CPU inference | Slower but no GPU required |
+
+### Building with Custom Base
+
+```bash
+# CPU (default)
+podman build -t ocr:cpu -f docker/ocr/Containerfile docker/ocr/
+
+# CUDA/Runpods
+podman build --build-arg BASE_IMAGE=pytorch/pytorch:2.1.0-cuda12.1-cudnn8-runtime \
+  -t ocr:cuda -f docker/ocr/Containerfile docker/ocr/
+
+# Custom NPU base
+podman build --build-arg BASE_IMAGE=localhost/ml-base-npu:latest \
+  -t ocr:npu -f docker/ocr/Containerfile docker/ocr/
+```
+
 ## Local Development
 
 ### Build Container

@@ -1,5 +1,6 @@
 # Core ML dependencies
-torch>=2.1.0
+# NOTE: torch is NOT included - base image MUST provide PyTorch
+# This allows using ROCm, CUDA, or CPU PyTorch from the base image
 transformers>=4.35.0,<4.50.0  # Pin to avoid PyTorch 2.1 incompatibility
 pillow>=10.0.0
 peft>=0.6.0,<0.15.0  # For LoRA fine-tuning
